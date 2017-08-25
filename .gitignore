@@ -1,0 +1,6 @@
+
+jitify_example
+stringify
+*.jit
+# Backup files
+*~
