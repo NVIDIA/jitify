@@ -129,12 +129,12 @@ bool test_kernels() {
 		"    }\n"
 		"}\n"
 		;
-	
+
 	using jitify::reflection::reflect;
 	using jitify::reflection::NonType;
 	using jitify::reflection::Type;
 	using jitify::reflection::type_of;
-	
+
 	thread_local static jitify::JitCache kernel_cache;
 	jitify::Program program = kernel_cache.program
 		(program1, // Code string specified above
@@ -142,14 +142,14 @@ bool test_kernels() {
 		 {"--use_fast_math",
 		  "-I/usr/local/cuda/include"},
 		 file_callback);
-	
+
 	T* indata;
 	T* outdata;
 	cudaMalloc((void**)&indata,  sizeof(T));
 	cudaMalloc((void**)&outdata, sizeof(T));
 	T inval = 3.14159f;
 	cudaMemcpy(indata, &inval, sizeof(T), cudaMemcpyHostToDevice);
-	
+
 	dim3 grid(1);
 	dim3 block(1);
 	CHECK_CUDA(program
@@ -179,14 +179,14 @@ bool test_kernels() {
 	            .instantiate((int)C, type_of(*indata))
 	            .configure(grid,block)
 	            .launch(indata, outdata) );
-	
+
 	T outval = 0;
 	cudaMemcpy(&outval, outdata, sizeof(T), cudaMemcpyDeviceToHost);
 	cudaFree(outdata);
 	cudaFree(indata);
-	
+
 	std::cout << inval << " -> " << outval << std::endl;
-	
+
 	return are_close(inval, outval);
 }
 
@@ -196,16 +196,16 @@ bool test_parallel_for() {
 	T* d_out;
 	cudaMalloc((void**)&d_out, n*sizeof(T));
 	T val = 3.14159f;
-	
+
 	jitify::ExecutionPolicy policy(jitify::DEVICE);
 	auto lambda = JITIFY_LAMBDA( (d_out, val) , d_out[i] = i*val );
 	CHECK_CUDA(jitify::parallel_for(policy, 0, n, lambda) );
-	
+
 	std::vector<T> h_out(n);
 	cudaMemcpy(&h_out[0], d_out, n*sizeof(T), cudaMemcpyDeviceToHost);
-	
+
 	cudaFree(d_out);
-	
+
 	for( int i=0; i<n; ++i ) {
 		if( !are_close(h_out[i], i*val) ) {
 			std::cout << h_out[i] << " != " << i*val << std::endl;
@@ -220,7 +220,7 @@ bool test_parallel_for() {
 int main(int argc, char *argv[]) {
 #if __cplusplus >= 201103L
 #define TEST_RESULT(result) (result ? "PASSED" : "FAILED")
-	
+
 	// Uncached
 	bool test_simple_result       = test_simple<float>();
 	bool test_kernels_result      = test_kernels<float>();
@@ -229,11 +229,11 @@ int main(int argc, char *argv[]) {
 	test_simple_result       &= test_simple<float>();
 	test_kernels_result      &= test_kernels<float>();
 	test_parallel_for_result &= test_parallel_for<float>();
-	
+
 	std::cout << "test_simple<float>:       " << TEST_RESULT(test_simple_result) << std::endl;
 	std::cout << "test_kernels<float>:      " << TEST_RESULT(test_kernels_result) << std::endl;
 	std::cout << "test_parallel_for<float>: " << TEST_RESULT(test_parallel_for_result) << std::endl;
-	
+
 	return (!test_simple_result +
 	        !test_kernels_result +
 	        !test_parallel_for_result);

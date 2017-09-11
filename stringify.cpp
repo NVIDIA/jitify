@@ -81,4 +81,3 @@ int main(int argc, char *argv[]) {
 	ostream << ";" << std::endl;
 	return 0;
 }
-
