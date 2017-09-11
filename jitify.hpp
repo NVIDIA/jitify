@@ -94,6 +94,10 @@
 #include <stdint.h>
 #include <dlfcn.h>
 #include <memory>
+#if CUDA_VERSION >= 9000
+#include <cooperative_groups.h>
+#endif
+
 #if __cplusplus >= 201103L
   #define JITIFY_UNIQUE_PTR std::unique_ptr
   #define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)
@@ -249,6 +253,33 @@ public:
 	vector(std::initializer_list<T> vals) : super_type(vals) {}
 #endif
 };
+
+//Helper function to cache sm count used by coop_groups
+  int get_device_SMs(int device_id){
+    static bool init=false;
+    static vector<int> SMs;
+    if(!init){
+      int nDevices;
+      cudaGetDeviceCount(&nDevices);
+      SMs.resize(nDevices);
+      for (int i = 0; i < nDevices; i++) {
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, i);
+        SMs[i] = prop.multiProcessorCount;
+      }
+    }
+    init = true;
+    if(device_id >= (int) SMs.size())
+      throw std::runtime_error(std::string("Error: Tried to query device of ordinal > number of devices.\n"));
+    return SMs[device_id];
+  }
+
+  int get_cur_dev_SMs(){
+    int dev;
+    cudaGetDevice(&dev);
+    return get_device_SMs(dev);
+  }
+
 
 // Helper functions for parsing/manipulating source code
 
@@ -555,6 +586,7 @@ inline bool load_source(std::string                        filename,
 		source += line + "\n";
 	}
 	// HACK TESTING (WAR for cub)
+
 	//source = "#define cudaDeviceSynchronize() cudaSuccess\n" + source;
 	////source = "cudaError_t cudaDeviceSynchronize() { return cudaSuccess; }\n" + source;
 
@@ -902,6 +934,42 @@ public:
 		                      smem, stream,
 		                      &arg_ptrs[0], NULL);
 	}
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_max_grid_size(int &max_blocks, dim3 block, size_t smem) {
+
+	  int  SMs = get_cur_dev_SMs();
+	  int  blocksPerSm;
+
+	  CUresult occ_result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&blocksPerSm, _kernel, block.x*block.y*block.z, 0);
+	  max_blocks = blocksPerSm * SMs;
+	  return occ_result;
+	}
+
+        inline CUresult coop_launch(dim3 grid, dim3 block,
+				    unsigned int smem, CUstream stream,
+				    std::vector<void*> arg_ptrs) {
+
+	  int can_coop;
+          int dev;
+	  cudaGetDevice(&dev);
+	  cuDeviceGetAttribute(&can_coop, CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH, dev);
+	  if(!can_coop)
+	    throw std::runtime_error(std::string("Error: Cannot use cooperative groups on this device.\n"));
+
+	  int SMs = get_cur_dev_SMs();
+	  int blocksPerSm;
+	  CUresult occ_result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&blocksPerSm, _kernel, block.x*block.y*block.z, 0);
+          if (occ_result != CUDA_SUCCESS) return occ_result;
+
+	  if(blocksPerSm*SMs < (int) grid.x*grid.y*grid.z)
+	    throw std::runtime_error(std::string("Error: Kernel cannot be launched with given grid size. Maximum number of blocks for this kernel is ") +
+				     std::to_string(blocksPerSm*SMs));
+
+	  return cuLaunchCooperativeKernel( _kernel, grid.x, grid.y, grid.z,
+					    block.x, block.y, block.z,
+					    smem, stream, &arg_ptrs[0]);
+       }
+#endif
 };
 
 const char* jitsafe_header_preinclude_h = R"(
@@ -1777,6 +1845,9 @@ public:
 	inline KernelInstantiation_impl(KernelInstantiation_impl const&) = default;
 	inline KernelInstantiation_impl(KernelInstantiation_impl&&) = default;
 #endif
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_max_grid_size(int &max_block_size, dim3 block, size_t smem) const;
+#endif
 };
 
 class KernelLauncher_impl {
@@ -1798,6 +1869,10 @@ public:
 #endif
 	inline CUresult launch(jitify::detail::vector<void*> arg_ptrs,
 	                       jitify::detail::vector<std::string> arg_types=0) const;
+#if CUDA_VERSION >= 9000
+  inline CUresult coop_launch(jitify::detail::vector<void*> arg_ptrs,
+	                       jitify::detail::vector<std::string> arg_types=0) const;
+#endif
 };
 
 /*! An object representing a configured and instantiated kernel ready
@@ -1825,6 +1900,12 @@ public:
 	                       jitify::detail::vector<std::string> arg_types=0) const {
 		return _impl->launch(arg_ptrs, arg_types);
 	}
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_launch(std::vector<void*> arg_ptrs=std::vector<void*>(),
+	                       jitify::detail::vector<std::string> arg_types=0) const {
+		return _impl->coop_launch(arg_ptrs, arg_types);
+	}
+#endif
 #if __cplusplus >= 201103L
 	// Regular function call syntax
 	/*! Launch the kernel.
@@ -1844,6 +1925,13 @@ public:
 		return this->launch(std::vector<void*>({(void*)&args...}),
 		                    {reflection::reflect<ArgTypes>()...});
 	}
+#if CUDA_VERSION >= 9000
+	template<typename... ArgTypes>
+	inline CUresult coop_launch(ArgTypes... args) const {
+		return this->coop_launch(std::vector<void*>({(void*)&args...}),
+		                    {reflection::reflect<ArgTypes>()...});
+	}
+#endif //cuda_version
 #endif
 };
 
@@ -1876,6 +1964,11 @@ public:
 	                                size_t smem=0, cudaStream_t stream=0) const {
 		return KernelLauncher(*this, grid, block, smem, stream);
 	}
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_max_grid_size(int &max_block_size, dim3 block, size_t smem) const{
+	  return _impl->coop_max_grid_size(max_block_size, block, smem);
+	}
+#endif
 };
 
 /*! An object representing a kernel made up of a Program, a name and options.
@@ -2085,6 +2178,30 @@ inline CUresult KernelLauncher_impl::launch(jitify::detail::vector<void*> arg_pt
 	return _kernel_inst._cuda_kernel->launch(_grid, _block, _smem, _stream,
 	                                          arg_ptrs);
 }
+#if CUDA_VERSION >= 9000
+inline CUresult KernelLauncher_impl::coop_launch(jitify::detail::vector<void*> arg_ptrs,
+                                            jitify::detail::vector<std::string> arg_types) const {
+#if JITIFY_PRINT_LAUNCH
+	Kernel_impl const& kernel = _kernel_inst._kernel;
+	std::string arg_types_string = (arg_types.empty() ? "..." :
+	                                reflection::reflect_list(arg_types));
+	std::cout << "Launching "
+	          << kernel._name
+	          << _kernel_inst._template_inst
+	          << "<<<" << _grid << "," << _block
+	          << "," << _smem << "," << _stream << ">>>"
+	          << "(" << arg_types_string << ")"
+	          << std::endl;
+#endif
+	return _kernel_inst._cuda_kernel->coop_launch(_grid, _block, _smem, _stream,
+	                                          arg_ptrs);
+}
+
+inline CUresult KernelInstantiation_impl::coop_max_grid_size(int &max_blocks, dim3 block, size_t smem) const{
+  return _cuda_kernel->coop_max_grid_size(max_blocks, block, smem);
+}
+#endif //cuda_version
+
 
 KernelInstantiation_impl::KernelInstantiation_impl(Kernel_impl const& kernel,
                                                    std::vector<std::string> const& template_args)
