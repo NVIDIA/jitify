@@ -252,7 +252,7 @@ public:
 
 // Helper functions for parsing/manipulating source code
 
-std::string replace_characters(std::string str, std::string const& oldchars, char newchar) {
+inline std::string replace_characters(std::string str, std::string const& oldchars, char newchar) {
   size_t i = str.find_first_of(oldchars);
   while( i != std::string::npos ){
     str[i] = newchar;
@@ -260,7 +260,7 @@ std::string replace_characters(std::string str, std::string const& oldchars, cha
   }
   return str;
 }
-std::string sanitize_filename(std::string name) {
+inline std::string sanitize_filename(std::string name) {
 	return replace_characters(name, "/\\.-: ?%*|\"<>", '_');
 }
 
@@ -904,7 +904,7 @@ public:
 	}
 };
 
-const char* jitsafe_header_preinclude_h = R"(
+static const char* jitsafe_header_preinclude_h = R"(
 // WAR for Thrust (which appears to have forgotten to include this in result_of_adaptable_function.h
 #include <type_traits>
 
@@ -913,6 +913,9 @@ const char* jitsafe_header_preinclude_h = R"(
 
 // WAR for Thrust (which only supports gnuc, clang or msvc)
 #define __GNUC__ 4
+
+// WAR for generics/shfl.h
+#define THRUST_STATIC_ASSERT(x)
 
 // WAR for CUB
 #ifdef __host__
@@ -925,7 +928,7 @@ const char* jitsafe_header_preinclude_h = R"(
 #define catch(...)
 )";
 
-const char* jitsafe_header_float_h =
+static const char* jitsafe_header_float_h =
 	"#pragma once\n"
 	"\n"
 	"inline __host__ __device__ float  jitify_int_as_float(int i)             { union FloatInt { float f; int i; } fi; fi.i = i; return fi.f; }\n"
@@ -955,7 +958,7 @@ const char* jitsafe_header_float_h =
 	"#define DECIMAL_DIG     21\n"
 	"#endif\n";
 
-const char* jitsafe_header_limits_h =
+static const char* jitsafe_header_limits_h =
 	"#pragma once\n"
 	"\n"
 	"#if defined _WIN32 || defined _WIN64\n"
@@ -1000,7 +1003,7 @@ const char* jitsafe_header_limits_h =
 	"#define LLONG_MIN  (-LLONG_MAX - 1LL)\n"
 	"#define ULLONG_MAX 18446744073709551615ULL\n";
 
-const char* jitsafe_header_iterator =
+static const char* jitsafe_header_iterator =
 	"#pragma once\n"
 	"\n"
 	"namespace __jitify_iterator_ns {\n"
@@ -1038,7 +1041,7 @@ const char* jitsafe_header_iterator =
 	"using namespace __jitify_iterator_ns;\n";
 
 // TODO: This is incomplete; need floating point limits
-const char* jitsafe_header_limits =
+static const char* jitsafe_header_limits =
 	"#pragma once\n"
 	"#include <climits>\n"
 	"\n"
@@ -1081,7 +1084,7 @@ const char* jitsafe_header_limits =
 	"using namespace __jitify_limits_ns;\n";
 
 // TODO: This is highly incomplete
-const char* jitsafe_header_type_traits =
+static const char* jitsafe_header_type_traits =
 	"#pragma once\n"
 	"#if __cplusplus >= 201103L\n"
 	"namespace __jitify_type_traits_ns {\n"
@@ -1110,7 +1113,7 @@ const char* jitsafe_header_type_traits =
 	"#endif // c++11\n";
 
 // TODO: INT_FAST8_MAX et al. and a few other misc constants
-const char* jitsafe_header_stdint_h =
+static const char* jitsafe_header_stdint_h =
 	"#pragma once\n"
 	"#include <climits>\n"
 	"namespace __jitify_stdint_ns {\n"
@@ -1168,7 +1171,7 @@ const char* jitsafe_header_stdint_h =
 	"using namespace __jitify_stdint_ns;\n";
 
 // TODO: offsetof
-const char* jitsafe_header_stddef_h =
+static const char* jitsafe_header_stddef_h =
 	"#pragma once\n"
 	"#include <climits>\n"
 	"namespace __jitify_stddef_ns {\n"
@@ -1179,33 +1182,41 @@ const char* jitsafe_header_stddef_h =
 	"namespace std { using namespace __jitify_stddef_ns; }\n"
 	"using namespace __jitify_stddef_ns;\n";
 
-const char* jitsafe_header_stdlib_h =
+static const char* jitsafe_header_stdlib_h =
 	"#pragma once\n"
 	"#include <stddef.h>\n";
-const char* jitsafe_header_stdio_h =
+static const char* jitsafe_header_stdio_h =
 	"#pragma once\n"
-	"#include <stddef.h>\n";
+	"#include <stddef.h>\n"
+        "#define FILE int\n"
+        "int fflush ( FILE * stream );\n"
+        "int fprintf ( FILE * stream, const char * format, ... );\n"
+        ;
 
-const char* jitsafe_header_string_h =
+static const char* jitsafe_header_string_h =
 	"#pragma once\n"
+        "char* strcpy ( char * destination, const char * source );\n"
+        "int strcmp ( const char * str1, const char * str2 );\n"
         "char* strerror( int errnum );\n";
 
-const char* jitsafe_header_cstring =
+static const char* jitsafe_header_cstring =
 	"#pragma once\n"
 	"\n"
 	"namespace __jitify_cstring_ns {\n"
+        "char* strcpy ( char * destination, const char * source );\n"
+        "int strcmp ( const char * str1, const char * str2 );\n"
         "char* strerror( int errnum );\n"
 	"} // namespace __jitify_cstring_ns\n"
 	"namespace std { using namespace __jitify_cstring_ns; }\n"
 	"using namespace __jitify_cstring_ns;\n";
 
  // HACK TESTING (WAR for cub)
-const char* jitsafe_header_iostream =
+static const char* jitsafe_header_iostream =
 	"#pragma once\n"
 	"#include <ostream>\n"
         "#include <istream>\n";
  // HACK TESTING (WAR for Thrust)
-const char* jitsafe_header_ostream =
+static const char* jitsafe_header_ostream =
 	"#pragma once\n"
 	"\n"
 	"namespace __jitify_ostream_ns {\n"
@@ -1223,7 +1234,7 @@ const char* jitsafe_header_ostream =
         "using namespace __jitify_ostream_ns;\n";
 
 
-const char* jitsafe_header_istream =
+static const char* jitsafe_header_istream =
 	"#pragma once\n"
 	"\n"
 	"namespace __jitify_istream_ns {\n"
@@ -1235,12 +1246,12 @@ const char* jitsafe_header_istream =
 	"namespace std { using namespace __jitify_istream_ns; }\n"
 	"using namespace __jitify_istream_ns;\n";
 
-const char* jitsafe_header_sstream =
+static const char* jitsafe_header_sstream =
 	"#pragma once\n"
 	"#include <ostream>\n"
 	"#include <istream>\n";
 
-const char* jitsafe_header_utility =
+static const char* jitsafe_header_utility =
 	"#pragma once\n"
 	"namespace __jitify_utility_ns {\n"
 	"template<class T1, class T2>\n"
@@ -1262,7 +1273,7 @@ const char* jitsafe_header_utility =
 	"using namespace __jitify_utility_ns;\n";
 
 // TODO: incomplete
-const char* jitsafe_header_vector =
+static const char* jitsafe_header_vector =
         "#pragma once\n"
 	"namespace __jitify_vector_ns {\n"
         "template<class T, class Allocator=void>\n" // = std::allocator> \n"
@@ -1273,7 +1284,7 @@ const char* jitsafe_header_vector =
 	"using namespace __jitify_vector_ns;\n";
 
 // TODO: incomplete
-const char* jitsafe_header_string =
+static const char* jitsafe_header_string =
         "#pragma once\n"
 	"namespace __jitify_string_ns {\n"
         "template<class CharT,class Traits=void,class Allocator=void>\n"
@@ -1291,7 +1302,7 @@ const char* jitsafe_header_string =
 	"using namespace __jitify_string_ns;\n";
 
   // TODO: incomplete
-const char* jitsafe_header_stdexcept =
+static const char* jitsafe_header_stdexcept =
         "#pragma once\n"
         "namespace __jitify_stdexcept_ns {\n"
         "struct runtime_error {\n"
@@ -1304,7 +1315,7 @@ const char* jitsafe_header_stdexcept =
         "using namespace __jitify_stdexcept_ns;\n";
 
 // TODO: incomplete
-const char* jitsafe_header_complex =
+static const char* jitsafe_header_complex =
 	"#pragma once\n"
 	"namespace __jitify_complex_ns {\n"
 	"template<typename T>\n"
@@ -1341,7 +1352,7 @@ const char* jitsafe_header_complex =
 	"using namespace __jitify_complex_ns;\n";
 
 // TODO: This is incomplete (missing binary and integer funcs, macros, constants, types)
-const char* jitsafe_header_math =
+static const char* jitsafe_header_math =
 	"#pragma once\n"
 	"namespace __jitify_math_ns {\n"
 	"#if __cplusplus >= 201103L\n"
@@ -1411,10 +1422,11 @@ const char* jitsafe_header_math =
 	"#undef DEFINE_MATH_UNARY_FUNC_WRAPPER\n"
 	"} // namespace __jitify_math_ns\n"
 	"namespace std { using namespace __jitify_math_ns; }\n"
+        "#define M_PI 3.14159265358979323846\n"
 	// Note: Global namespace already includes CUDA math funcs
 	"//using namespace __jitify_math_ns;\n";
 
-const char* jitsafe_headers[] = {
+static const char* jitsafe_headers[] = {
         jitsafe_header_preinclude_h,
 	jitsafe_header_float_h,
 	jitsafe_header_float_h,
@@ -1445,7 +1457,7 @@ const char* jitsafe_headers[] = {
 	jitsafe_header_string,
 	jitsafe_header_stdexcept
 };
-const char* jitsafe_header_names[] = {
+static const char* jitsafe_header_names[] = {
         "jitify_preinclude.h",
 	"float.h",
 	"cfloat",
@@ -1559,7 +1571,7 @@ inline void split_compiler_and_linker_options(
 	}
 }
 
-nvrtcResult compile_kernel(std::string program_name,
+inline nvrtcResult compile_kernel(std::string program_name,
                            std::map<std::string,std::string> sources,
                            std::vector<std::string> options,
                            std::string              instantiation="",
@@ -2033,32 +2045,32 @@ public:
 #undef JITIFY_UNIQUE_PTR
 #undef JITIFY_DEFINE_AUTO_PTR_COPY_WAR
 
-Program::Program(JitCache& cache,
-                 std::string                         source,
-                 jitify::detail::vector<std::string> headers,
-                 jitify::detail::vector<std::string> options,
-                 file_callback_type                  file_callback)
+inline Program::Program(JitCache& cache,
+			std::string                         source,
+			jitify::detail::vector<std::string> headers,
+			jitify::detail::vector<std::string> options,
+			file_callback_type                  file_callback)
 	: _impl(new Program_impl(*cache._impl, source,
 	                         headers, options,
 	                         file_callback)) {}
 
-Kernel::Kernel(Program const& program,
-               std::string name,
-               jitify::detail::vector<std::string> options)
+inline Kernel::Kernel(Program const& program,
+		      std::string name,
+		      jitify::detail::vector<std::string> options)
 	: _impl(new Kernel_impl(*program._impl, name, options)) {}
 
-KernelInstantiation::KernelInstantiation(Kernel const& kernel,
-                                         std::vector<std::string> const& template_args)
+inline KernelInstantiation::KernelInstantiation(Kernel const& kernel,
+						std::vector<std::string> const& template_args)
 	: _impl(new KernelInstantiation_impl(*kernel._impl, template_args)) {}
 
-KernelLauncher::KernelLauncher(KernelInstantiation const& kernel_inst,
-                               dim3 grid, dim3 block,
-                               size_t smem, cudaStream_t stream)
+inline KernelLauncher::KernelLauncher(KernelInstantiation const& kernel_inst,
+				      dim3 grid, dim3 block,
+				      size_t smem, cudaStream_t stream)
 	: _impl(new KernelLauncher_impl(*kernel_inst._impl,
 	                                grid, block,
 	                                smem,  stream)) {}
 
-std::ostream& operator<<(std::ostream& stream, dim3 d) {
+inline std::ostream& operator<<(std::ostream& stream, dim3 d) {
 	if( d.y == 1 && d.z == 1 ) {
 		stream << d.x;
 	} else {
@@ -2086,7 +2098,7 @@ inline CUresult KernelLauncher_impl::launch(jitify::detail::vector<void*> arg_pt
 	                                          arg_ptrs);
 }
 
-KernelInstantiation_impl::KernelInstantiation_impl(Kernel_impl const& kernel,
+inline KernelInstantiation_impl::KernelInstantiation_impl(Kernel_impl const& kernel,
                                                    std::vector<std::string> const& template_args)
 	: _kernel(kernel), _options(kernel._options) {
 	_template_inst = (template_args.empty() ? "" :
@@ -2113,7 +2125,7 @@ KernelInstantiation_impl::KernelInstantiation_impl(Kernel_impl const& kernel,
 	}
 }
 
-void KernelInstantiation_impl::print() const {
+inline void KernelInstantiation_impl::print() const {
 	std::string options_string = reflection::reflect_list(_options);
 	std::cout << _kernel._name
 	          << _template_inst
@@ -2121,7 +2133,7 @@ void KernelInstantiation_impl::print() const {
 	          << std::endl;
 }
 
-void KernelInstantiation_impl::build_kernel() {
+inline void KernelInstantiation_impl::build_kernel() {
 	Program_impl const& program = _kernel._program;
 	
 	std::string instantiation = _kernel._name + _template_inst;
@@ -2215,7 +2227,7 @@ Program_impl::Program_impl(JitCache_impl& cache,
 	}
 }
 
-void Program_impl::load_sources(std::string              source,
+inline void Program_impl::load_sources(std::string              source,
                                 std::vector<std::string> headers,
                                 std::vector<std::string> options,
                                 file_callback_type       file_callback) {
