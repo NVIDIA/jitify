@@ -676,6 +676,25 @@ struct type_reflection<NonType<T,VALUE> > {
 
 //! \endcond
 
+/*! Create an Instance object that contains a const reference to the
+ *  value.  We use this to wrap abstract objects from which we want to extract
+ *  their type at runtime (e.g., derived type).  This is used to facilitate
+ *  templating on derived type when all we know at compile time is abstract type.
+*/
+template<typename T>
+struct Instance {
+const T &value;
+	Instance( const T &value ) : value(value) {}
+};
+
+/*! Create an Instance object from which we can extract the value's run-time type.
+ *  \param value The const value to be captured.
+ */
+template<typename T>
+inline Instance<T const> instance_of(T const& value) {
+	return Instance<T const>(value);
+}
+
 /*! A wrapper used for representing types as values.
  */
 template<typename T>
@@ -721,6 +740,17 @@ template<typename T, T N> inline std::string reflect() {
  */
 template<typename T> inline std::string reflect(jitify::reflection::Type<T> ) {
 	return reflect<T>();
+}
+
+/*! Generate a code-string for a type wrapped as an Instance instance.
+ *  \code{.cpp}reflect(Instance<float>(3.1f)) --> "float"\endcode
+ *  or more simply when passed to a instance_of helper
+ *  \code{.cpp}reflect(instance_of(3.1f)) --> "float"\endcodei
+ *  This is specifically for the case where we want to extract the run-time type,
+ *  e.g., derived type, of an object pointer.
+ */
+template<typename T> inline std::string reflect(jitify::reflection::Instance<T> &value) {
+	return detail::demangle(typeid(value.value).name());
 }
 
 // Type from value
