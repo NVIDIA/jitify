@@ -94,6 +94,10 @@
 #include <stdint.h>
 #include <dlfcn.h>
 #include <memory>
+#if CUDA_VERSION >= 9000
+#include <cooperative_groups.h>
+#endif
+
 #if __cplusplus >= 201103L
   #define JITIFY_UNIQUE_PTR std::unique_ptr
   #define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)
@@ -179,7 +183,7 @@ private:
 	object_map _objects;
 	key_rank   _ranked_keys;
 	size_t     _capacity;
-	
+
 	inline void discard_old(size_t n=0) {
 		if( n > _capacity ) {
 			throw std::runtime_error("Insufficient capacity in cache");
@@ -249,6 +253,33 @@ public:
 	vector(std::initializer_list<T> vals) : super_type(vals) {}
 #endif
 };
+
+//Helper function to cache sm count used by coop_groups
+  int get_device_SMs(int device_id){
+    static bool init=false;
+    static vector<int> SMs;
+    if(!init){
+      int nDevices;
+      cudaGetDeviceCount(&nDevices);
+      SMs.resize(nDevices);
+      for (int i = 0; i < nDevices; i++) {
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, i);
+        SMs[i] = prop.multiProcessorCount;
+      }
+    }
+    init = true;
+    if(device_id >= (int) SMs.size())
+      throw std::runtime_error(std::string("Error: Tried to query device of ordinal > number of devices.\n"));
+    return SMs[device_id];
+  }
+
+  int get_cur_dev_SMs(){
+    int dev;
+    cudaGetDevice(&dev);
+    return get_device_SMs(dev);
+  }
+
 
 // Helper functions for parsing/manipulating source code
 
@@ -374,14 +405,14 @@ inline bool extract_include_info_from_compile_error(std::string  log,
 	beg += pattern.size();
 	size_t end = log.find("\"", beg);
 	name = log.substr(beg, end-beg);
-	
+
 	size_t line_beg = log.rfind("\n", beg);
 	if( line_beg == std::string::npos ) {
 		line_beg = 0;
 	} else {
 		line_beg += 1;
 	}
-	
+
 	size_t split = log.find("(", line_beg);
 	parent = log.substr(line_beg, split-line_beg);
 	line_num = atoi(log.substr(split+1,
@@ -513,11 +544,11 @@ inline bool load_source(std::string                        filename,
 	bool remove_next_blank_line = false;
 	while( std::getline(*source_stream, line) ) {
 		++linenum;
-		
+
 		// HACK WAR for static variables not allowed on the device (unless __shared__)
 		// TODO: This breaks static member variables
 		//line = replace_token(line, "static const", "/*static*/ const");
-		
+
 		// TODO: Need to watch out for /* */ comments too
 		std::string cleanline = line.substr(0, line.find("//")); // Strip line comments
 		//if( cleanline.back() == "\r" ) { // Remove Windows line ending
@@ -538,7 +569,7 @@ inline bool load_source(std::string                        filename,
 			//line = "//" + line; // Comment out the #pragma once line
 			continue;
 		}
-		
+
 		// HACK WAR for Thrust using "#define FOO #pragma bar"
 		size_t pragma_beg = cleanline.find("#pragma ");
 		if( pragma_beg != std::string::npos ) {
@@ -551,13 +582,14 @@ inline bool load_source(std::string                        filename,
 				line += " " + pragma_split[2];
 			}
 		}
-		
+
 		source += line + "\n";
 	}
 	// HACK TESTING (WAR for cub)
+
 	//source = "#define cudaDeviceSynchronize() cudaSuccess\n" + source;
 	////source = "cudaError_t cudaDeviceSynchronize() { return cudaSuccess; }\n" + source;
-	
+
 	// WAR for #pragma once causing problems when there are multiple inclusions
 	//   of the same header from different paths.
 	if( pragma_once ) {
@@ -789,7 +821,7 @@ class CUDAKernel {
 	std::string               _func_name;
 	std::string               _ptx;
 	std::vector<CUjit_option> _opts;
-	
+
 	inline void cuda_safe_call(CUresult res) {
 		if( res != CUDA_SUCCESS ) {
 			const char* msg;
@@ -892,7 +924,7 @@ public:
 		this->destroy_module();
 	}
 	inline operator CUfunction() const { return _kernel; }
-	
+
 	inline CUresult launch(dim3 grid, dim3 block,
 	                       unsigned int smem, CUstream stream,
 	                       std::vector<void*> arg_ptrs) {
@@ -902,6 +934,42 @@ public:
 		                      smem, stream,
 		                      &arg_ptrs[0], NULL);
 	}
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_max_grid_size(int &max_blocks, dim3 block, size_t smem) {
+
+	  int  SMs = get_cur_dev_SMs();
+	  int  blocksPerSm;
+
+	  CUresult occ_result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&blocksPerSm, _kernel, block.x*block.y*block.z, 0);
+	  max_blocks = blocksPerSm * SMs;
+	  return occ_result;
+	}
+
+        inline CUresult coop_launch(dim3 grid, dim3 block,
+				    unsigned int smem, CUstream stream,
+				    std::vector<void*> arg_ptrs) {
+
+	  int can_coop;
+          int dev;
+	  cudaGetDevice(&dev);
+	  cuDeviceGetAttribute(&can_coop, CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH, dev);
+	  if(!can_coop)
+	    throw std::runtime_error(std::string("Error: Cannot use cooperative groups on this device.\n"));
+
+	  int SMs = get_cur_dev_SMs();
+	  int blocksPerSm;
+	  CUresult occ_result = cuOccupancyMaxActiveBlocksPerMultiprocessor(&blocksPerSm, _kernel, block.x*block.y*block.z, 0);
+          if (occ_result != CUDA_SUCCESS) return occ_result;
+
+	  if(blocksPerSm*SMs < (int) grid.x*grid.y*grid.z)
+	    throw std::runtime_error(std::string("Error: Kernel cannot be launched with given grid size. Maximum number of blocks for this kernel is ") +
+				     std::to_string(blocksPerSm*SMs));
+
+	  return cuLaunchCooperativeKernel( _kernel, grid.x, grid.y, grid.z,
+					    block.x, block.y, block.z,
+					    smem, stream, &arg_ptrs[0]);
+       }
+#endif
 };
 
 static const char* jitsafe_header_preinclude_h = R"(
@@ -1556,7 +1624,7 @@ inline void split_compiler_and_linker_options(
 	std::vector<std::string>* compiler_options,
 	std::vector<std::string>* linker_files,
 	std::vector<std::string>* linker_paths) {
-	
+
 	for( int i=0; i<(int)options.size(); ++i ) {
 		std::string opt   = options[i];
 		std::string flag  = opt.substr(0, 2);
@@ -1596,14 +1664,14 @@ inline nvrtcResult compile_kernel(std::string program_name,
 		header_names_c.push_back(name.c_str());
                 header_sources_c.push_back(code.c_str());
 	}
-	
+
 	std::vector<const char*> options_c(options.size()+2);
 	options_c[0] = "--device-as-default-execution-space";
 	options_c[1] = "--pre-include=jitify_preinclude.h";
 	for( int i=0; i<(int)options.size(); ++i ) {
 	  options_c[i+2] = options[i].c_str();
 	}
-	
+
 #if CUDA_VERSION < 8000
 	std::string inst_dummy;
 	if( !instantiation.empty() ) {
@@ -1613,14 +1681,14 @@ inline nvrtcResult compile_kernel(std::string program_name,
 		program_source += "\nvoid* "+ inst_dummy + " = (void*)" + instantiation + ";\n";
 	}
 #endif
-	
+
 #define CHECK_NVRTC(call) do { \
 		nvrtcResult ret = call; \
 		if( ret != NVRTC_SUCCESS ) { \
 			return ret; \
 		} \
 	} while(0)
-	
+
 	nvrtcProgram nvrtc_program;
 	CHECK_NVRTC( nvrtcCreateProgram(&nvrtc_program,
 	                                program_source.c_str(),
@@ -1628,14 +1696,14 @@ inline nvrtcResult compile_kernel(std::string program_name,
 	                                num_headers,
 	                                &header_sources_c[0],
 	                                &header_names_c[0]) );
-	
+
 #if CUDA_VERSION >= 8000
 	if( !instantiation.empty() ) {
 		CHECK_NVRTC( nvrtcAddNameExpression(nvrtc_program,
 		                                    instantiation.c_str()) );
 	}
 #endif
-	
+
 	nvrtcResult ret = nvrtcCompileProgram(nvrtc_program,
 	                                      options_c.size(), &options_c[0]);
 	if( log ) {
@@ -1648,7 +1716,7 @@ inline nvrtcResult compile_kernel(std::string program_name,
 			return ret;
 		}
 	}
-	
+
 	if( ptx ) {
 		size_t ptxsize;
 		CHECK_NVRTC( nvrtcGetPTXSize(nvrtc_program, &ptxsize) );
@@ -1656,7 +1724,7 @@ inline nvrtcResult compile_kernel(std::string program_name,
 		CHECK_NVRTC( nvrtcGetPTX(nvrtc_program, &vptx[0]) );
 		ptx->assign(&vptx[0], ptxsize);
 	}
-	
+
 	if( !instantiation.empty() && mangled_instantiation ) {
 #if CUDA_VERSION >= 8000
 		const char* mangled_instantiation_cstr;
@@ -1674,7 +1742,7 @@ inline nvrtcResult compile_kernel(std::string program_name,
 		*mangled_instantiation = ptx->substr(mi_beg, mi_end-mi_beg);
 #endif
 	}
-	
+
 	CHECK_NVRTC( nvrtcDestroyProgram(&nvrtc_program) );
 #undef CHECK_NVRTC
 	return NVRTC_SUCCESS;
@@ -1709,9 +1777,9 @@ public:
 	inline JitCache_impl(size_t cache_size)
 		: _kernel_cache(cache_size),
 		  _program_config_cache(cache_size) {
-		
+
 		detail::add_options_from_env(_options);
-		
+
 		// Bootstrap the cuda context to avoid errors
 		cudaFree(0);
 	}
@@ -1789,6 +1857,9 @@ public:
 	inline KernelInstantiation_impl(KernelInstantiation_impl const&) = default;
 	inline KernelInstantiation_impl(KernelInstantiation_impl&&) = default;
 #endif
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_max_grid_size(int &max_block_size, dim3 block, size_t smem) const;
+#endif
 };
 
 class KernelLauncher_impl {
@@ -1810,6 +1881,10 @@ public:
 #endif
 	inline CUresult launch(jitify::detail::vector<void*> arg_ptrs,
 	                       jitify::detail::vector<std::string> arg_types=0) const;
+#if CUDA_VERSION >= 9000
+  inline CUresult coop_launch(jitify::detail::vector<void*> arg_ptrs,
+	                       jitify::detail::vector<std::string> arg_types=0) const;
+#endif
 };
 
 /*! An object representing a configured and instantiated kernel ready
@@ -1837,6 +1912,12 @@ public:
 	                       jitify::detail::vector<std::string> arg_types=0) const {
 		return _impl->launch(arg_ptrs, arg_types);
 	}
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_launch(std::vector<void*> arg_ptrs=std::vector<void*>(),
+	                       jitify::detail::vector<std::string> arg_types=0) const {
+		return _impl->coop_launch(arg_ptrs, arg_types);
+	}
+#endif
 #if __cplusplus >= 201103L
 	// Regular function call syntax
 	/*! Launch the kernel.
@@ -1856,6 +1937,13 @@ public:
 		return this->launch(std::vector<void*>({(void*)&args...}),
 		                    {reflection::reflect<ArgTypes>()...});
 	}
+#if CUDA_VERSION >= 9000
+	template<typename... ArgTypes>
+	inline CUresult coop_launch(ArgTypes... args) const {
+		return this->coop_launch(std::vector<void*>({(void*)&args...}),
+		                    {reflection::reflect<ArgTypes>()...});
+	}
+#endif //cuda_version
 #endif
 };
 
@@ -1888,6 +1976,11 @@ public:
 	                                size_t smem=0, cudaStream_t stream=0) const {
 		return KernelLauncher(*this, grid, block, smem, stream);
 	}
+#if CUDA_VERSION >= 9000
+        inline CUresult coop_max_grid_size(int &max_block_size, dim3 block, size_t smem) const{
+	  return _impl->coop_max_grid_size(max_block_size, block, smem);
+	}
+#endif
 };
 
 /*! An object representing a kernel made up of a Program, a name and options.
@@ -1997,7 +2090,7 @@ public:
 	enum { DEFAULT_CACHE_SIZE = 128 };
 	JitCache(size_t cache_size=DEFAULT_CACHE_SIZE)
 		: _impl(new JitCache_impl(cache_size)) {}
-	
+
 	/*! Create a program.
 	 *
 	 *  \param source A string containing either the source filename or
@@ -2081,7 +2174,7 @@ inline std::ostream& operator<<(std::ostream& stream, dim3 d) {
 
 inline CUresult KernelLauncher_impl::launch(jitify::detail::vector<void*> arg_ptrs,
                                             jitify::detail::vector<std::string> arg_types) const {
-	
+
 #if JITIFY_PRINT_LAUNCH
 	Kernel_impl const& kernel = _kernel_inst._kernel;
 	std::string arg_types_string = (arg_types.empty() ? "..." :
@@ -2097,6 +2190,30 @@ inline CUresult KernelLauncher_impl::launch(jitify::detail::vector<void*> arg_pt
 	return _kernel_inst._cuda_kernel->launch(_grid, _block, _smem, _stream,
 	                                          arg_ptrs);
 }
+#if CUDA_VERSION >= 9000
+inline CUresult KernelLauncher_impl::coop_launch(jitify::detail::vector<void*> arg_ptrs,
+                                            jitify::detail::vector<std::string> arg_types) const {
+#if JITIFY_PRINT_LAUNCH
+	Kernel_impl const& kernel = _kernel_inst._kernel;
+	std::string arg_types_string = (arg_types.empty() ? "..." :
+	                                reflection::reflect_list(arg_types));
+	std::cout << "Launching "
+	          << kernel._name
+	          << _kernel_inst._template_inst
+	          << "<<<" << _grid << "," << _block
+	          << "," << _smem << "," << _stream << ">>>"
+	          << "(" << arg_types_string << ")"
+	          << std::endl;
+#endif
+	return _kernel_inst._cuda_kernel->coop_launch(_grid, _block, _smem, _stream,
+	                                          arg_ptrs);
+}
+
+inline CUresult KernelInstantiation_impl::coop_max_grid_size(int &max_blocks, dim3 block, size_t smem) const{
+  return _cuda_kernel->coop_max_grid_size(max_blocks, block, smem);
+}
+#endif //cuda_version
+
 
 inline KernelInstantiation_impl::KernelInstantiation_impl(Kernel_impl const& kernel,
                                                    std::vector<std::string> const& template_args)
@@ -2135,15 +2252,15 @@ inline void KernelInstantiation_impl::print() const {
 
 inline void KernelInstantiation_impl::build_kernel() {
 	Program_impl const& program = _kernel._program;
-	
+
 	std::string instantiation = _kernel._name + _template_inst;
-	
+
 	std::vector<std::string> compiler_options;
 	std::vector<std::string> linker_files;
 	std::vector<std::string> linker_paths;
 	detail::split_compiler_and_linker_options(
 		_options, &compiler_options, &linker_files, &linker_paths);
-	
+
 	std::string log;
 	std::string ptx;
 	std::string mangled_instantiation;
@@ -2160,7 +2277,7 @@ inline void KernelInstantiation_impl::build_kernel() {
 		throw std::runtime_error(std::string("NVRTC error: ") +
 		                         nvrtcGetErrorString(ret));
 	}
-	
+
 #if JITIFY_PRINT_PTX
 	std::cout << "---------------------------------------" << std::endl;
 	std::cout << mangled_instantiation << std::endl;
@@ -2170,7 +2287,7 @@ inline void KernelInstantiation_impl::build_kernel() {
 	std::cout << ptx << std::endl;
 	std::cout << "---------------------------------------" << std::endl;
 #endif
-	
+
 	_cuda_kernel->set(mangled_instantiation.c_str(), ptx.c_str(),
 	                  linker_files, linker_paths);
 }
@@ -2234,7 +2351,7 @@ inline void Program_impl::load_sources(std::string              source,
 	std::vector<std::string>&  include_paths = _config->include_paths;
 	std::string&               name          = _config->name;
 	ProgramConfig::source_map& sources       = _config->sources;
-	
+
 	// Extract include paths from compile options
 	std::vector<std::string>::iterator iter = options.begin();
 	while( iter != options.end() ) {
@@ -2248,7 +2365,7 @@ inline void Program_impl::load_sources(std::string              source,
 		}
 	}
 	_config->options = options;
-	
+
 	// Load program source
 	if( !detail::load_source(source, sources,
 	                          "", include_paths,
@@ -2256,7 +2373,7 @@ inline void Program_impl::load_sources(std::string              source,
 		throw std::runtime_error("Source not found: " + source);
 	}
 	name = sources.begin()->first;
-	
+
 	// Load header sources
 	for( int i=0; i<(int)headers.size(); ++i ) {
 		if( !detail::load_source(headers[i],
@@ -2267,7 +2384,7 @@ inline void Program_impl::load_sources(std::string              source,
 			throw std::runtime_error("Source not found: " + headers[i]);
 		}
 	}
-	
+
 #if JITIFY_PRINT_SOURCE
 	std::string& program_source = sources[name];
 	std::cout << "---------------------------------------" << std::endl;
@@ -2276,13 +2393,13 @@ inline void Program_impl::load_sources(std::string              source,
 	detail::print_with_line_numbers(program_source);
 	std::cout << "---------------------------------------" << std::endl;
 #endif
-	
+
 	std::vector<std::string> compiler_options;
 	std::vector<std::string> linker_files;
 	std::vector<std::string> linker_paths;
 	detail::split_compiler_and_linker_options(
 		options, &compiler_options, &linker_files, &linker_paths);
-	
+
 	std::string log;
 	nvrtcResult ret;
 	while( (ret = detail::compile_kernel(name, sources, compiler_options, "", &log))
@@ -2301,7 +2418,7 @@ inline void Program_impl::load_sources(std::string              source,
 			// TODO: How to handle error?
 			throw std::runtime_error("Runtime compilation failed");
 		}
-		
+
 		// Try to load the new header
 		std::string include_path = detail::path_base(include_parent);
 		if( !detail::load_source(include_name, sources,
@@ -2309,13 +2426,13 @@ inline void Program_impl::load_sources(std::string              source,
 		                         file_callback) ) {
 			// Comment-out the include line and print a warning
 			if( !sources.count(include_parent) ) {
-				
+
 				// ***TODO: Unless there's another mechanism (e.g., potentially
 				//            the parent path vs. filename problem), getting
 				//            here means include_parent was found automatically
 				//            in a system include path.
 				//            We need a WAR to zap it from *its parent*.
-				
+
 				for( ProgramConfig::source_map::const_iterator it=sources.begin();
 				     it != sources.end(); ++it ) {
 					std::cout << "  " << it->first << std::endl;
@@ -2494,7 +2611,7 @@ CUresult parallel_for(ExecutionPolicy     policy,
                       IndexType           end,
                       Lambda<Func> const& lambda) {
 	using namespace jitify;
-	
+
 	if( policy.location == HOST ) {
 #ifdef _OPENMP
 #pragma omp parallel for
@@ -2512,7 +2629,7 @@ CUresult parallel_for(ExecutionPolicy     policy,
 	arg_decls.insert(arg_decls.end(),
 	                 lambda._capture._arg_decls.begin(),
 	                 lambda._capture._arg_decls.end());
-	
+
 	std::stringstream source_ss;
 	source_ss << "parallel_for_program\n";
 	for( auto const& header : policy.headers ) {
@@ -2529,7 +2646,7 @@ CUresult parallel_for(ExecutionPolicy     policy,
 		"	" << "\t" << lambda._func_string << ";\n" <<
 		"	}\n"
 		"}\n";
-	
+
 	Program program = kernel_cache.program(source_ss.str(),
 	                                       policy.headers,
 	                                       policy.options,
@@ -2541,7 +2658,7 @@ CUresult parallel_for(ExecutionPolicy     policy,
 	arg_ptrs.insert(arg_ptrs.end(),
 	                lambda._capture._arg_ptrs.begin(),
 	                lambda._capture._arg_ptrs.end());
-	
+
 	size_t n = end - begin;
 	dim3 block(policy.block_size);
 	dim3 grid(std::min((n-1) / block.x + 1, size_t(65535)));
