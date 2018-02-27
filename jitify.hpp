@@ -1789,6 +1789,7 @@ public:
 	inline KernelInstantiation_impl(KernelInstantiation_impl const&) = default;
 	inline KernelInstantiation_impl(KernelInstantiation_impl&&) = default;
 #endif
+	detail::CUDAKernel const& cuda_kernel() const { return *_cuda_kernel; }
 };
 
 class KernelLauncher_impl {
@@ -1881,12 +1882,41 @@ public:
 	 *
 	 *  \param grid   The thread grid dimensions for the launch.
 	 *  \param block  The thread block dimensions for the launch.
-	 *  \param smem   The amount of shared memory to dynamically allocate.
+	 *  \param smem   The amount of shared memory to dynamically allocate, in bytes.
 	 *  \param stream The CUDA stream to launch the kernel in.
 	 */
 	inline KernelLauncher configure(dim3 grid, dim3 block,
 	                                size_t smem=0, cudaStream_t stream=0) const {
 		return KernelLauncher(*this, grid, block, smem, stream);
+	}
+	/*! Configure the kernel launch with a 1-dimensional block and grid chosen
+	 *  automatically to maximise occupancy.
+	 *
+	 * \param max_block_size  The upper limit on the block size, or 0 for no limit.
+	 * \param smem            The amount of shared memory to dynamically allocate, in bytes.
+	 * \param smem_callback   A function returning smem for a given block size (overrides \p smem).
+	 * \param stream          The CUDA stream to launch the kernel in.
+	 * \param flags           The flags to pass to cuOccupancyMaxPotentialBlockSizeWithFlags.
+	 */
+	inline KernelLauncher configure_1d_max_occupancy(int max_block_size=0,
+	                                                 size_t smem=0,
+	                                                 CUoccupancyB2DSize smem_callback=0,
+	                                                 cudaStream_t stream=0,
+	                                                 unsigned int flags=0) const {
+		int grid;
+		int block;
+		CUfunction func = _impl->cuda_kernel();
+		CUresult res = cuOccupancyMaxPotentialBlockSizeWithFlags(
+		    &grid, &block, func, smem_callback, smem, max_block_size, flags);
+		if( res != CUDA_SUCCESS ) {
+			const char* msg;
+			cuGetErrorName(res, &msg);
+			throw std::runtime_error(msg);
+		}
+		if( smem_callback ) {
+			smem = smem_callback(block);
+		}
+		return this->configure(grid, block, smem, stream);
 	}
 };
 
