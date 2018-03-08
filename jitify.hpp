@@ -94,6 +94,7 @@
 #include <stdint.h>
 #include <dlfcn.h>
 #include <memory>
+#include <mutex>
 #if __cplusplus >= 201103L
   #define JITIFY_UNIQUE_PTR std::unique_ptr
   #define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)
@@ -1705,6 +1706,7 @@ class JitCache_impl {
 	jitify::ObjectCache<key_type,detail::CUDAKernel> _kernel_cache;
 	jitify::ObjectCache<key_type,ProgramConfig>      _program_config_cache;
 	std::vector<std::string> _options;
+	std::mutex _mutex;
 public:
 	inline JitCache_impl(size_t cache_size)
 		: _kernel_cache(cache_size),
@@ -2139,6 +2141,7 @@ inline KernelInstantiation_impl::KernelInstantiation_impl(Kernel_impl const& ker
 	_hash = hash_combine(_hash, hash_larson64(_template_inst.c_str()));
 	JitCache_impl& cache = _kernel._program._cache;
 	uint64_t cache_key = _hash;
+	std::lock_guard<std::mutex> lock(cache._mutex);
 	if( cache._kernel_cache.contains(cache_key) ) {
 #if JITIFY_PRINT_INSTANTIATION
 		std::cout << "Found ";
@@ -2249,6 +2252,7 @@ Program_impl::Program_impl(JitCache_impl& cache,
 	               _cache._options.begin(),
 	               _cache._options.end());
 	// Load sources
+	std::lock_guard<std::mutex> lock(cache._mutex);
 	if( !cache._program_config_cache.contains(_hash) ) {
 		_config = &cache._program_config_cache.insert(_hash);
 		this->load_sources(source, headers, options, file_callback);
