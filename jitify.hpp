@@ -79,6 +79,10 @@
 
 #pragma once
 
+#ifndef JITIFY_THREAD_SAFE
+#define JITIFY_THREAD_SAFE 1
+#endif
+
 #include <typeinfo>
 #include <string>
 #include <cstring> // For strtok_r etc.
@@ -94,6 +98,9 @@
 #include <stdint.h>
 #include <dlfcn.h>
 #include <memory>
+#if JITIFY_THREAD_SAFE
+#include <mutex>
+#endif
 #if __cplusplus >= 201103L
   #define JITIFY_UNIQUE_PTR std::unique_ptr
   #define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)
@@ -1735,6 +1742,10 @@ class JitCache_impl {
 	jitify::ObjectCache<key_type,detail::CUDAKernel> _kernel_cache;
 	jitify::ObjectCache<key_type,ProgramConfig>      _program_config_cache;
 	std::vector<std::string> _options;
+#if JITIFY_THREAD_SAFE
+	std::mutex _kernel_cache_mutex;
+	std::mutex _program_cache_mutex;
+#endif
 public:
 	inline JitCache_impl(size_t cache_size)
 		: _kernel_cache(cache_size),
@@ -1936,6 +1947,10 @@ public:
 		int grid;
 		int block;
 		CUfunction func = _impl->cuda_kernel();
+		if( !func ) {
+			throw std::runtime_error(
+				"Kernel pointer is NULL; you may need to define JITIFY_THREAD_SAFE 1");
+		}
 		CUresult res = cuOccupancyMaxPotentialBlockSizeWithFlags(
 		    &grid, &block, func, smem_callback, smem, max_block_size, flags);
 		if( res != CUDA_SUCCESS ) {
@@ -2154,6 +2169,10 @@ inline CUresult KernelLauncher_impl::launch(jitify::detail::vector<void*> arg_pt
 	          << "(" << arg_types_string << ")"
 	          << std::endl;
 #endif
+	if( !_kernel_inst._cuda_kernel ) {
+		throw std::runtime_error(
+			"Kernel pointer is NULL; you may need to define JITIFY_THREAD_SAFE 1");
+	}
 	return _kernel_inst._cuda_kernel->launch(_grid, _block, _smem, _stream,
 	                                          arg_ptrs);
 }
@@ -2169,6 +2188,9 @@ inline KernelInstantiation_impl::KernelInstantiation_impl(Kernel_impl const& ker
 	_hash = hash_combine(_hash, hash_larson64(_template_inst.c_str()));
 	JitCache_impl& cache = _kernel._program._cache;
 	uint64_t cache_key = _hash;
+#if JITIFY_THREAD_SAFE
+	std::lock_guard<std::mutex> lock(cache._kernel_cache_mutex);
+#endif
 	if( cache._kernel_cache.contains(cache_key) ) {
 #if JITIFY_PRINT_INSTANTIATION
 		std::cout << "Found ";
@@ -2279,6 +2301,9 @@ Program_impl::Program_impl(JitCache_impl& cache,
 	               _cache._options.begin(),
 	               _cache._options.end());
 	// Load sources
+#if JITIFY_THREAD_SAFE
+	std::lock_guard<std::mutex> lock(cache._program_cache_mutex);
+#endif
 	if( !cache._program_config_cache.contains(_hash) ) {
 		_config = &cache._program_config_cache.insert(_hash);
 		this->load_sources(source, headers, options, file_callback);

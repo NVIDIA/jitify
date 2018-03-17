@@ -7,6 +7,8 @@ CXX11 ?= 1
 
 CUDA_DIR ?= /usr/local/cuda
 
+CXXFLAGS += -pthread
+
 ifeq ($(CXX11),1)
 	CXXFLAGS += -std=c++11
 endif

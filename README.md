@@ -61,8 +61,10 @@ Things you can do with Jitify and NVRTC:
 Jitify is just a single header file:
 
 ```c++
-include <jitify.hpp>
+#include <jitify.hpp>
 ```
+
+Compile with: `-pthread` (not needed if JITIFY_THREAD_SAFE is defined to 0)
 
 Link with: `-ldl -lcuda -lnvrtc`
 
