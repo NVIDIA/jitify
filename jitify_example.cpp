@@ -134,6 +134,7 @@ bool test_kernels() {
 	using jitify::reflection::NonType;
 	using jitify::reflection::Type;
 	using jitify::reflection::type_of;
+	using jitify::reflection::instance_of;
 	
 	thread_local static jitify::JitCache kernel_cache;
 	jitify::Program program = kernel_cache.program
@@ -177,6 +178,11 @@ bool test_kernels() {
 	CHECK_CUDA( program
 	            .kernel("my_kernel2")
 	            .instantiate((int)C, type_of(*indata))
+	            .configure(grid,block)
+	            .launch(indata, outdata) );
+	CHECK_CUDA( program
+	            .kernel("my_kernel2")
+	            .instantiate((int)C, instance_of(*indata))
 	            .configure(grid,block)
 	            .launch(indata, outdata) );
 	
