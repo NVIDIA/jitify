@@ -432,7 +432,7 @@ inline std::vector<std::string> split_string(std::string str,
 	}
 	// Note: +1 to include NULL-terminator
 	std::vector<char> v_str(str.c_str(), str.c_str()+(str.size()+1));
-	char* c_str   = &v_str[0];
+	char* c_str   = v_str.data();
 	char* saveptr = c_str;
 	char* token;
 	for( long i=0; i!=maxsplit; ++i ) {
@@ -445,7 +445,7 @@ inline std::vector<std::string> split_string(std::string str,
 	}
 	// Check if there's a final piece
 	token += ::strlen(token) + 1;
-	if( token - &v_str[0] < (ptrdiff_t)str.size() ) {
+	if( token - v_str.data() < (ptrdiff_t)str.size() ) {
 		// Find the start of the final piece
 		token += ::strspn(token, delims.c_str());
 		if( *token ) {
@@ -839,9 +839,9 @@ class CUDAKernel {
 	                          void** optvals=0) {
 		if( link_files.empty() ) {
 			cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(),
-			                                  _opts.size(), &_opts[0], optvals));
+			                                  _opts.size(), _opts.data(), optvals));
 		} else {
-			cuda_safe_call(cuLinkCreate(_opts.size(), &_opts[0], optvals,
+			cuda_safe_call(cuLinkCreate(_opts.size(), _opts.data(), optvals,
 			                            &_link_state));
 			cuda_safe_call(cuLinkAddData(_link_state, CU_JIT_INPUT_PTX,
 			                             (void*)_ptx.c_str(), _ptx.size(),
@@ -937,7 +937,7 @@ public:
 		                      grid.x, grid.y, grid.z,
 		                      block.x, block.y, block.z,
 		                      smem, stream,
-		                      &arg_ptrs[0], NULL);
+		                      arg_ptrs.data(), NULL);
 	}
 };
 
@@ -1663,8 +1663,8 @@ inline nvrtcResult compile_kernel(std::string program_name,
 	                                program_source.c_str(),
 	                                program_name.c_str(),
 	                                num_headers,
-	                                &header_sources_c[0],
-	                                &header_names_c[0]) );
+	                                header_sources_c.data(),
+	                                header_names_c.data()) );
 	
 #if CUDA_VERSION >= 8000
 	if( !instantiation.empty() ) {
@@ -1674,13 +1674,13 @@ inline nvrtcResult compile_kernel(std::string program_name,
 #endif
 	
 	nvrtcResult ret = nvrtcCompileProgram(nvrtc_program,
-	                                      options_c.size(), &options_c[0]);
+	                                      options_c.size(), options_c.data());
 	if( log ) {
 		size_t logsize;
 		CHECK_NVRTC( nvrtcGetProgramLogSize(nvrtc_program, &logsize) );
 		std::vector<char> vlog(logsize, 0);
-		CHECK_NVRTC( nvrtcGetProgramLog(nvrtc_program, &vlog[0]) );
-		log->assign(&vlog[0], logsize);
+		CHECK_NVRTC( nvrtcGetProgramLog(nvrtc_program, vlog.data()) );
+		log->assign(vlog.data(), logsize);
 		if( ret != NVRTC_SUCCESS ) {
 			return ret;
 		}
@@ -1690,8 +1690,8 @@ inline nvrtcResult compile_kernel(std::string program_name,
 		size_t ptxsize;
 		CHECK_NVRTC( nvrtcGetPTXSize(nvrtc_program, &ptxsize) );
 		std::vector<char> vptx(ptxsize);
-		CHECK_NVRTC( nvrtcGetPTX(nvrtc_program, &vptx[0]) );
-		ptx->assign(&vptx[0], ptxsize);
+		CHECK_NVRTC( nvrtcGetPTX(nvrtc_program, vptx.data()) );
+		ptx->assign(vptx.data(), ptxsize);
 	}
 	
 	if( !instantiation.empty() && mangled_instantiation ) {
