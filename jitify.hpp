@@ -1176,34 +1176,39 @@ static const char* jitsafe_header_limits =
     "using namespace __jitify_limits_ns;\n";
 
 // TODO: This is highly incomplete
-static const char* jitsafe_header_type_traits =
-    "#pragma once\n"
-    "#if __cplusplus >= 201103L\n"
-    "namespace __jitify_type_traits_ns {\n"
-    "template<bool B, class T = void> struct enable_if {};\n"
-    "template<class T>                struct enable_if<true, T> { typedef T "
-    "type; };\n"
-    "\n"
-    "struct true_type  { enum { value = true }; };\n"
-    "struct false_type { enum { value = false }; };\n"
-    "template<typename T> struct is_floating_point    : false_type {};\n"
-    "template<> struct is_floating_point<float>       :  true_type {};\n"
-    "template<> struct is_floating_point<double>      :  true_type {};\n"
-    "template<> struct is_floating_point<long double> :  true_type {};\n"
-    "\n"
-    "template<typename T, typename U> struct is_same      : false_type {};\n"
-    "template<typename T>             struct is_same<T,T> :  true_type {};\n"
-    "template<class>\n"
-    "struct result_of;\n"
-    "template<class F, typename... Args>\n"
-    "struct result_of<F(Args...)> {\n"
+static const char* jitsafe_header_type_traits = R"(
+    #pragma once
+    #if __cplusplus >= 201103L
+    namespace __jitify_type_traits_ns {
+    template<bool B, class T = void> struct enable_if {};
+    template<class T>                struct enable_if<true, T> { typedef T type; };
+
+    struct true_type  { enum { value = true }; };
+    struct false_type { enum { value = false }; };
+    template<typename T> struct is_floating_point    : false_type {};
+    template<> struct is_floating_point<float>       :  true_type {};
+    template<> struct is_floating_point<double>      :  true_type {};
+    template<> struct is_floating_point<long double> :  true_type {};
+
+    template<typename T, typename U> struct is_same      : false_type {};
+    template<typename T>             struct is_same<T,T> :  true_type {};
+    template<class>
+    struct result_of;
+    template<class F, typename... Args>
+    struct result_of<F(Args...)> {
     // TODO: This is a hack; a proper implem is quite complicated.
-    "	typedef typename F::result_type type;\n"
-    "};\n"
-    "} // namespace __jtiify_type_traits_ns\n"
-    "namespace std { using namespace __jitify_type_traits_ns; }\n"
-    "using namespace __jitify_type_traits_ns;\n"
-    "#endif // c++11\n";
+    typedef typename F::result_type type;
+    };
+
+    template <class T> struct remove_reference { typedef T type; };
+    template <class T> struct remove_reference<T&> { typedef T type; };
+    template <class T> struct remove_reference<T&&> { typedef T type; };
+
+    } // namespace __jtiify_type_traits_ns
+    namespace std { using namespace __jitify_type_traits_ns; }
+    using namespace __jitify_type_traits_ns;
+    #endif // c++11
+)";
 
 // TODO: INT_FAST8_MAX et al. and a few other misc constants
 static const char* jitsafe_header_stdint_h =
@@ -1534,19 +1539,19 @@ static const char* jitsafe_header_math =
 
 // TODO: incomplete
 static const char* jitsafe_header_mutex = R"(
-     #pragma once
-     #if __cplusplus >= 201103L
-     namespace __jitify_mutex_ns {
-     class mutex {
-     public:
-     void lock();
-     bool try_lock();
-     void unlock();
-     };
-     // namespace __jitify_mutex_ns
-     namespace std { using namespace __jitify_mutex_ns; }
-     using namespace __jitify_mutex_ns;
-     #endif
+    #pragma once
+    #if __cplusplus >= 201103L
+    namespace __jitify_mutex_ns {
+    class mutex {
+    public:
+    void lock();
+    bool try_lock();
+    void unlock();
+    };
+    // namespace __jitify_mutex_ns
+    namespace std { using namespace __jitify_mutex_ns; }
+    using namespace __jitify_mutex_ns;
+    #endif
  )";
 
 static const char* jitsafe_headers[] = {
