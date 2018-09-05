@@ -31,54 +31,56 @@
  */
 
 #include <fstream>
-#include <string>
 #include <iostream>
 #include <sstream>
+#include <string>
 
 // Replaces non-alphanumeric characters with '_' and
 //   prepends '_' if the string begins with a digit.
 std::string sanitize_varname(std::string const& s) {
-	std::string r = s;
-	if( std::isdigit(r[0]) ) {
-		r = '_' + r;
-	}
-	for( std::string::iterator it=r.begin(); it!=r.end(); ++it ) {
-		if( !std::isalnum(*it) ) {
-			*it = '_';
-		}
-	}
-	return r;
+  std::string r = s;
+  if (std::isdigit(r[0])) {
+    r = '_' + r;
+  }
+  for (std::string::iterator it = r.begin(); it != r.end(); ++it) {
+    if (!std::isalnum(*it)) {
+      *it = '_';
+    }
+  }
+  return r;
 }
 // Replaces " with \"
 std::string sanitize_string_literal(std::string const& s) {
-	std::stringstream ss;
-	for( std::string::const_iterator it=s.begin(); it!=s.end(); ++it ) {
-		if( *it == '"' || *it == '\\' ) {
-			ss << '\\';
-		}
-		ss << *it;
-	}
-	return ss.str();
+  std::stringstream ss;
+  for (std::string::const_iterator it = s.begin(); it != s.end(); ++it) {
+    if (*it == '"' || *it == '\\') {
+      ss << '\\';
+    }
+    ss << *it;
+  }
+  return ss.str();
 }
 
-int main(int argc, char *argv[]) {
-	if( argc <= 1 || argv[1][0] == '-' ) {
-		std::cout << "Stringify - Converts text files to C string literals" << std::endl;
-		std::cout << "Usage: " << argv[0] << " infile [varname] > outfile" << std::endl;
-		return -1;
-	}
-	char* filename = argv[1];
-	std::string varname = (argc > 2) ? argv[2] : sanitize_varname(filename);
-	std::ifstream istream(filename);
-	std::ostream& ostream = std::cout;
-	std::string line;
-	// Note: This puts "filename\n" at the beginning of the string, which is
-	//         what jitify expects.
-	ostream << "const char* " << varname << " = " << "\"" << filename << "\\n\"" << std::endl;
-	while( std::getline(istream, line) ) {
-		ostream << "\"" << sanitize_string_literal(line) << "\\n\"" << std::endl;
-	}
-	ostream << ";" << std::endl;
-	return 0;
+int main(int argc, char* argv[]) {
+  if (argc <= 1 || argv[1][0] == '-') {
+    std::cout << "Stringify - Converts text files to C string literals"
+              << std::endl;
+    std::cout << "Usage: " << argv[0] << " infile [varname] > outfile"
+              << std::endl;
+    return -1;
+  }
+  char* filename = argv[1];
+  std::string varname = (argc > 2) ? argv[2] : sanitize_varname(filename);
+  std::ifstream istream(filename);
+  std::ostream& ostream = std::cout;
+  std::string line;
+  // Note: This puts "filename\n" at the beginning of the string, which is
+  //         what jitify expects.
+  ostream << "const char* " << varname << " = "
+          << "\"" << filename << "\\n\"" << std::endl;
+  while (std::getline(istream, line)) {
+    ostream << "\"" << sanitize_string_literal(line) << "\\n\"" << std::endl;
+  }
+  ostream << ";" << std::endl;
+  return 0;
 }
-
