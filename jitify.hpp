@@ -572,7 +572,7 @@ inline bool load_source(
   // HACK TESTING (WAR for cub)
   // source = "#define cudaDeviceSynchronize() cudaSuccess\n" + source;
   ////source = "cudaError_t cudaDeviceSynchronize() { return cudaSuccess; }\n" +
-  ///source;
+  /// source;
 
   // WAR for #pragma once causing problems when there are multiple inclusions
   //   of the same header from different paths.
@@ -698,13 +698,13 @@ struct type_reflection {
     const char* mangled_name = typeid(T*).name() + 1;
     return demangle(mangled_name);
     //#else
-    //		std::string ret;
-    //		nvrtcResult status = nvrtcGetTypeName<T>(&ret);
-    //		if( status != NVRTC_SUCCESS ) {
-    //			throw std::runtime_error(std::string("nvrtcGetTypeName failed:
-    //")+ 			                         nvrtcGetErrorString(status));
-    //		}
-    //		return ret;
+    // std::string ret;
+    // nvrtcResult status = nvrtcGetTypeName<T>(&ret);
+    // if ( status != NVRTC_SUCCESS ) {
+    //  throw std::runtime_error(std::string("nvrtcGetTypeName failed:") +
+    //                           nvrtcGetErrorString(status));
+    //}
+    // return ret;
     //#endif
   }
 };
@@ -1387,7 +1387,7 @@ static const char* jitsafe_header_string =
     "struct basic_string {\n"
     "basic_string();\n"
     "basic_string( const CharT* s );\n"  //, const Allocator& alloc =
-                                         //Allocator() );\n"
+                                         // Allocator() );\n"
     "const CharT* c_str() const;\n"
     "bool empty() const;\n"
     "void operator+=(const char *);\n"
@@ -1532,6 +1532,23 @@ static const char* jitsafe_header_math =
     // Note: Global namespace already includes CUDA math funcs
     "//using namespace __jitify_math_ns;\n";
 
+// TODO: incomplete
+static const char* jitsafe_header_mutex = R"(
+     #pragma once
+     #if __cplusplus >= 201103L
+     namespace __jitify_mutex_ns {
+     class mutex {
+     public:
+     void lock();
+     bool try_lock();
+     void unlock();
+     };
+     // namespace __jitify_mutex_ns
+     namespace std { using namespace __jitify_mutex_ns; }
+     using namespace __jitify_mutex_ns;
+     #endif
+ )";
+
 static const char* jitsafe_headers[] = {
     jitsafe_header_preinclude_h, jitsafe_header_float_h,
     jitsafe_header_float_h,      jitsafe_header_limits_h,
@@ -1547,7 +1564,7 @@ static const char* jitsafe_headers[] = {
     jitsafe_header_iostream,     jitsafe_header_ostream,
     jitsafe_header_istream,      jitsafe_header_sstream,
     jitsafe_header_vector,       jitsafe_header_string,
-    jitsafe_header_stdexcept};
+    jitsafe_header_stdexcept,    jitsafe_header_mutex};
 static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "float.h",
                                              "cfloat",
@@ -1576,7 +1593,8 @@ static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "sstream",
                                              "vector",
                                              "string",
-                                             "stdexcept"};
+                                             "stdexcept",
+                                             "mutex"};
 
 template <class T, size_t N>
 size_t array_size(T (&)[N]) {
