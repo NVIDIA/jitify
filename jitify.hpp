@@ -1196,7 +1196,7 @@ static const char* jitsafe_header_type_traits = R"(
     template<bool B, class T = void> struct enable_if {};
     template<class T>                struct enable_if<true, T> { typedef T type; };
     #if __cplusplus >= 201402L
-    template< bool B, class T = void > using enable_if_t = typename enable_if<B,T>::type
+    template< bool B, class T = void > using enable_if_t = typename enable_if<B,T>::type;
     #endif
 
     struct true_type  {
@@ -1255,9 +1255,6 @@ static const char* jitsafe_header_type_traits = R"(
     template<class> struct is_function : false_type { };
     template<class Ret, class... Args> struct is_function<Ret(Args...)> : true_type {}; //regular
     template<class Ret, class... Args> struct is_function<Ret(Args......)> : true_type {}; // variadic
-    #if __cplusplus >= 201402L
-    template< class T > inline constexpr bool is_function_v = is_function<T>::value;
-    #endif
 
     template<class> struct result_of;
     template<class F, typename... Args>
@@ -1305,7 +1302,7 @@ static const char* jitsafe_header_type_traits = R"(
     }
     template< class T > struct add_pointer : __jitify_detail::add_pointer<T, is_function<T>::value> {};
     #if __cplusplus >= 201402L
-    template< class T > using add_pointer_t = typename add_pointer<T>::type
+    template< class T > using add_pointer_t = typename add_pointer<T>::type;
     #endif
 
     template< class T > struct decay {
