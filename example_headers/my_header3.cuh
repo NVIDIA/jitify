@@ -28,7 +28,7 @@
 
 #pragma once
 
-template<typename T>
+template <typename T>
 T identity(T x) {
-	return x;
+  return x;
 }
