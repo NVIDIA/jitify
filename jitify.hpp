@@ -883,7 +883,7 @@ class CUDAKernel {
   std::string _ptx;
   std::vector<CUjit_option> _opts;
 
-  inline void cuda_safe_call(CUresult res) {
+  inline void cuda_safe_call(CUresult res) const {
     if (res != CUDA_SUCCESS) {
       const char* msg;
       cuGetErrorName(res, &msg);
@@ -2237,8 +2237,10 @@ class Program {
   JITIFY_DEFINE_AUTO_PTR_COPY_WAR(Program)
   /*! Select a kernel.
    *
-   * \param name The name of the kernel (unmangled and without template arguments).
-   * \param options A vector of options to be passed to the NVRTC compiler when compiling this kernel.
+   * \param name The name of the kernel (unmangled and without
+   * template arguments).
+   * \param options A vector of options to be passed to the NVRTC
+   * compiler when compiling this kernel.
    */
   inline Kernel kernel(std::string name,
                        jitify::detail::vector<std::string> options = 0) const {
@@ -2546,6 +2548,12 @@ inline void Program_impl::load_sources(std::string source,
   std::vector<std::string> linker_paths;
   detail::split_compiler_and_linker_options(options, &compiler_options,
                                             &linker_files, &linker_paths);
+
+  // If no arch is specified at this point we use whatever the current
+  // context is.  This ensures we pick up the correct internal headers
+  // for arch-dependent compilation, e.g., some intrinsics are only
+  // present for specific architectures
+  detail::detect_and_add_cuda_arch(compiler_options);
 
   std::string log;
   nvrtcResult ret;
