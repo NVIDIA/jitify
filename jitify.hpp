@@ -146,9 +146,10 @@ class RefWrapper {
  * \param name The name of the source file (<b>not</b> as a string), which must
  * be sanitized by replacing non-alpha-numeric characters with underscores.
  * E.g., \code{.cpp}JITIFY_INCLUDE_EMBEDDED_FILE(my_header_h)\endcode will
- * include the embedded file "my_header.h". \note Files declared with this macro
- * can be referenced using their original (unsanitized) filenames when creating
- * a \p jitify::Program instance.
+ * include the embedded file "my_header.h".
+ * \note Files declared with this macro * can be referenced using
+ * their original (unsanitized) filenames when creating * a \p
+ * jitify::Program instance.
  */
 #define JITIFY_INCLUDE_EMBEDDED_FILE(name)                                \
   extern "C" uint8_t _jitify_binary_##name##_start[] asm("_binary_" #name \
@@ -572,7 +573,7 @@ inline bool load_source(
   // HACK TESTING (WAR for cub)
   // source = "#define cudaDeviceSynchronize() cudaSuccess\n" + source;
   ////source = "cudaError_t cudaDeviceSynchronize() { return cudaSuccess; }\n" +
-  ///source;
+  /// source;
 
   // WAR for #pragma once causing problems when there are multiple inclusions
   //   of the same header from different paths.
@@ -701,8 +702,9 @@ struct type_reflection {
     //		std::string ret;
     //		nvrtcResult status = nvrtcGetTypeName<T>(&ret);
     //		if( status != NVRTC_SUCCESS ) {
-    //			throw std::runtime_error(std::string("nvrtcGetTypeName failed:
-    //")+ 			                         nvrtcGetErrorString(status));
+    //			throw std::runtime_error(std::string("nvrtcGetTypeName
+    // failed:
+    //")+ nvrtcGetErrorString(status));
     //		}
     //		return ret;
     //#endif
@@ -732,7 +734,8 @@ struct Instance {
 };
 
 /*! Create an Instance object from which we can extract the value's run-time
- * type. \param value The const value to be captured.
+ * type.
+ *  \param value The const value to be captured.
  */
 template <typename T>
 inline Instance<T const> instance_of(T const& value) {
@@ -1387,7 +1390,7 @@ static const char* jitsafe_header_string =
     "struct basic_string {\n"
     "basic_string();\n"
     "basic_string( const CharT* s );\n"  //, const Allocator& alloc =
-                                         //Allocator() );\n"
+                                         // Allocator() );\n"
     "const CharT* c_str() const;\n"
     "bool empty() const;\n"
     "void operator+=(const char *);\n"
@@ -1976,7 +1979,8 @@ class KernelInstantiation {
    *  \param grid   The thread grid dimensions for the launch.
    *  \param block  The thread block dimensions for the launch.
    *  \param smem   The amount of shared memory to dynamically allocate, in
-   * bytes. \param stream The CUDA stream to launch the kernel in.
+   * bytes.
+   *  \param stream The CUDA stream to launch the kernel in.
    */
   inline KernelLauncher configure(dim3 grid, dim3 block, size_t smem = 0,
                                   cudaStream_t stream = 0) const {
@@ -1986,11 +1990,11 @@ class KernelInstantiation {
    *  automatically to maximise occupancy.
    *
    * \param max_block_size  The upper limit on the block size, or 0 for no
-   * limit. \param smem            The amount of shared memory to dynamically
-   * allocate, in bytes. \param smem_callback   A function returning smem for a
-   * given block size (overrides \p smem). \param stream          The CUDA
-   * stream to launch the kernel in. \param flags           The flags to pass to
-   * cuOccupancyMaxPotentialBlockSizeWithFlags.
+   * limit.
+   * \param smem  The amount of shared memory to dynamically allocate, in bytes.
+   * \param smem_callback  A function returning smem for a given block size (overrides \p smem).
+   * \param stream The CUDA stream to launch the kernel in.
+   * \param flags The flags to pass to cuOccupancyMaxPotentialBlockSizeWithFlags.
    */
   inline KernelLauncher configure_1d_max_occupancy(
       int max_block_size = 0, size_t smem = 0,
@@ -2097,10 +2101,8 @@ class Program {
   JITIFY_DEFINE_AUTO_PTR_COPY_WAR(Program)
   /*! Select a kernel.
    *
-   *  \param name The name of the kernel (unmangled and without template
-   *    arguments).
-   *  \param options A vector of options to be passed to the
-   *    NVRTC compiler when compiling this kernel.
+   * \param name The name of the kernel (unmangled and without template arguments).
+   * \param options A vector of options to be passed to the NVRTC compiler when compiling this kernel.
    */
   inline Kernel kernel(std::string name,
                        jitify::detail::vector<std::string> options = 0) const {
@@ -2155,7 +2157,8 @@ class JitCache {
    *  looked-up using the following mechanisms (in this order):
    *  \note 1) By calling file_callback.
    *  \note 2) By looking for the file embedded in the executable via the GCC
-   * linker. \note 3) By looking for the file in the filesystem.
+   * linker.
+   *  \note 3) By looking for the file in the filesystem.
    *
    *  \note Jitify recursively scans all source files for \p #include
    *  directives and automatically adds them to the set of headers needed
@@ -2480,8 +2483,9 @@ enum Location { HOST, DEVICE };
  *  \param options       Options to pass to the NVRTC compiler.
  *  \param file_callback See jitify::Program.
  *  \param block_size    The size of the CUDA thread block with which to
- * execute. \param cache_size    The number of kernels to store in the cache
- * before overwriting the    least-recently-used ones.
+ * execute.
+ *  \param cache_size    The number of kernels to store in the cache
+ * before overwriting the least-recently-used ones.
  */
 struct ExecutionPolicy {
   /*! Location (HOST or DEVICE) on which to execute.*/
