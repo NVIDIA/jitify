@@ -85,6 +85,13 @@
 #define JITIFY_THREAD_SAFE 1
 #endif
 
+// WAR for MSVC not correctly defining __cplusplus (before MSVC 2017)
+#ifdef _MSVC_LANG
+#pragma push_macro("__cplusplus")
+#undef __cplusplus
+#define __cplusplus _MSVC_LANG
+#endif
+
 #include <dlfcn.h>
 #include <stdint.h>
 #include <algorithm>
@@ -2678,3 +2685,7 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
 #endif  // __cplusplus >= 201103L
 
 }  // namespace jitify
+
+#ifdef _MSVC_LANG
+#pragma pop_macro("__cplusplus")
+#endif
