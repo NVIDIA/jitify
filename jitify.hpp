@@ -92,6 +92,13 @@
 #define __cplusplus _MSVC_LANG
 #endif
 
+#if defined(_WIN32) || defined(_WIN64)
+// WAR for strtok_r being called strtok_s on Windows
+#pragma push_macro("strtok_r")
+#undef strtok_r
+#define strtok_r strtok_s
+#endif
+
 #include <dlfcn.h>
 #include <stdint.h>
 #include <algorithm>
@@ -451,7 +458,7 @@ inline std::vector<std::string> split_string(std::string str,
   std::vector<char> v_str(str.c_str(), str.c_str() + (str.size() + 1));
   char* c_str = v_str.data();
   char* saveptr = c_str;
-  char* token;
+  char* token = nullptr;
   for (long i = 0; i != maxsplit; ++i) {
     token = ::strtok_r(c_str, delims.c_str(), &saveptr);
     c_str = 0;
@@ -2697,6 +2704,10 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
 #endif  // __cplusplus >= 201103L
 
 }  // namespace jitify
+
+#if defined(_WIN32) || defined(_WIN64)
+#pragma pop_macro("strtok_r")
+#endif
 
 #ifdef _MSVC_LANG
 #pragma pop_macro("__cplusplus")
