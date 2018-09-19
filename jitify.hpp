@@ -672,17 +672,15 @@ inline std::string value_string<bool>(const bool& x) {
 }
 
 //#if CUDA_VERSION < 8000
-#ifdef _WIN32
-#include <DbgHelp.h>
-inline std::string demangle(const char* mangled_name) {
-  enum { BUFSIZE = 1024 };
-  char buf[BUFSIZE];
-  if (!UnDecorateSymbolName(mangled_name, buf, BUFSIZE, UNDNAME_COMPLETE)) {
-    return "";
-  }
-  return buf;
+#ifdef _MSC_VER  // MSVC compiler
+std::string strip_msvc_annotations_from_type_name(const char* verbose_name) {
+  std::string result = verbose_name;
+  result = jitify::detail::replace_token(result, "__ptr64", "");
+  result = jitify::detail::replace_token(result, "class", "");
+  result = jitify::detail::replace_token(result, "struct", "");
+  return result;
 }
-#else  // not Windows
+#else  // not MSVC
 #include <cxxabi.h>
 inline std::string demangle(const char* mangled_name) {
   size_t bufsize = 1024;
@@ -693,7 +691,7 @@ inline std::string demangle(const char* mangled_name) {
   free(buf);
   return demangled_name;
 }
-#endif
+#endif  // not MSVC
 //#endif // CUDA_VERSION < 8000
 
 template <typename T>
@@ -701,10 +699,24 @@ struct type_reflection {
   inline static std::string name() {
     //#if CUDA_VERSION < 8000
     // const char* mangled_name = typeid(T).name();
+#ifdef _MSC_VER  // MSVC compiler
+    // Note: MSVC's typeid(T).name() returns a demangled name, but it contains
+    // additional annotations that we must strip away.
+    const char* verbose_name = typeid(T*).name();
+    std::string name = strip_msvc_annotations_from_type_name(verbose_name);
+    // WAR for typeid discarding cv qualifiers on value-types
+    //   (crops off '*' from end of pointer type).
+    size_t trailing_star = name.rfind("*");
+    if (trailing_star == std::string::npos) {
+      throw std::runtime_error("Type reflection failed: " + name);
+    }
+    return name.substr(0, trailing_star);
+#else  // not MSVC
     // WAR for typeid discarding cv qualifiers on value-types
     //   (crops off 'P' from beginning of mangled pointer type).
     const char* mangled_name = typeid(T*).name() + 1;
     return demangle(mangled_name);
+#endif  // not MSVC
     //#else
     //		std::string ret;
     //		nvrtcResult status = nvrtcGetTypeName<T>(&ret);
