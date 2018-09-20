@@ -680,9 +680,11 @@ inline std::string value_string<bool>(const bool& x) {
 
 //#if CUDA_VERSION < 8000
 #ifdef _MSC_VER  // MSVC compiler
-std::string strip_msvc_annotations_from_type_name(const char* verbose_name) {
+inline std::string demangle(const char* verbose_name) {
+  // Strips annotations from the verbose name returned by typeid(X).name()
   std::string result = verbose_name;
   result = jitify::detail::replace_token(result, "__ptr64", "");
+  result = jitify::detail::replace_token(result, "__cdecl", "");
   result = jitify::detail::replace_token(result, "class", "");
   result = jitify::detail::replace_token(result, "struct", "");
   return result;
@@ -705,25 +707,23 @@ template <typename T>
 struct type_reflection {
   inline static std::string name() {
     //#if CUDA_VERSION < 8000
-    // const char* mangled_name = typeid(T).name();
-#ifdef _MSC_VER  // MSVC compiler
-    // Note: MSVC's typeid(T).name() returns a demangled name, but it contains
-    // additional annotations that we must strip away.
-    const char* verbose_name = typeid(T*).name();
-    std::string name = strip_msvc_annotations_from_type_name(verbose_name);
     // WAR for typeid discarding cv qualifiers on value-types
-    //   (crops off '*' from end of pointer type).
-    size_t trailing_star = name.rfind("*");
-    if (trailing_star == std::string::npos) {
-      throw std::runtime_error("Type reflection failed: " + name);
+    // We use a pointer type to maintain cv qualifiers, then strip out the '*'
+    std::string no_cv_name = demangle(typeid(T).name());
+    std::string ptr_name = demangle(typeid(T*).name());
+    // Find the right '*' by diffing the type name and ptr name
+    // Note that the '*' will also be prefixed with the cv qualifiers
+    size_t diff_begin =
+        std::mismatch(no_cv_name.begin(), no_cv_name.end(), ptr_name.begin())
+            .first -
+        no_cv_name.begin();
+    size_t star_begin = ptr_name.find("*", diff_begin);
+    if (star_begin == std::string::npos) {
+      throw std::runtime_error("Type reflection failed: " + ptr_name);
     }
-    return name.substr(0, trailing_star);
-#else  // not MSVC
-    // WAR for typeid discarding cv qualifiers on value-types
-    //   (crops off 'P' from beginning of mangled pointer type).
-    const char* mangled_name = typeid(T*).name() + 1;
-    return demangle(mangled_name);
-#endif  // not MSVC
+    std::string name =
+        ptr_name.substr(0, star_begin) + ptr_name.substr(star_begin + 1);
+    return name;
     //#else
     //		std::string ret;
     //		nvrtcResult status = nvrtcGetTypeName<T>(&ret);
