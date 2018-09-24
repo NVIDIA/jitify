@@ -85,6 +85,20 @@
 #define JITIFY_THREAD_SAFE 1
 #endif
 
+// WAR for MSVC not correctly defining __cplusplus (before MSVC 2017)
+#ifdef _MSVC_LANG
+#pragma push_macro("__cplusplus")
+#undef __cplusplus
+#define __cplusplus _MSVC_LANG
+#endif
+
+#if defined(_WIN32) || defined(_WIN64)
+// WAR for strtok_r being called strtok_s on Windows
+#pragma push_macro("strtok_r")
+#undef strtok_r
+#define strtok_r strtok_s
+#endif
+
 #include <dlfcn.h>
 #include <stdint.h>
 #include <algorithm>
@@ -444,7 +458,7 @@ inline std::vector<std::string> split_string(std::string str,
   std::vector<char> v_str(str.c_str(), str.c_str() + (str.size() + 1));
   char* c_str = v_str.data();
   char* saveptr = c_str;
-  char* token;
+  char* token = nullptr;
   for (long i = 0; i != maxsplit; ++i) {
     token = ::strtok_r(c_str, delims.c_str(), &saveptr);
     c_str = 0;
@@ -665,17 +679,17 @@ inline std::string value_string<bool>(const bool& x) {
 }
 
 //#if CUDA_VERSION < 8000
-#ifdef _WIN32
-#include <DbgHelp.h>
-inline std::string demangle(const char* mangled_name) {
-  enum { BUFSIZE = 1024 };
-  char buf[BUFSIZE];
-  if (!UnDecorateSymbolName(mangled_name, buf, BUFSIZE, UNDNAME_COMPLETE)) {
-    return "";
-  }
-  return buf;
+#ifdef _MSC_VER  // MSVC compiler
+inline std::string demangle(const char* verbose_name) {
+  // Strips annotations from the verbose name returned by typeid(X).name()
+  std::string result = verbose_name;
+  result = jitify::detail::replace_token(result, "__ptr64", "");
+  result = jitify::detail::replace_token(result, "__cdecl", "");
+  result = jitify::detail::replace_token(result, "class", "");
+  result = jitify::detail::replace_token(result, "struct", "");
+  return result;
 }
-#else  // not Windows
+#else  // not MSVC
 #include <cxxabi.h>
 inline std::string demangle(const char* mangled_name) {
   size_t bufsize = 1024;
@@ -686,18 +700,30 @@ inline std::string demangle(const char* mangled_name) {
   free(buf);
   return demangled_name;
 }
-#endif
+#endif  // not MSVC
 //#endif // CUDA_VERSION < 8000
 
 template <typename T>
 struct type_reflection {
   inline static std::string name() {
     //#if CUDA_VERSION < 8000
-    // const char* mangled_name = typeid(T).name();
     // WAR for typeid discarding cv qualifiers on value-types
-    //   (crops off 'P' from beginning of mangled pointer type).
-    const char* mangled_name = typeid(T*).name() + 1;
-    return demangle(mangled_name);
+    // We use a pointer type to maintain cv qualifiers, then strip out the '*'
+    std::string no_cv_name = demangle(typeid(T).name());
+    std::string ptr_name = demangle(typeid(T*).name());
+    // Find the right '*' by diffing the type name and ptr name
+    // Note that the '*' will also be prefixed with the cv qualifiers
+    size_t diff_begin =
+        std::mismatch(no_cv_name.begin(), no_cv_name.end(), ptr_name.begin())
+            .first -
+        no_cv_name.begin();
+    size_t star_begin = ptr_name.find("*", diff_begin);
+    if (star_begin == std::string::npos) {
+      throw std::runtime_error("Type reflection failed: " + ptr_name);
+    }
+    std::string name =
+        ptr_name.substr(0, star_begin) + ptr_name.substr(star_begin + 1);
+    return name;
     //#else
     //		std::string ret;
     //		nvrtcResult status = nvrtcGetTypeName<T>(&ret);
@@ -2678,3 +2704,11 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
 #endif  // __cplusplus >= 201103L
 
 }  // namespace jitify
+
+#if defined(_WIN32) || defined(_WIN64)
+#pragma pop_macro("strtok_r")
+#endif
+
+#ifdef _MSVC_LANG
+#pragma pop_macro("__cplusplus")
+#endif
