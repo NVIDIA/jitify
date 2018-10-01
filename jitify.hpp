@@ -103,23 +103,6 @@
 #if JITIFY_THREAD_SAFE
 #include <mutex>
 #endif
-#if __cplusplus >= 201103L
-#define JITIFY_UNIQUE_PTR std::unique_ptr
-#define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)
-#else
-#define JITIFY_UNIQUE_PTR std::auto_ptr
-template <class C>
-class RefWrapper {
-  C* _this;
-
- public:
-  RefWrapper(C* this_) : _this(this_) {}
-  C& ref() { return *_this; }
-};
-#define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)               \
-  cls(RefWrapper<cls> other) : _impl(other.ref()._impl) {} \
-  operator RefWrapper<cls>() { return this; }
-#endif
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>  // For dim3, cudaStream_t
@@ -2043,12 +2026,12 @@ class KernelLauncher_impl {
  *    for launching.
  */
 class KernelLauncher {
-  JITIFY_UNIQUE_PTR<KernelLauncher_impl const> _impl;
+  std::unique_ptr<KernelLauncher_impl const> _impl;
 
  public:
   inline KernelLauncher(KernelInstantiation const& kernel_inst, dim3 grid,
                         dim3 block, size_t smem = 0, cudaStream_t stream = 0);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(KernelLauncher)
+
   // Note: It's important that there is no implicit conversion required
   //         for arg_ptrs, because otherwise the parameter pack version
   //         below gets called instead (probably resulting in a segfault).
@@ -2092,12 +2075,12 @@ class KernelLauncher {
  */
 class KernelInstantiation {
   friend class KernelLauncher;
-  JITIFY_UNIQUE_PTR<KernelInstantiation_impl const> _impl;
+  std::unique_ptr<KernelInstantiation_impl const> _impl;
 
  public:
   inline KernelInstantiation(Kernel const& kernel,
                              std::vector<std::string> const& template_args);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(KernelInstantiation)
+
   /*! Configure the kernel launch.
    *
    *  \see configure
@@ -2158,12 +2141,12 @@ class KernelInstantiation {
  */
 class Kernel {
   friend class KernelInstantiation;
-  JITIFY_UNIQUE_PTR<Kernel_impl const> _impl;
+  std::unique_ptr<Kernel_impl const> _impl;
 
  public:
   Kernel(Program const& program, std::string name,
          jitify::detail::vector<std::string> options = 0);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(Kernel)
+
   /*! Instantiate the kernel.
    *
    *  \param template_args A vector of template arguments represented as
@@ -2223,14 +2206,14 @@ class Kernel {
  */
 class Program {
   friend class Kernel;
-  JITIFY_UNIQUE_PTR<Program_impl const> _impl;
+  std::unique_ptr<Program_impl const> _impl;
 
  public:
   Program(JitCache& cache, std::string source,
           jitify::detail::vector<std::string> headers = 0,
           jitify::detail::vector<std::string> options = 0,
           file_callback_type file_callback = 0);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(Program)
+
   /*! Select a kernel.
    *
    * \param name The name of the kernel (unmangled and without
@@ -2257,7 +2240,7 @@ class Program {
  */
 class JitCache {
   friend class Program;
-  JITIFY_UNIQUE_PTR<JitCache_impl> _impl;
+  std::unique_ptr<JitCache_impl> _impl;
 
  public:
   /*! JitCache constructor.
@@ -2312,9 +2295,6 @@ class JitCache {
     return Program(*this, source, headers, options, file_callback);
   }
 };
-
-#undef JITIFY_UNIQUE_PTR
-#undef JITIFY_DEFINE_AUTO_PTR_COPY_WAR
 
 inline Program::Program(JitCache& cache, std::string source,
                         jitify::detail::vector<std::string> headers,
