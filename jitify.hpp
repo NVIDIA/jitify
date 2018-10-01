@@ -685,14 +685,17 @@ inline std::string demangle(const char* mangled_name) {
   char *demangled_ptr = abi::__cxa_demangle(mangled_name, buf, &bufsize, &status);
   if (status == 0) {
     demangled_name = demangled_ptr; // all worked as expected
+    free(buf);
   } else if (status == -2) {
     demangled_name = mangled_name;  // we interpret this as plain C name
+    free(buf);
   } else if (status == -1) {
+    free(buf);
     throw std::runtime_error(std::string("memory allocation failure in __cxa_demangle"));
   } else if (status == -3) {
+    free(buf);
     throw std::runtime_error(std::string("invalid argument to __cxa_demangle"));
   }
-  free(buf);
   return demangled_name;
 }
 #endif
