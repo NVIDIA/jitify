@@ -117,23 +117,6 @@
 #if JITIFY_THREAD_SAFE
 #include <mutex>
 #endif
-#if __cplusplus >= 201103L
-#define JITIFY_UNIQUE_PTR std::unique_ptr
-#define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)
-#else
-#define JITIFY_UNIQUE_PTR std::auto_ptr
-template <class C>
-class RefWrapper {
-  C* _this;
-
- public:
-  RefWrapper(C* this_) : _this(this_) {}
-  C& ref() { return *_this; }
-};
-#define JITIFY_DEFINE_AUTO_PTR_COPY_WAR(cls)               \
-  cls(RefWrapper<cls> other) : _impl(other.ref()._impl) {} \
-  operator RefWrapper<cls>() { return this; }
-#endif
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>  // For dim3, cudaStream_t
@@ -693,11 +676,19 @@ inline std::string demangle(const char* verbose_name) {
 #include <cxxabi.h>
 inline std::string demangle(const char* mangled_name) {
   size_t bufsize = 1024;
-  char* buf = (char*)malloc(bufsize);
+  auto buf = std::unique_ptr<char, decltype(free)*>(reinterpret_cast<char*>(malloc(bufsize)), free);
+  std::string demangled_name;
   int status;
-  std::string demangled_name =
-      abi::__cxa_demangle(mangled_name, buf, &bufsize, &status);
-  free(buf);
+  char *demangled_ptr = abi::__cxa_demangle(mangled_name, buf.get(), &bufsize, &status);
+  if (status == 0) {
+    demangled_name = demangled_ptr; // all worked as expected
+  } else if (status == -2) {
+    demangled_name = mangled_name;  // we interpret this as plain C name
+  } else if (status == -1) {
+    throw std::runtime_error(std::string("memory allocation failure in __cxa_demangle"));
+  } else if (status == -3) {
+    throw std::runtime_error(std::string("invalid argument to __cxa_demangle"));
+  }
   return demangled_name;
 }
 #endif  // not MSVC
@@ -900,7 +891,7 @@ class CUDAKernel {
   std::string _ptx;
   std::vector<CUjit_option> _opts;
 
-  inline void cuda_safe_call(CUresult res) {
+  inline void cuda_safe_call(CUresult res) const {
     if (res != CUDA_SUCCESS) {
       const char* msg;
       cuGetErrorName(res, &msg);
@@ -1205,34 +1196,140 @@ static const char* jitsafe_header_limits =
     "using namespace __jitify_limits_ns;\n";
 
 // TODO: This is highly incomplete
-static const char* jitsafe_header_type_traits =
-    "#pragma once\n"
-    "#if __cplusplus >= 201103L\n"
-    "namespace __jitify_type_traits_ns {\n"
-    "template<bool B, class T = void> struct enable_if {};\n"
-    "template<class T>                struct enable_if<true, T> { typedef T "
-    "type; };\n"
-    "\n"
-    "struct true_type  { enum { value = true }; };\n"
-    "struct false_type { enum { value = false }; };\n"
-    "template<typename T> struct is_floating_point    : false_type {};\n"
-    "template<> struct is_floating_point<float>       :  true_type {};\n"
-    "template<> struct is_floating_point<double>      :  true_type {};\n"
-    "template<> struct is_floating_point<long double> :  true_type {};\n"
-    "\n"
-    "template<typename T, typename U> struct is_same      : false_type {};\n"
-    "template<typename T>             struct is_same<T,T> :  true_type {};\n"
-    "template<class>\n"
-    "struct result_of;\n"
-    "template<class F, typename... Args>\n"
-    "struct result_of<F(Args...)> {\n"
+static const char* jitsafe_header_type_traits = R"(
+    #pragma once
+    #if __cplusplus >= 201103L
+    namespace __jitify_type_traits_ns {
+
+    template<bool B, class T = void> struct enable_if {};
+    template<class T>                struct enable_if<true, T> { typedef T type; };
+    #if __cplusplus >= 201402L
+    template< bool B, class T = void > using enable_if_t = typename enable_if<B,T>::type;
+    #endif
+
+    struct true_type  {
+      enum { value = true };
+      operator bool() const { return true; }
+    };
+    struct false_type {
+      enum { value = false };
+      operator bool() const { return false; }
+    };
+
+    template<typename T> struct is_floating_point    : false_type {};
+    template<> struct is_floating_point<float>       :  true_type {};
+    template<> struct is_floating_point<double>      :  true_type {};
+    template<> struct is_floating_point<long double> :  true_type {};
+
+    template<class T> struct is_integral              : false_type {};
+    template<> struct is_integral<bool>               :  true_type {};
+    template<> struct is_integral<char>               :  true_type {};
+    template<> struct is_integral<signed char>        :  true_type {};
+    template<> struct is_integral<unsigned char>      :  true_type {};
+    template<> struct is_integral<short>              :  true_type {};
+    template<> struct is_integral<unsigned short>     :  true_type {};
+    template<> struct is_integral<int>                :  true_type {};
+    template<> struct is_integral<unsigned int>       :  true_type {};
+    template<> struct is_integral<long>               :  true_type {};
+    template<> struct is_integral<unsigned long>      :  true_type {};
+    template<> struct is_integral<long long>          :  true_type {};
+    template<> struct is_integral<unsigned long long> :  true_type {};
+
+    template<typename T> struct is_signed    : false_type {};
+    template<> struct is_signed<float>       :  true_type {};
+    template<> struct is_signed<double>      :  true_type {};
+    template<> struct is_signed<long double> :  true_type {};
+    template<> struct is_signed<signed char> :  true_type {};
+    template<> struct is_signed<short>       :  true_type {};
+    template<> struct is_signed<int>         :  true_type {};
+    template<> struct is_signed<long>        :  true_type {};
+    template<> struct is_signed<long long>   :  true_type {};
+
+    template<typename T> struct is_unsigned             : false_type {};
+    template<> struct is_unsigned<unsigned char>      :  true_type {};
+    template<> struct is_unsigned<unsigned short>     :  true_type {};
+    template<> struct is_unsigned<unsigned int>       :  true_type {};
+    template<> struct is_unsigned<unsigned long>      :  true_type {};
+    template<> struct is_unsigned<unsigned long long> :  true_type {};
+
+    template<typename T, typename U> struct is_same      : false_type {};
+    template<typename T>             struct is_same<T,T> :  true_type {};
+
+    template<class T> struct is_array : false_type {};
+    template<class T> struct is_array<T[]> : true_type {};
+    template<class T, size_t N> struct is_array<T[N]> : true_type {};
+
+    //partial implementation only of is_function
+    template<class> struct is_function : false_type { };
+    template<class Ret, class... Args> struct is_function<Ret(Args...)> : true_type {}; //regular
+    template<class Ret, class... Args> struct is_function<Ret(Args......)> : true_type {}; // variadic
+
+    template<class> struct result_of;
+    template<class F, typename... Args>
+    struct result_of<F(Args...)> {
     // TODO: This is a hack; a proper implem is quite complicated.
-    "	typedef typename F::result_type type;\n"
-    "};\n"
-    "} // namespace __jtiify_type_traits_ns\n"
-    "namespace std { using namespace __jitify_type_traits_ns; }\n"
-    "using namespace __jitify_type_traits_ns;\n"
-    "#endif // c++11\n";
+    typedef typename F::result_type type;
+    };
+
+    template <class T> struct remove_reference { typedef T type; };
+    template <class T> struct remove_reference<T&> { typedef T type; };
+    template <class T> struct remove_reference<T&&> { typedef T type; };
+    #if __cplusplus >= 201402L
+    template< class T > using remove_reference_t = typename remove_reference<T>::type;
+    #endif
+
+    template<class T> struct remove_extent { typedef T type; };
+    template<class T> struct remove_extent<T[]> { typedef T type; };
+    template<class T, size_t N> struct remove_extent<T[N]> { typedef T type; };
+    #if __cplusplus >= 201402L
+    template< class T > using remove_extent_t = typename remove_extent<T>::type;
+    #endif
+
+    template< class T > struct remove_const          { typedef T type; };
+    template< class T > struct remove_const<const T> { typedef T type; };
+    template< class T > struct remove_volatile             { typedef T type; };
+    template< class T > struct remove_volatile<volatile T> { typedef T type; };
+    template< class T > struct remove_cv { typedef typename remove_volatile<typename remove_const<T>::type>::type type; };
+    #if __cplusplus >= 201402L
+    template< class T > using remove_cv_t       = typename remove_cv<T>::type;
+    template< class T > using remove_const_t    = typename remove_const<T>::type;
+    template< class T > using remove_volatile_t = typename remove_volatile<T>::type;
+    #endif
+
+    template<bool B, class T, class F> struct conditional { typedef T type; };
+    template<class T, class F> struct conditional<false, T, F> { typedef F type; };
+    #if __cplusplus >= 201402L
+    template< bool B, class T, class F > using conditional_t = typename conditional<B,T,F>::type;
+    #endif
+
+    namespace __jitify_detail {
+    template< class T, bool is_function_type = false > struct add_pointer { using type = typename remove_reference<T>::type*; };
+    template< class T > struct add_pointer<T, true> { using type = T; };
+    template< class T, class... Args > struct add_pointer<T(Args...), true> { using type = T(*)(Args...); };
+    template< class T, class... Args > struct add_pointer<T(Args..., ...), true> { using type = T(*)(Args..., ...); };
+    }
+    template< class T > struct add_pointer : __jitify_detail::add_pointer<T, is_function<T>::value> {};
+    #if __cplusplus >= 201402L
+    template< class T > using add_pointer_t = typename add_pointer<T>::type;
+    #endif
+
+    template< class T > struct decay {
+    private:
+      typedef typename remove_reference<T>::type U;
+    public:
+      typedef typename conditional<is_array<U>::value, typename remove_extent<U>::type*,
+        typename conditional<is_function<U>::value,typename add_pointer<U>::type,typename remove_cv<U>::type
+        >::type>::type type;
+    };
+    #if __cplusplus >= 201402L
+    template< class T > using decay_t = typename decay<T>::type;
+    #endif
+
+    } // namespace __jtiify_type_traits_ns
+    namespace std { using namespace __jitify_type_traits_ns; }
+    using namespace __jitify_type_traits_ns;
+    #endif // c++11
+)";
 
 // TODO: INT_FAST8_MAX et al. and a few other misc constants
 static const char* jitsafe_header_stdint_h =
@@ -1561,6 +1658,23 @@ static const char* jitsafe_header_math =
     // Note: Global namespace already includes CUDA math funcs
     "//using namespace __jitify_math_ns;\n";
 
+// TODO: incomplete
+static const char* jitsafe_header_mutex = R"(
+    #pragma once
+    #if __cplusplus >= 201103L
+    namespace __jitify_mutex_ns {
+    class mutex {
+    public:
+    void lock();
+    bool try_lock();
+    void unlock();
+    };
+    // namespace __jitify_mutex_ns
+    namespace std { using namespace __jitify_mutex_ns; }
+    using namespace __jitify_mutex_ns;
+    #endif
+ )";
+
 static const char* jitsafe_headers[] = {
     jitsafe_header_preinclude_h, jitsafe_header_float_h,
     jitsafe_header_float_h,      jitsafe_header_limits_h,
@@ -1576,7 +1690,7 @@ static const char* jitsafe_headers[] = {
     jitsafe_header_iostream,     jitsafe_header_ostream,
     jitsafe_header_istream,      jitsafe_header_sstream,
     jitsafe_header_vector,       jitsafe_header_string,
-    jitsafe_header_stdexcept};
+    jitsafe_header_stdexcept,    jitsafe_header_mutex};
 static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "float.h",
                                              "cfloat",
@@ -1605,7 +1719,8 @@ static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "sstream",
                                              "vector",
                                              "string",
-                                             "stdexcept"};
+                                             "stdexcept",
+                                             "mutex"};
 
 template <class T, size_t N>
 size_t array_size(T (&)[N]) {
@@ -1937,12 +2052,12 @@ class KernelLauncher_impl {
  *    for launching.
  */
 class KernelLauncher {
-  JITIFY_UNIQUE_PTR<KernelLauncher_impl const> _impl;
+  std::unique_ptr<KernelLauncher_impl const> _impl;
 
  public:
   inline KernelLauncher(KernelInstantiation const& kernel_inst, dim3 grid,
                         dim3 block, size_t smem = 0, cudaStream_t stream = 0);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(KernelLauncher)
+
   // Note: It's important that there is no implicit conversion required
   //         for arg_ptrs, because otherwise the parameter pack version
   //         below gets called instead (probably resulting in a segfault).
@@ -1986,12 +2101,12 @@ class KernelLauncher {
  */
 class KernelInstantiation {
   friend class KernelLauncher;
-  JITIFY_UNIQUE_PTR<KernelInstantiation_impl const> _impl;
+  std::unique_ptr<KernelInstantiation_impl const> _impl;
 
  public:
   inline KernelInstantiation(Kernel const& kernel,
                              std::vector<std::string> const& template_args);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(KernelInstantiation)
+
   /*! Configure the kernel launch.
    *
    *  \see configure
@@ -2052,12 +2167,12 @@ class KernelInstantiation {
  */
 class Kernel {
   friend class KernelInstantiation;
-  JITIFY_UNIQUE_PTR<Kernel_impl const> _impl;
+  std::unique_ptr<Kernel_impl const> _impl;
 
  public:
   Kernel(Program const& program, std::string name,
          jitify::detail::vector<std::string> options = 0);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(Kernel)
+
   /*! Instantiate the kernel.
    *
    *  \param template_args A vector of template arguments represented as
@@ -2117,18 +2232,20 @@ class Kernel {
  */
 class Program {
   friend class Kernel;
-  JITIFY_UNIQUE_PTR<Program_impl const> _impl;
+  std::unique_ptr<Program_impl const> _impl;
 
  public:
   Program(JitCache& cache, std::string source,
           jitify::detail::vector<std::string> headers = 0,
           jitify::detail::vector<std::string> options = 0,
           file_callback_type file_callback = 0);
-  JITIFY_DEFINE_AUTO_PTR_COPY_WAR(Program)
+
   /*! Select a kernel.
    *
-   * \param name The name of the kernel (unmangled and without template arguments).
-   * \param options A vector of options to be passed to the NVRTC compiler when compiling this kernel.
+   * \param name The name of the kernel (unmangled and without
+   * template arguments).
+   * \param options A vector of options to be passed to the NVRTC
+   * compiler when compiling this kernel.
    */
   inline Kernel kernel(std::string name,
                        jitify::detail::vector<std::string> options = 0) const {
@@ -2149,7 +2266,7 @@ class Program {
  */
 class JitCache {
   friend class Program;
-  JITIFY_UNIQUE_PTR<JitCache_impl> _impl;
+  std::unique_ptr<JitCache_impl> _impl;
 
  public:
   /*! JitCache constructor.
@@ -2204,9 +2321,6 @@ class JitCache {
     return Program(*this, source, headers, options, file_callback);
   }
 };
-
-#undef JITIFY_UNIQUE_PTR
-#undef JITIFY_DEFINE_AUTO_PTR_COPY_WAR
 
 inline Program::Program(JitCache& cache, std::string source,
                         jitify::detail::vector<std::string> headers,
@@ -2436,6 +2550,12 @@ inline void Program_impl::load_sources(std::string source,
   std::vector<std::string> linker_paths;
   detail::split_compiler_and_linker_options(options, &compiler_options,
                                             &linker_files, &linker_paths);
+
+  // If no arch is specified at this point we use whatever the current
+  // context is.  This ensures we pick up the correct internal headers
+  // for arch-dependent compilation, e.g., some intrinsics are only
+  // present for specific architectures
+  detail::detect_and_add_cuda_arch(compiler_options);
 
   std::string log;
   nvrtcResult ret;
