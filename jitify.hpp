@@ -888,6 +888,8 @@ inline std::string reflect_template() {
 namespace detail {
 
 class CUDAKernel {
+  std::vector<std::string> _link_files;
+  std::vector<std::string> _link_paths;
   CUlinkState _link_state;
   CUmodule _module;
   CUfunction _kernel;
@@ -965,10 +967,15 @@ class CUDAKernel {
   inline CUDAKernel(const char* func_name, const char* ptx,
                     std::vector<std::string> link_files,
                     std::vector<std::string> link_paths, unsigned int nopts = 0,
-                    CUjit_option* opts = 0, void** optvals = 0) {
-    _func_name = func_name;
-    _ptx = ptx;
-    _opts.assign(opts, opts + nopts);
+                    CUjit_option* opts = 0, void** optvals = 0)
+      : _link_files(link_files),
+        _link_paths(link_paths),
+        _link_state(0),
+        _module(0),
+        _kernel(0),
+        _func_name(func_name),
+        _ptx(ptx),
+        _opts(opts, opts + nopts) {
     this->create_module(link_files, link_paths, optvals);
   }
   inline CUDAKernel& set(const char* func_name, const char* ptx,
@@ -979,6 +986,8 @@ class CUDAKernel {
     this->destroy_module();
     _func_name = func_name;
     _ptx = ptx;
+    _link_files = link_files;
+    _link_paths = link_paths;
     _opts.assign(opts, opts + nopts);
     this->create_module(link_files, link_paths, optvals);
     return *this;
@@ -991,6 +1000,11 @@ class CUDAKernel {
     return cuLaunchKernel(_kernel, grid.x, grid.y, grid.z, block.x, block.y,
                           block.z, smem, stream, arg_ptrs.data(), NULL);
   }
+
+  std::string function_name() const { return _func_name; }
+  std::string ptx() const { return _ptx; }
+  std::vector<std::string> link_files() const { return _link_files; }
+  std::vector<std::string> link_paths() const { return _link_paths; }
 };
 
 static const char* jitsafe_header_preinclude_h = R"(
