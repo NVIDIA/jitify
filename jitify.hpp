@@ -235,7 +235,11 @@ class ObjectCache {
   template <typename... Args>
   inline value_type& emplace(const key_type& k, Args&&... args) {
     this->discard_old(1);
-    auto iter = _objects.emplace(k, value_type{args...}).first;
+    // Note: Use of piecewise_construct allows non-movable non-copyable types
+    auto iter = _objects
+                    .emplace(std::piecewise_construct, std::forward_as_tuple(k),
+                             std::forward_as_tuple(args...))
+                    .first;
     _ranked_keys.push_front(iter->first);
     return iter->second;
   }
@@ -956,7 +960,8 @@ class CUDAKernel {
   inline CUDAKernel() : _link_state(0), _module(0), _kernel(0) {}
   inline CUDAKernel(const CUDAKernel& other) = delete;
   inline CUDAKernel& operator=(const CUDAKernel& other) = delete;
-  inline CUDAKernel(CUDAKernel&& other) = default;
+  inline CUDAKernel(CUDAKernel&& other) = delete;
+  inline CUDAKernel& operator=(CUDAKernel&& other) = delete;
   inline CUDAKernel(const char* func_name, const char* ptx,
                     std::vector<std::string> link_files,
                     std::vector<std::string> link_paths, unsigned int nopts = 0,
