@@ -982,7 +982,7 @@ class CUDAKernel {
   inline operator CUfunction() const { return _kernel; }
 
   inline CUresult launch(dim3 grid, dim3 block, unsigned int smem,
-                         CUstream stream, std::vector<void*> arg_ptrs) {
+                         CUstream stream, std::vector<void*> arg_ptrs) const {
     return cuLaunchKernel(_kernel, grid.x, grid.y, grid.z, block.x, block.y,
                           block.z, smem, stream, arg_ptrs.data(), NULL);
   }
