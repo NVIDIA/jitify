@@ -109,6 +109,39 @@ bool test_simple() {
 }
 
 template <typename T>
+bool test_simple_v2() {
+  const char* program_source =
+      "my_program\n"
+      "template<int N, typename T>\n"
+      "__global__\n"
+      "void my_kernel(T* data) {\n"
+      "    T data0 = data[0];\n"
+      "    for( int i=0; i<N-1; ++i ) {\n"
+      "        data[0] *= data0;\n"
+      "    }\n"
+      "}\n";
+  std::vector<std::string> opts;
+  jitify_v2::Program program_orig(program_source, {}, opts);
+  auto program = jitify_v2::Program::deserialize(program_orig.serialize());
+  T h_data = 5;
+  T* d_data;
+  cudaMalloc((void**)&d_data, sizeof(T));
+  cudaMemcpy(d_data, &h_data, sizeof(T), cudaMemcpyHostToDevice);
+  dim3 grid(1);
+  dim3 block(1);
+  using jitify::reflection::type_of;
+  auto kernel_inst_orig =
+      program.kernel("my_kernel").instantiate(3, type_of(*d_data));
+  auto kernel_inst =
+      jitify_v2::KernelInstantiation::deserialize(kernel_inst_orig.serialize());
+  CHECK_CUDA(kernel_inst.configure(grid, block).launch(d_data));
+  cudaMemcpy(&h_data, d_data, sizeof(T), cudaMemcpyDeviceToHost);
+  cudaFree(d_data);
+  std::cout << h_data << std::endl;
+  return are_close(h_data, 125.f);
+}
+
+template <typename T>
 bool test_kernels() {
   // Note: The name is specified first, followed by a newline, then the code
   const char* program1 =
@@ -225,6 +258,7 @@ int main(int argc, char* argv[]) {
 
   // Uncached
   bool test_simple_result = test_simple<float>();
+  bool test_simple_v2_result = test_simple_v2<float>();
   bool test_kernels_result = test_kernels<float>();
   bool test_parallel_for_result = test_parallel_for<float>();
   // Cached
@@ -234,12 +268,14 @@ int main(int argc, char* argv[]) {
 
   std::cout << "test_simple<float>:       " << TEST_RESULT(test_simple_result)
             << std::endl;
+  std::cout << "test_simple_v2<float>:    "
+            << TEST_RESULT(test_simple_v2_result) << std::endl;
   std::cout << "test_kernels<float>:      " << TEST_RESULT(test_kernels_result)
             << std::endl;
   std::cout << "test_parallel_for<float>: "
             << TEST_RESULT(test_parallel_for_result) << std::endl;
 
-  return (!test_simple_result + !test_kernels_result +
+  return (!test_simple_result + !test_simple_v2_result + !test_kernels_result +
           !test_parallel_for_result);
 #else
   std::cout << "Tests require building with C++11 support (make CXX11=1)"
