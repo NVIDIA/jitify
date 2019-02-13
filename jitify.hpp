@@ -235,7 +235,11 @@ class ObjectCache {
   template <typename... Args>
   inline value_type& emplace(const key_type& k, Args&&... args) {
     this->discard_old(1);
-    auto iter = _objects.emplace(k, value_type{args...}).first;
+    // Note: Use of piecewise_construct allows non-movable non-copyable types
+    auto iter = _objects
+                    .emplace(std::piecewise_construct, std::forward_as_tuple(k),
+                             std::forward_as_tuple(args...))
+                    .first;
     _ranked_keys.push_front(iter->first);
     return iter->second;
   }
@@ -887,6 +891,8 @@ inline std::string reflect_template() {
 namespace detail {
 
 class CUDAKernel {
+  std::vector<std::string> _link_files;
+  std::vector<std::string> _link_paths;
   CUlinkState _link_state;
   CUmodule _module;
   CUfunction _kernel;
@@ -959,14 +965,20 @@ class CUDAKernel {
   inline CUDAKernel() : _link_state(0), _module(0), _kernel(0) {}
   inline CUDAKernel(const CUDAKernel& other) = delete;
   inline CUDAKernel& operator=(const CUDAKernel& other) = delete;
-  inline CUDAKernel(CUDAKernel&& other) = default;
+  inline CUDAKernel(CUDAKernel&& other) = delete;
+  inline CUDAKernel& operator=(CUDAKernel&& other) = delete;
   inline CUDAKernel(const char* func_name, const char* ptx,
                     std::vector<std::string> link_files,
                     std::vector<std::string> link_paths, unsigned int nopts = 0,
-                    CUjit_option* opts = 0, void** optvals = 0) {
-    _func_name = func_name;
-    _ptx = ptx;
-    _opts.assign(opts, opts + nopts);
+                    CUjit_option* opts = 0, void** optvals = 0)
+      : _link_files(link_files),
+        _link_paths(link_paths),
+        _link_state(0),
+        _module(0),
+        _kernel(0),
+        _func_name(func_name),
+        _ptx(ptx),
+        _opts(opts, opts + nopts) {
     this->create_module(link_files, link_paths, optvals);
   }
   inline CUDAKernel& set(const char* func_name, const char* ptx,
@@ -977,6 +989,8 @@ class CUDAKernel {
     this->destroy_module();
     _func_name = func_name;
     _ptx = ptx;
+    _link_files = link_files;
+    _link_paths = link_paths;
     _opts.assign(opts, opts + nopts);
     this->create_module(link_files, link_paths, optvals);
     return *this;
@@ -985,10 +999,15 @@ class CUDAKernel {
   inline operator CUfunction() const { return _kernel; }
 
   inline CUresult launch(dim3 grid, dim3 block, unsigned int smem,
-                         CUstream stream, std::vector<void*> arg_ptrs) {
+                         CUstream stream, std::vector<void*> arg_ptrs) const {
     return cuLaunchKernel(_kernel, grid.x, grid.y, grid.z, block.x, block.y,
                           block.z, smem, stream, arg_ptrs.data(), NULL);
   }
+
+  std::string function_name() const { return _func_name; }
+  std::string ptx() const { return _ptx; }
+  std::vector<std::string> link_files() const { return _link_files; }
+  std::vector<std::string> link_paths() const { return _link_paths; }
 };
 
 static const char* jitsafe_header_preinclude_h = R"(
