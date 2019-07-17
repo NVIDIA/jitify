@@ -76,7 +76,7 @@ int main(int argc, char* argv[]) {
   std::string line;
   // Note: This puts "filename\n" at the beginning of the string, which is
   //         what jitify expects.
-  ostream << "const char* " << varname << " = "
+  ostream << "const char* const " << varname << " = "
           << "\"" << filename << "\\n\"" << std::endl;
   while (std::getline(istream, line)) {
     ostream << "\"" << sanitize_string_literal(line) << "\\n\"" << std::endl;
