@@ -1285,9 +1285,6 @@ static const char* jitsafe_header_type_traits = R"(
     template<class> struct is_function : false_type { };
     template<class Ret, class... Args> struct is_function<Ret(Args...)> : true_type {}; //regular
     template<class Ret, class... Args> struct is_function<Ret(Args......)> : true_type {}; // variadic
-    #if __cplusplus >= 201402L
-    template< class T > inline constexpr bool is_function_v = is_function<T>::value;
-    #endif
 
     template<class> struct result_of;
     template<class F, typename... Args>
@@ -1704,24 +1701,22 @@ static const char* jitsafe_header_algorithm = R"(
     #pragma once
     #if __cplusplus >= 201103L
     namespace __jitify_algorithm_ns {
+
     #if __cplusplus == 201103L
-    template<class T> const T& max(const T& a, const T& b)
-    {
-      return (b > a) ? b : a;
-    }
-    template<class T> const T& min(const T& a, const T& b)
-    {
-      return (b < a) ? b : a;
-    }
+    #define JITIFY_CXX14_CONSTEXPR
     #else
-    template<class T> constexpr const T& max(const T& a, const T& b)
+    #define JITIFY_CXX14_CONSTEXPR constexpr
+    #endif
+
+    template<class T> JITIFY_CXX14_CONSTEXPR const T& max(const T& a, const T& b)
     {
       return (b > a) ? b : a;
     }
-    template<class T> constexpr const T& min(const T& a, const T& b)
+    template<class T> JITIFY_CXX14_CONSTEXPR const T& min(const T& a, const T& b)
     {
       return (b < a) ? b : a;
     }
+
     #endif
     } // namespace __jitify_algorithm_ns
     namespace std { using namespace __jitify_algorithm_ns; }
