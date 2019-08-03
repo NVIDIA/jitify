@@ -210,7 +210,7 @@ bool test_constant() {
   dim3 grid(1);
   dim3 block(1);
   {  // test __constant__ look up in kernel string using diffrent namespaces
-    const char* const_program = R"(
+    const char* const_program = R"(const_program
     #pragma once
 
     __constant__ int a;
