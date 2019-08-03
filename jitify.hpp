@@ -134,6 +134,7 @@
 #define JITIFY_PRINT_SOURCE 1
 #define JITIFY_PRINT_LOG 1
 #define JITIFY_PRINT_PTX 1
+#define JITIFY_PRINT_LINKER_LOG 1
 #define JITIFY_PRINT_LAUNCH 1
 #endif
 
@@ -900,6 +901,11 @@ class CUDAKernel {
   std::string _ptx;
   std::map<std::string, std::string> _constant;
   std::vector<CUjit_option> _opts;
+  std::vector<void*> _optvals;
+#ifdef JITIFY_PRINT_LINKER_LOG
+  char info_log[8192];
+  unsigned int logSize = 8192;
+#endif
 
   inline void cuda_safe_call(CUresult res) const {
     if (res != CUDA_SUCCESS) {
@@ -909,14 +915,16 @@ class CUDAKernel {
     }
   }
   inline void create_module(std::vector<std::string> link_files,
-                            std::vector<std::string> link_paths,
-                            void** optvals = 0) {
+                            std::vector<std::string> link_paths) {
+#ifndef JITIFY_PRINT_LINKER_LOG
+    // WAR since linker log does not seem to be constructed using a single call to cuModuleLoadDataEx
     if (link_files.empty()) {
       cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(), _opts.size(),
-                                        _opts.data(), optvals));
-    } else {
-      cuda_safe_call(
-          cuLinkCreate(_opts.size(), _opts.data(), optvals, &_link_state));
+                                        _opts.data(), _optvals.data()));
+    } else
+#endif
+    {
+      cuda_safe_call(cuLinkCreate(_opts.size(), _opts.data(), _optvals.data(), &_link_state));
       cuda_safe_call(cuLinkAddData(_link_state, CU_JIT_INPUT_PTX,
                                    (void*)_ptx.c_str(), _ptx.size(),
                                    "jitified_source.ptx", 0, 0, 0));
@@ -949,6 +957,13 @@ class CUDAKernel {
       cuda_safe_call(cuLinkComplete(_link_state, &cubin, &cubin_size));
       cuda_safe_call(cuModuleLoadData(&_module, cubin));
     }
+#ifdef JITIFY_PRINT_LINKER_LOG
+    std::cout << "---------------------------------------" << std::endl;
+    std::cout << "--- Linker for " << reflection::detail::demangle(_func_name.c_str()) << " ---" << std::endl;
+    std::cout << "---------------------------------------" << std::endl;
+    std::cout << info_log << std::endl;
+    std::cout << "---------------------------------------" << std::endl;
+#endif
     cuda_safe_call(cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
   }
   inline void destroy_module() {
@@ -1002,8 +1017,17 @@ class CUDAKernel {
         _kernel(0),
         _func_name(func_name),
         _ptx(ptx),
-        _opts(opts, opts + nopts) {
-    this->create_module(link_files, link_paths, optvals);
+        _opts(opts, opts + nopts),
+        _optvals(optvals, optvals + nopts) {
+#ifdef JITIFY_PRINT_LINKER_LOG
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
+    _optvals.push_back((void *) info_log);
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
+    _optvals.push_back((void *) (long)logSize);
+    _opts.push_back(CU_JIT_LOG_VERBOSE);
+    _optvals.push_back((void *)1);
+#endif
+    this->create_module(link_files, link_paths);
     this->create_constant();
   }
   inline CUDAKernel& set(const char* func_name, const char* ptx,
@@ -1017,7 +1041,15 @@ class CUDAKernel {
     _link_files = link_files;
     _link_paths = link_paths;
     _opts.assign(opts, opts + nopts);
-    this->create_module(link_files, link_paths, optvals);
+#ifdef JITIFY_PRINT_LINKER_LOG
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
+    _optvals.push_back((void *) info_log);
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
+    _optvals.push_back((void *) (long)logSize);
+    _opts.push_back(CU_JIT_LOG_VERBOSE);
+    _optvals.push_back((void *)1);
+#endif
+    this->create_module(link_files, link_paths);
     this->create_constant();
     return *this;
   }
@@ -2532,11 +2564,9 @@ inline void KernelInstantiation_impl::build_kernel() {
 
 #if JITIFY_PRINT_PTX
   std::cout << "---------------------------------------" << std::endl;
-  std::cout << mangled_instantiation << std::endl;
+  std::cout << "--- PTX for " << mangled_instantiation << " in " << program.name() << " ---" << std::endl;
   std::cout << "---------------------------------------" << std::endl;
-  std::cout << "--- PTX for " << program.name() << " ---" << std::endl;
-  std::cout << "---------------------------------------" << std::endl;
-  std::cout << ptx << std::endl;
+  std::cout << ptx;
   std::cout << "---------------------------------------" << std::endl;
 #endif
 
