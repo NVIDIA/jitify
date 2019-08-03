@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -966,7 +966,6 @@ class CUDAKernel {
   inline void create_constant() {
     size_t pos = 0;
     while (pos < _ptx.size()) {
-      // find any constants
       pos = _ptx.find(".const .align", pos);
       if (pos == std::string::npos) break;
       size_t end = _ptx.find(";", pos);
