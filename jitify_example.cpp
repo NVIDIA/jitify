@@ -47,11 +47,16 @@ JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 #include <cmath>
 #include <iostream>
 
-#define CHECK_CUDA(call)        \
-  do {                          \
-    if (call != CUDA_SUCCESS) { \
-      return false;             \
-    }                           \
+#define CHECK_CUDA(call)                                                  \
+  do {                                                                    \
+    if (call != CUDA_SUCCESS) {                                           \
+      const char* str;                                                    \
+      cuGetErrorName(call, &str);                                         \
+      std::cout << "(CUDA) returned " << str;                             \
+      std::cout << " (" << __FILE__ << ":" << __LINE__ << ":" << __func__ \
+                << "())" << std::endl;                                    \
+      return false;                                                       \
+    }                                                                     \
   } while (0)
 
 template <typename T>
@@ -192,6 +197,71 @@ bool test_kernels() {
   return are_close(inval, outval);
 }
 
+bool test_constant() {
+  using jitify::reflection::Type;
+  thread_local static jitify::JitCache kernel_cache;
+
+  constexpr int n_const = 3;
+  int* outdata;
+  cudaMalloc((void**)&outdata, n_const * sizeof(int));
+
+  bool test = true;
+
+  dim3 grid(1);
+  dim3 block(1);
+  {  // test __constant__ look up in kernel string using diffrent namespaces
+    const char* const_program = R"(
+    #pragma once
+
+    __constant__ int a;
+    namespace b { __constant__ int a; }
+    namespace c { namespace b { __constant__ int a; } }
+
+    __global__ void constant_test(int *x) {
+      x[0] = a;
+      x[1] = b::a;
+      x[2] = c::b::a;
+    }
+    )";
+    jitify::Program program = kernel_cache.program(
+        const_program, 0, {"--use_fast_math", "-I/usr/local/cuda/include"});
+    auto instance = program.kernel("constant_test").instantiate();
+    int inval[] = {2, 4, 8};
+    cuMemcpyHtoD(instance.get_constant_ptr("a"), &inval[0], sizeof(int));
+    cuMemcpyHtoD(instance.get_constant_ptr("b::a"), &inval[1], sizeof(int));
+    cuMemcpyHtoD(instance.get_constant_ptr("c::b::a"), &inval[2], sizeof(int));
+    CHECK_CUDA(instance.configure(grid, block).launch(outdata));
+    cudaDeviceSynchronize();
+    int outval[n_const];
+    cudaMemcpy(outval, outdata, sizeof(outval), cudaMemcpyDeviceToHost);
+
+    for (int i = 0; i < n_const; i++)
+      if (inval[i] != outval[i]) test = false;
+  }
+
+  {  // test __constant__ array look up in header nested in both anonymous and
+     // explicit namespace
+    jitify::Program program =
+        kernel_cache.program("example_headers/constant_header.cuh", 0,
+                             {"--use_fast_math", "-I/usr/local/cuda/include"});
+    auto instance = program.kernel("constant_test2").instantiate();
+    int inval[] = {3, 5, 9};
+    cuMemcpyHtoD(instance.get_constant_ptr("(anonymous namespace)::b::a"),
+                 inval, sizeof(inval));
+    CHECK_CUDA(instance.configure(grid, block).launch(outdata));
+
+    int outval[n_const];
+    cudaMemcpy(outval, outdata, sizeof(outval), cudaMemcpyDeviceToHost);
+
+    for (int i = 0; i < n_const; i++)
+      if (inval[i] != outval[i]) test = false;
+  }
+
+  cudaFree(outdata);
+
+  return test;
+}
+
 template <typename T>
 bool test_parallel_for() {
   int n = 10000;
@@ -227,10 +297,13 @@ int main(int argc, char* argv[]) {
   bool test_simple_result = test_simple<float>();
   bool test_kernels_result = test_kernels<float>();
   bool test_parallel_for_result = test_parallel_for<float>();
+  bool test_constant_result = test_constant();
+
   // Cached
   test_simple_result &= test_simple<float>();
   test_kernels_result &= test_kernels<float>();
   test_parallel_for_result &= test_parallel_for<float>();
+  test_constant_result &= test_constant();
 
   std::cout << "test_simple<float>:       " << TEST_RESULT(test_simple_result)
             << std::endl;
@@ -238,9 +311,11 @@ int main(int argc, char* argv[]) {
             << std::endl;
   std::cout << "test_parallel_for<float>: "
             << TEST_RESULT(test_parallel_for_result) << std::endl;
+  std::cout << "test_constant:            " << TEST_RESULT(test_constant_result)
+            << std::endl;
 
   return (!test_simple_result + !test_kernels_result +
-          !test_parallel_for_result);
+          !test_parallel_for_result + !test_constant_result);
 #else
   std::cout << "Tests require building with C++11 support (make CXX11=1)"
             << std::endl;
