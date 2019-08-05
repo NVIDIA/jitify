@@ -1825,14 +1825,24 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   //         version of NVRTC, otherwise newer hardware will cause errors
   //         on older versions of CUDA.
   // TODO: It would be better to detect this somehow, rather than hard-coding it
-#if CUDA_VERSION / 10 > 900
-#elif CUDA_VERSION / 10 == 900
-  cc = std::min(cc, 70);
-#elif CUDA_VERSION / 10 == 800
-  cc = std::min(cc, 61);
-#else
-  cc = std::min(cc, 53);
-#endif
+
+  // Tegra chips do not have forwards compatibility so we need to special case them
+  bool is_tegra = ( (cc_major == 3 && cc_minor == 2) || // Logan
+                    (cc_major == 5 && cc_minor == 3) || // Erista
+                    (cc_major == 6 && cc_minor == 2) || // Parker
+                    (cc_major == 7 && cc_minor == 2) ); // Xavier
+  if (!is_tegra) {
+    // ensure that future CUDA versions just work (even if suboptimal)
+    const int cuda_major = std::min(7, CUDA_VERSION / 1000);
+    switch (cuda_major) {
+    case 10: cc = std::min(cc, 75); break; // Turing
+    case 9: cc = std::min(cc, 70); break;  // Volta
+    case 8: cc = std::min(cc, 61); break;  // Pascal
+    case 7: cc = std::min(cc, 52); break;  // Maxwell
+    default: throw std::runtime_error("Unexpected CUDA major version " + std::to_string(cuda_major));
+    }
+  }
+
   std::stringstream ss;
   ss << cc;
   options.push_back("-arch=compute_" + ss.str());
