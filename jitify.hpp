@@ -1833,7 +1833,7 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
                     (cc_major == 7 && cc_minor == 2) ); // Xavier
   if (!is_tegra) {
     // ensure that future CUDA versions just work (even if suboptimal)
-    const int cuda_major = std::min(7, CUDA_VERSION / 1000);
+    const int cuda_major = std::min(10, CUDA_VERSION / 1000);
     switch (cuda_major) {
     case 10: cc = std::min(cc, 75); break; // Turing
     case 9: cc = std::min(cc, 70); break;  // Volta
