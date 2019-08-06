@@ -898,7 +898,7 @@ class CUDAKernel {
   CUfunction _kernel;
   std::string _func_name;
   std::string _ptx;
-  std::map<std::string, std::string> _constant;
+  std::map<std::string, std::string> _constant_map;
   std::vector<CUjit_option> _opts;
 
   inline void cuda_safe_call(CUresult res) const {
@@ -963,7 +963,7 @@ class CUDAKernel {
   }
 
   // create a map of constants in the ptx file mapping demangled to mangled name
-  inline void create_constant() {
+  inline void create_constant_map() {
     size_t pos = 0;
     while (pos < _ptx.size()) {
       pos = _ptx.find(".const .align", pos);
@@ -975,12 +975,17 @@ class CUDAKernel {
       std::string entry =
           line.substr(constant_start, constant_end - constant_start);
 
-      // interpret anything that doesn't begine _Z as unmangled name
+#ifdef _MSC_VER  // interpret anything that doesn't begine ? as unmangled name
+      std::string key = (entry[0] != '?')
+                            ? entry.c_str()
+                            : reflection::detail::demangle(entry.c_str());
+#else  // interpret anything that doesn't begine _Z as unmangled name
       std::string key = (entry[0] != '_' && entry[1] != 'Z')
                             ? entry.c_str()
                             : reflection::detail::demangle(entry.c_str());
+#endif
 
-      _constant[key] = entry;
+      _constant_map[key] = entry;
       pos = end;
     }
   }
@@ -1004,7 +1009,7 @@ class CUDAKernel {
         _ptx(ptx),
         _opts(opts, opts + nopts) {
     this->create_module(link_files, link_paths, optvals);
-    this->create_constant();
+    this->create_constant_map();
   }
   inline CUDAKernel& set(const char* func_name, const char* ptx,
                          std::vector<std::string> link_files,
@@ -1018,7 +1023,7 @@ class CUDAKernel {
     _link_paths = link_paths;
     _opts.assign(opts, opts + nopts);
     this->create_module(link_files, link_paths, optvals);
-    this->create_constant();
+    this->create_constant_map();
     return *this;
   }
   inline ~CUDAKernel() { this->destroy_module(); }
@@ -1032,8 +1037,8 @@ class CUDAKernel {
 
   inline CUdeviceptr get_constant_ptr(const char* name) const {
     CUdeviceptr const_ptr = 0;
-    auto constant = _constant.find(name);
-    if (constant != _constant.end()) {
+    auto constant = _constant_map.find(name);
+    if (constant != _constant_map.end()) {
       cuda_safe_call(
           cuModuleGetGlobal(&const_ptr, 0, _module, constant->second.c_str()));
     } else {
