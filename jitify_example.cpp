@@ -35,6 +35,7 @@
 #define JITIFY_PRINT_SOURCE 1
 #define JITIFY_PRINT_LOG 1
 #define JITIFY_PRINT_PTX 1
+#define JITIFY_PRINT_LINKER_LOG 1
 #define JITIFY_PRINT_LAUNCH 1
 #include "jitify.hpp"
 
