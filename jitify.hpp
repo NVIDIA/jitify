@@ -899,12 +899,12 @@ class CUDAKernel {
   CUfunction _kernel;
   std::string _func_name;
   std::string _ptx;
-  std::map<std::string, std::string> _constant;
+  std::map<std::string, std::string> _constant_map;
   std::vector<CUjit_option> _opts;
   std::vector<void*> _optvals;
 #ifdef JITIFY_PRINT_LINKER_LOG
-  char info_log[8192];
-  unsigned int logSize = 8192;
+  static const unsigned int _log_size = 8192;
+  char _info_log[_log_size];
 #endif
 
   inline void cuda_safe_call(CUresult res) const {
@@ -961,7 +961,7 @@ class CUDAKernel {
     std::cout << "---------------------------------------" << std::endl;
     std::cout << "--- Linker for " << reflection::detail::demangle(_func_name.c_str()) << " ---" << std::endl;
     std::cout << "---------------------------------------" << std::endl;
-    std::cout << info_log << std::endl;
+    std::cout << _info_log << std::endl;
     std::cout << "---------------------------------------" << std::endl;
 #endif
     cuda_safe_call(cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
@@ -978,7 +978,7 @@ class CUDAKernel {
   }
 
   // create a map of constants in the ptx file mapping demangled to mangled name
-  inline void create_constant() {
+  inline void create_constant_map() {
     size_t pos = 0;
     while (pos < _ptx.size()) {
       pos = _ptx.find(".const .align", pos);
@@ -990,17 +990,33 @@ class CUDAKernel {
       std::string entry =
           line.substr(constant_start, constant_end - constant_start);
 
-      // interpret anything that doesn't begine _Z as unmangled name
+#ifdef _MSC_VER  // interpret anything that doesn't begine ? as unmangled name
+      std::string key = (entry[0] != '?')
+                            ? entry.c_str()
+                            : reflection::detail::demangle(entry.c_str());
+#else  // interpret anything that doesn't begine _Z as unmangled name
       std::string key = (entry[0] != '_' && entry[1] != 'Z')
                             ? entry.c_str()
                             : reflection::detail::demangle(entry.c_str());
+#endif
 
-      _constant[key] = entry;
+      _constant_map[key] = entry;
       pos = end;
     }
   }
 
- public:
+  inline void set_linker_log() {
+#ifdef JITIFY_PRINT_LINKER_LOG
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
+    _optvals.push_back((void *) _info_log);
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
+    _optvals.push_back((void *) (long)_log_size);
+    _opts.push_back(CU_JIT_LOG_VERBOSE);
+    _optvals.push_back((void *)1);
+#endif
+  }
+
+public:
   inline CUDAKernel() : _link_state(0), _module(0), _kernel(0) {}
   inline CUDAKernel(const CUDAKernel& other) = delete;
   inline CUDAKernel& operator=(const CUDAKernel& other) = delete;
@@ -1019,17 +1035,11 @@ class CUDAKernel {
         _ptx(ptx),
         _opts(opts, opts + nopts),
         _optvals(optvals, optvals + nopts) {
-#ifdef JITIFY_PRINT_LINKER_LOG
-    _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
-    _optvals.push_back((void *) info_log);
-    _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
-    _optvals.push_back((void *) (long)logSize);
-    _opts.push_back(CU_JIT_LOG_VERBOSE);
-    _optvals.push_back((void *)1);
-#endif
+    this->set_linker_log();
     this->create_module(link_files, link_paths);
-    this->create_constant();
+    this->create_constant_map();
   }
+
   inline CUDAKernel& set(const char* func_name, const char* ptx,
                          std::vector<std::string> link_files,
                          std::vector<std::string> link_paths,
@@ -1041,16 +1051,10 @@ class CUDAKernel {
     _link_files = link_files;
     _link_paths = link_paths;
     _opts.assign(opts, opts + nopts);
-#ifdef JITIFY_PRINT_LINKER_LOG
-    _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
-    _optvals.push_back((void *) info_log);
-    _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
-    _optvals.push_back((void *) (long)logSize);
-    _opts.push_back(CU_JIT_LOG_VERBOSE);
-    _optvals.push_back((void *)1);
-#endif
+    _optvals.assign(optvals, optvals + nopts);
+    this->set_linker_log();
     this->create_module(link_files, link_paths);
-    this->create_constant();
+    this->create_constant_map();
     return *this;
   }
   inline ~CUDAKernel() { this->destroy_module(); }
@@ -1064,8 +1068,8 @@ class CUDAKernel {
 
   inline CUdeviceptr get_constant_ptr(const char* name) const {
     CUdeviceptr const_ptr = 0;
-    auto constant = _constant.find(name);
-    if (constant != _constant.end()) {
+    auto constant = _constant_map.find(name);
+    if (constant != _constant_map.end()) {
       cuda_safe_call(
           cuModuleGetGlobal(&const_ptr, 0, _module, constant->second.c_str()));
     } else {
@@ -1896,14 +1900,24 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   //         version of NVRTC, otherwise newer hardware will cause errors
   //         on older versions of CUDA.
   // TODO: It would be better to detect this somehow, rather than hard-coding it
-#if CUDA_VERSION / 10 > 900
-#elif CUDA_VERSION / 10 == 900
-  cc = std::min(cc, 70);
-#elif CUDA_VERSION / 10 == 800
-  cc = std::min(cc, 61);
-#else
-  cc = std::min(cc, 53);
-#endif
+
+  // Tegra chips do not have forwards compatibility so we need to special case them
+  bool is_tegra = ( (cc_major == 3 && cc_minor == 2) || // Logan
+                    (cc_major == 5 && cc_minor == 3) || // Erista
+                    (cc_major == 6 && cc_minor == 2) || // Parker
+                    (cc_major == 7 && cc_minor == 2) ); // Xavier
+  if (!is_tegra) {
+    // ensure that future CUDA versions just work (even if suboptimal)
+    const int cuda_major = std::min(10, CUDA_VERSION / 1000);
+    switch (cuda_major) {
+    case 10: cc = std::min(cc, 75); break; // Turing
+    case 9: cc = std::min(cc, 70); break;  // Volta
+    case 8: cc = std::min(cc, 61); break;  // Pascal
+    case 7: cc = std::min(cc, 52); break;  // Maxwell
+    default: throw std::runtime_error("Unexpected CUDA major version " + std::to_string(cuda_major));
+    }
+  }
+
   std::stringstream ss;
   ss << cc;
   options.push_back("-arch=compute_" + ss.str());
