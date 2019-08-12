@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -76,7 +76,7 @@ int main(int argc, char* argv[]) {
   std::string line;
   // Note: This puts "filename\n" at the beginning of the string, which is
   //         what jitify expects.
-  ostream << "const char* " << varname << " = "
+  ostream << "const char* const " << varname << " = "
           << "\"" << filename << "\\n\"" << std::endl;
   while (std::getline(istream, line)) {
     ostream << "\"" << sanitize_string_literal(line) << "\\n\"" << std::endl;

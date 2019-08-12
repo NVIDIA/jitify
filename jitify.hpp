@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -134,6 +134,7 @@
 #define JITIFY_PRINT_SOURCE 1
 #define JITIFY_PRINT_LOG 1
 #define JITIFY_PRINT_PTX 1
+#define JITIFY_PRINT_LINKER_LOG 1
 #define JITIFY_PRINT_LAUNCH 1
 #endif
 
@@ -144,8 +145,8 @@
  * be sanitized by replacing non-alpha-numeric characters with underscores.
  * E.g., \code{.cpp}JITIFY_INCLUDE_EMBEDDED_FILE(my_header_h)\endcode will
  * include the embedded file "my_header.h".
- * \note Files declared with this macro * can be referenced using
- * their original (unsanitized) filenames when creating * a \p
+ * \note Files declared with this macro can be referenced using
+ * their original (unsanitized) filenames when creating a \p
  * jitify::Program instance.
  */
 #define JITIFY_INCLUDE_EMBEDDED_FILE(name)                                \
@@ -680,16 +681,19 @@ inline std::string demangle(const char* verbose_name) {
 #include <cxxabi.h>
 inline std::string demangle(const char* mangled_name) {
   size_t bufsize = 1024;
-  auto buf = std::unique_ptr<char, decltype(free)*>(reinterpret_cast<char*>(malloc(bufsize)), free);
+  auto buf = std::unique_ptr<char, decltype(free)*>(
+      reinterpret_cast<char*>(malloc(bufsize)), free);
   std::string demangled_name;
   int status;
-  char *demangled_ptr = abi::__cxa_demangle(mangled_name, buf.get(), &bufsize, &status);
+  char* demangled_ptr =
+      abi::__cxa_demangle(mangled_name, buf.get(), &bufsize, &status);
   if (status == 0) {
-    demangled_name = demangled_ptr; // all worked as expected
+    demangled_name = demangled_ptr;  // all worked as expected
   } else if (status == -2) {
     demangled_name = mangled_name;  // we interpret this as plain C name
   } else if (status == -1) {
-    throw std::runtime_error(std::string("memory allocation failure in __cxa_demangle"));
+    throw std::runtime_error(
+        std::string("memory allocation failure in __cxa_demangle"));
   } else if (status == -3) {
     throw std::runtime_error(std::string("invalid argument to __cxa_demangle"));
   }
@@ -720,14 +724,14 @@ struct type_reflection {
         ptr_name.substr(0, star_begin) + ptr_name.substr(star_begin + 1);
     return name;
     //#else
-    //		std::string ret;
-    //		nvrtcResult status = nvrtcGetTypeName<T>(&ret);
-    //		if( status != NVRTC_SUCCESS ) {
-    //			throw std::runtime_error(std::string("nvrtcGetTypeName
+    //         std::string ret;
+    //         nvrtcResult status = nvrtcGetTypeName<T>(&ret);
+    //         if( status != NVRTC_SUCCESS ) {
+    //                 throw std::runtime_error(std::string("nvrtcGetTypeName
     // failed:
     //")+ nvrtcGetErrorString(status));
-    //		}
-    //		return ret;
+    //         }
+    //         return ret;
     //#endif
   }
 };
@@ -895,7 +899,13 @@ class CUDAKernel {
   CUfunction _kernel;
   std::string _func_name;
   std::string _ptx;
+  std::map<std::string, std::string> _constant_map;
   std::vector<CUjit_option> _opts;
+  std::vector<void*> _optvals;
+#ifdef JITIFY_PRINT_LINKER_LOG
+  static const unsigned int _log_size = 8192;
+  char _info_log[_log_size];
+#endif
 
   inline void cuda_safe_call(CUresult res) const {
     if (res != CUDA_SUCCESS) {
@@ -905,14 +915,16 @@ class CUDAKernel {
     }
   }
   inline void create_module(std::vector<std::string> link_files,
-                            std::vector<std::string> link_paths,
-                            void** optvals = 0) {
+                            std::vector<std::string> link_paths) {
+#ifndef JITIFY_PRINT_LINKER_LOG
+    // WAR since linker log does not seem to be constructed using a single call to cuModuleLoadDataEx
     if (link_files.empty()) {
       cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(), _opts.size(),
-                                        _opts.data(), optvals));
-    } else {
-      cuda_safe_call(
-          cuLinkCreate(_opts.size(), _opts.data(), optvals, &_link_state));
+                                        _opts.data(), _optvals.data()));
+    } else
+#endif
+    {
+      cuda_safe_call(cuLinkCreate(_opts.size(), _opts.data(), _optvals.data(), &_link_state));
       cuda_safe_call(cuLinkAddData(_link_state, CU_JIT_INPUT_PTX,
                                    (void*)_ptx.c_str(), _ptx.size(),
                                    "jitified_source.ptx", 0, 0, 0));
@@ -945,6 +957,13 @@ class CUDAKernel {
       cuda_safe_call(cuLinkComplete(_link_state, &cubin, &cubin_size));
       cuda_safe_call(cuModuleLoadData(&_module, cubin));
     }
+#ifdef JITIFY_PRINT_LINKER_LOG
+    std::cout << "---------------------------------------" << std::endl;
+    std::cout << "--- Linker for " << reflection::detail::demangle(_func_name.c_str()) << " ---" << std::endl;
+    std::cout << "---------------------------------------" << std::endl;
+    std::cout << _info_log << std::endl;
+    std::cout << "---------------------------------------" << std::endl;
+#endif
     cuda_safe_call(cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
   }
   inline void destroy_module() {
@@ -958,7 +977,46 @@ class CUDAKernel {
     _module = 0;
   }
 
- public:
+  // create a map of constants in the ptx file mapping demangled to mangled name
+  inline void create_constant_map() {
+    size_t pos = 0;
+    while (pos < _ptx.size()) {
+      pos = _ptx.find(".const .align", pos);
+      if (pos == std::string::npos) break;
+      size_t end = _ptx.find(";", pos);
+      std::string line = _ptx.substr(pos, end - pos);
+      size_t constant_start = line.find_last_of(" ") + 1;
+      size_t constant_end = line.find_last_of("[");
+      std::string entry =
+          line.substr(constant_start, constant_end - constant_start);
+
+#ifdef _MSC_VER  // interpret anything that doesn't begine ? as unmangled name
+      std::string key = (entry[0] != '?')
+                            ? entry.c_str()
+                            : reflection::detail::demangle(entry.c_str());
+#else  // interpret anything that doesn't begine _Z as unmangled name
+      std::string key = (entry[0] != '_' && entry[1] != 'Z')
+                            ? entry.c_str()
+                            : reflection::detail::demangle(entry.c_str());
+#endif
+
+      _constant_map[key] = entry;
+      pos = end;
+    }
+  }
+
+  inline void set_linker_log() {
+#ifdef JITIFY_PRINT_LINKER_LOG
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
+    _optvals.push_back((void *) _info_log);
+    _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
+    _optvals.push_back((void *) (long)_log_size);
+    _opts.push_back(CU_JIT_LOG_VERBOSE);
+    _optvals.push_back((void *)1);
+#endif
+  }
+
+public:
   inline CUDAKernel() : _link_state(0), _module(0), _kernel(0) {}
   inline CUDAKernel(const CUDAKernel& other) = delete;
   inline CUDAKernel& operator=(const CUDAKernel& other) = delete;
@@ -975,9 +1033,13 @@ class CUDAKernel {
         _kernel(0),
         _func_name(func_name),
         _ptx(ptx),
-        _opts(opts, opts + nopts) {
-    this->create_module(link_files, link_paths, optvals);
+        _opts(opts, opts + nopts),
+        _optvals(optvals, optvals + nopts) {
+    this->set_linker_log();
+    this->create_module(link_files, link_paths);
+    this->create_constant_map();
   }
+
   inline CUDAKernel& set(const char* func_name, const char* ptx,
                          std::vector<std::string> link_files,
                          std::vector<std::string> link_paths,
@@ -989,7 +1051,10 @@ class CUDAKernel {
     _link_files = link_files;
     _link_paths = link_paths;
     _opts.assign(opts, opts + nopts);
-    this->create_module(link_files, link_paths, optvals);
+    _optvals.assign(optvals, optvals + nopts);
+    this->set_linker_log();
+    this->create_module(link_files, link_paths);
+    this->create_constant_map();
     return *this;
   }
   inline ~CUDAKernel() { this->destroy_module(); }
@@ -999,6 +1064,19 @@ class CUDAKernel {
                          CUstream stream, std::vector<void*> arg_ptrs) const {
     return cuLaunchKernel(_kernel, grid.x, grid.y, grid.z, block.x, block.y,
                           block.z, smem, stream, arg_ptrs.data(), NULL);
+  }
+
+  inline CUdeviceptr get_constant_ptr(const char* name) const {
+    CUdeviceptr const_ptr = 0;
+    auto constant = _constant_map.find(name);
+    if (constant != _constant_map.end()) {
+      cuda_safe_call(
+          cuModuleGetGlobal(&const_ptr, 0, _module, constant->second.c_str()));
+    } else {
+      throw std::runtime_error(std::string("failed to look up constant ") +
+                               name);
+    }
+    return const_ptr;
   }
 
   std::string function_name() const { return _func_name; }
@@ -1688,9 +1766,36 @@ static const char* jitsafe_header_mutex = R"(
     bool try_lock();
     void unlock();
     };
-    // namespace __jitify_mutex_ns
+    } // namespace __jitify_mutex_ns
     namespace std { using namespace __jitify_mutex_ns; }
     using namespace __jitify_mutex_ns;
+    #endif
+ )";
+
+static const char* jitsafe_header_algorithm = R"(
+    #pragma once
+    #if __cplusplus >= 201103L
+    namespace __jitify_algorithm_ns {
+
+    #if __cplusplus == 201103L
+    #define JITIFY_CXX14_CONSTEXPR
+    #else
+    #define JITIFY_CXX14_CONSTEXPR constexpr
+    #endif
+
+    template<class T> JITIFY_CXX14_CONSTEXPR const T& max(const T& a, const T& b)
+    {
+      return (b > a) ? b : a;
+    }
+    template<class T> JITIFY_CXX14_CONSTEXPR const T& min(const T& a, const T& b)
+    {
+      return (b < a) ? b : a;
+    }
+
+    #endif
+    } // namespace __jitify_algorithm_ns
+    namespace std { using namespace __jitify_algorithm_ns; }
+    using namespace __jitify_algorithm_ns;
     #endif
  )";
 
@@ -1709,7 +1814,8 @@ static const char* jitsafe_headers[] = {
     jitsafe_header_iostream,     jitsafe_header_ostream,
     jitsafe_header_istream,      jitsafe_header_sstream,
     jitsafe_header_vector,       jitsafe_header_string,
-    jitsafe_header_stdexcept,    jitsafe_header_mutex};
+    jitsafe_header_stdexcept,    jitsafe_header_mutex,
+    jitsafe_header_algorithm};
 static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "float.h",
                                              "cfloat",
@@ -1739,7 +1845,8 @@ static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "vector",
                                              "string",
                                              "stdexcept",
-                                             "mutex"};
+                                             "mutex",
+                                             "algorithm"};
 
 template <class T, size_t N>
 size_t array_size(T (&)[N]) {
@@ -1793,14 +1900,24 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   //         version of NVRTC, otherwise newer hardware will cause errors
   //         on older versions of CUDA.
   // TODO: It would be better to detect this somehow, rather than hard-coding it
-#if CUDA_VERSION / 10 > 900
-#elif CUDA_VERSION / 10 == 900
-  cc = std::min(cc, 70);
-#elif CUDA_VERSION / 10 == 800
-  cc = std::min(cc, 61);
-#else
-  cc = std::min(cc, 53);
-#endif
+
+  // Tegra chips do not have forwards compatibility so we need to special case them
+  bool is_tegra = ( (cc_major == 3 && cc_minor == 2) || // Logan
+                    (cc_major == 5 && cc_minor == 3) || // Erista
+                    (cc_major == 6 && cc_minor == 2) || // Parker
+                    (cc_major == 7 && cc_minor == 2) ); // Xavier
+  if (!is_tegra) {
+    // ensure that future CUDA versions just work (even if suboptimal)
+    const int cuda_major = std::min(10, CUDA_VERSION / 1000);
+    switch (cuda_major) {
+    case 10: cc = std::min(cc, 75); break; // Turing
+    case 9: cc = std::min(cc, 70); break;  // Volta
+    case 8: cc = std::min(cc, 61); break;  // Pascal
+    case 7: cc = std::min(cc, 52); break;  // Maxwell
+    default: throw std::runtime_error("Unexpected CUDA major version " + std::to_string(cuda_major));
+    }
+  }
+
   std::stringstream ss;
   ss << cc;
   options.push_back("-arch=compute_" + ss.str());
@@ -2180,6 +2297,10 @@ class KernelInstantiation {
     }
     return this->configure(grid, block, smem, stream);
   }
+
+  inline CUdeviceptr get_constant_ptr(const char* name) const {
+    return _impl->cuda_kernel().get_constant_ptr(name);
+  }
 };
 
 /*! An object representing a kernel made up of a Program, a name and options.
@@ -2457,11 +2578,9 @@ inline void KernelInstantiation_impl::build_kernel() {
 
 #if JITIFY_PRINT_PTX
   std::cout << "---------------------------------------" << std::endl;
-  std::cout << mangled_instantiation << std::endl;
+  std::cout << "--- PTX for " << mangled_instantiation << " in " << program.name() << " ---" << std::endl;
   std::cout << "---------------------------------------" << std::endl;
-  std::cout << "--- PTX for " << program.name() << " ---" << std::endl;
-  std::cout << "---------------------------------------" << std::endl;
-  std::cout << ptx << std::endl;
+  std::cout << ptx;
   std::cout << "---------------------------------------" << std::endl;
 #endif
 

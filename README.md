@@ -47,7 +47,7 @@ Jitify provides/takes care of the following things:
  * Dealing with kernel name mangling
  * Reflecting kernel template parameters into strings
  * Compiling specifically for the current device's compute capability
- * Support for CUDA versions 7.0, 7.5, 8.0, 9.0
+ * Support for CUDA versions 7.0, 7.5, 8.0, 9.x, 10.x
  * Convenient parallel_for function and lambda support
 
 Things you can do with Jitify and NVRTC:

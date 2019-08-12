@@ -28,7 +28,12 @@
 
 #pragma once
 
-template <typename T>
-T identity(T x) {
-  return x;
+namespace {
+
+  namespace b { __constant__ int a[3]; }
+
+}
+
+__global__ void constant_test2(int *x) {
+  for (int i=0; i<3; i++) x[i] = (b::a[i]);
 }
