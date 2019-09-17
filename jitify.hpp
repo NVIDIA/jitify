@@ -2976,15 +2976,20 @@ namespace serialization {
 
 namespace detail {
 
+// This should be incremented whenever the serialization format changes in any
+// incompatible way.
+static constexpr const size_t kSerializationVersion = 1;
+
 inline void serialize(std::ostream& stream, size_t u) {
   uint64_t u64 = u;
   stream.write(reinterpret_cast<char*>(&u64), sizeof(u64));
 }
 
-inline size_t deserialize_size(std::istream& stream) {
+inline bool deserialize(std::istream& stream, size_t* size) {
   uint64_t u64;
   stream.read(reinterpret_cast<char*>(&u64), sizeof(u64));
-  return u64;
+  *size = u64;
+  return stream.good();
 }
 
 inline void serialize(std::ostream& stream, string const& s) {
@@ -2992,11 +2997,14 @@ inline void serialize(std::ostream& stream, string const& s) {
   stream.write(s.data(), s.size());
 }
 
-inline void deserialize(std::istream& stream, string* s) {
-  s->resize(deserialize_size(stream));
+inline bool deserialize(std::istream& stream, string* s) {
+  size_t size;
+  if (!deserialize(stream, &size)) return false;
+  s->resize(size);
   if (s->size()) {
     stream.read(&(*s)[0], s->size());
   }
+  return stream.good();
 }
 
 inline void serialize(std::ostream& stream, vector<string> const& v) {
@@ -3006,11 +3014,14 @@ inline void serialize(std::ostream& stream, vector<string> const& v) {
   }
 }
 
-inline void deserialize(std::istream& stream, vector<string>* v) {
-  v->resize(deserialize_size(stream));
+inline bool deserialize(std::istream& stream, vector<string>* v) {
+  size_t size;
+  if (!deserialize(stream, &size)) return false;
+  v->resize(size);
   for (auto& s : *v) {
-    deserialize(stream, &s);
+    if (!deserialize(stream, &s)) return false;
   }
+  return true;
 }
 
 inline void serialize(std::ostream& stream, map<string, string> const& m) {
@@ -3021,13 +3032,15 @@ inline void serialize(std::ostream& stream, map<string, string> const& m) {
   }
 }
 
-inline void deserialize(std::istream& stream, map<string, string>* m) {
-  size_t size = deserialize_size(stream);
+inline bool deserialize(std::istream& stream, map<string, string>* m) {
+  size_t size;
+  if (!deserialize(stream, &size)) return false;
   for (size_t i = 0; i < size; ++i) {
     string key;
-    deserialize(stream, &key);
-    deserialize(stream, &(*m)[key]);
+    if (!deserialize(stream, &key)) return false;
+    if (!deserialize(stream, &(*m)[key])) return false;
   }
+  return true;
 }
 
 template <typename T, typename... Rest>
@@ -3037,20 +3050,26 @@ inline void serialize(std::ostream& stream, T const& value, Rest... rest) {
 }
 
 template <typename T, typename... Rest>
-inline void deserialize(std::istream& stream, T* value, Rest... rest) {
-  deserialize(stream, value);
-  deserialize(stream, rest...);
+inline bool deserialize(std::istream& stream, T* value, Rest... rest) {
+  if (!deserialize(stream, value)) return false;
+  return deserialize(stream, rest...);
 }
 
 inline void serialize_magic_number(std::ostream& stream) {
   stream.write("JTFY", 4);
+  serialize(stream, kSerializationVersion);
 }
 
 inline bool deserialize_magic_number(std::istream& stream) {
   char magic_number[4] = {0, 0, 0, 0};
   stream.read(&magic_number[0], 4);
-  return (magic_number[0] == 'J' && magic_number[1] == 'T' &&
-          magic_number[2] == 'F' && magic_number[3] == 'Y');
+  if (!(magic_number[0] == 'J' && magic_number[1] == 'T' &&
+        magic_number[2] == 'F' && magic_number[3] == 'Y')) {
+    return false;
+  }
+  size_t serialization_version;
+  if (!deserialize(stream, &serialization_version)) return false;
+  return serialization_version == kSerializationVersion;
 }
 
 }  // namespace detail
@@ -3067,11 +3086,8 @@ template <typename... Values>
 inline bool deserialize(string const& serialized, Values*... values) {
   std::istringstream ss(serialized,
                         std::stringstream::in | std::stringstream::binary);
-  if (!detail::deserialize_magic_number(ss)) {
-    return false;
-  }
-  detail::deserialize(ss, values...);
-  return true;
+  if (!detail::deserialize_magic_number(ss)) return false;
+  return detail::deserialize(ss, values...);
 }
 
 }  // namespace serialization
@@ -3266,7 +3282,7 @@ class Program {
     Program program;
     if (!serialization::deserialize(serialized_program, &program._name,
                                     &program._options, &program._sources)) {
-      throw std::runtime_error("Failed to deserialized program");
+      throw std::runtime_error("Failed to deserialize program");
     }
     return program;
   }
@@ -3276,6 +3292,7 @@ class Program {
    * \see deserialize
    */
   string serialize() const {
+    // Note: Must update kSerializationVersion if this is changed.
     return serialization::serialize(_name, _options, _sources);
   };
 
@@ -3413,8 +3430,10 @@ class KernelInstantiation {
   static KernelInstantiation deserialize(string const& serialized_kernel_inst) {
     string func_name, ptx;
     vector<string> link_files, link_paths;
-    serialization::deserialize(serialized_kernel_inst, &func_name, &ptx,
-                               &link_files, &link_paths);
+    if (!serialization::deserialize(serialized_kernel_inst, &func_name, &ptx,
+                                    &link_files, &link_paths)) {
+      throw std::runtime_error("Failed to deserialize kernel instantiation");
+    }
     return KernelInstantiation(func_name, ptx, link_files, link_paths);
   }
 
@@ -3423,6 +3442,7 @@ class KernelInstantiation {
    * \see deserialize
    */
   string serialize() const {
+    // Note: Must update kSerializationVersion if this is changed.
     return serialization::serialize(
         _cuda_kernel->function_name(), _cuda_kernel->ptx(),
         _cuda_kernel->link_files(), _cuda_kernel->link_paths());
