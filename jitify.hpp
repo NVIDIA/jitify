@@ -3190,6 +3190,8 @@ class Program {
       headers.push_back(std::string(hdr_name) + "\n" + hdr_source);
     }
 
+    _options = given_options;
+    detail::add_options_from_env(_options);
     vector<string> include_paths;
     detail::load_program(cuda_source, headers, file_callback, &include_paths,
                          &_sources, &_options, &_name);
