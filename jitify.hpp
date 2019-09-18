@@ -471,7 +471,8 @@ inline bool load_source(
     std::string filename, std::map<std::string, std::string>& sources,
     std::string current_dir = "",
     std::vector<std::string> include_paths = std::vector<std::string>(),
-    file_callback_type file_callback = 0, bool remove_missing_headers = true) {
+    file_callback_type file_callback = 0,
+    std::map<std::string, std::string>* fullpaths = nullptr) {
   std::istream* source_stream = 0;
   std::stringstream string_stream;
   std::ifstream file_stream;
@@ -518,6 +519,10 @@ inline bool load_source(
         }
         source_stream = &file_stream;
       }
+    }
+    if (fullpaths) {
+      // Record the full file path corresponding to this include name.
+      (*fullpaths)[filename] = fullpath;
     }
   }
   sources[filename] = std::string();
@@ -2094,10 +2099,13 @@ inline void load_program(std::string const& cuda_source,
   }
   *program_name = program_sources->begin()->first;
 
+  // Maps header include names to their full file paths.
+  std::map<std::string, std::string> header_fullpaths;
+
   // Load header sources
   for (std::string const& header : headers) {
     if (!detail::load_source(header, *program_sources, "", *include_paths,
-                             file_callback)) {
+                             file_callback, &header_fullpaths)) {
       // **TODO: Deal with source not found
       throw std::runtime_error("Source not found: " + header);
     }
@@ -2143,9 +2151,13 @@ inline void load_program(std::string const& cuda_source,
     }
 
     // Try to load the new header
-    std::string include_path = detail::path_base(include_parent);
+    // Note: This fullpath lookup is needed because the compiler error
+    // messages have the include name of the header instead of its full path.
+    std::string include_parent_fullpath = header_fullpaths[include_parent];
+    std::string include_path = detail::path_base(include_parent_fullpath);
     if (!detail::load_source(include_name, *program_sources, include_path,
-                             *include_paths, file_callback)) {
+                             *include_paths, file_callback,
+                             &header_fullpaths)) {
       // Comment-out the include line and print a warning
       if (!program_sources->count(include_parent)) {
         // ***TODO: Unless there's another mechanism (e.g., potentially
