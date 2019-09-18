@@ -3408,6 +3408,10 @@ class KernelInstantiation {
       int max_block_size = 0, size_t smem = 0,
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const;
+
+  CUdeviceptr get_constant_ptr(const char* name) const {
+    return _cuda_kernel->get_constant_ptr(name);
+  }
 };
 
 class KernelLauncher {
