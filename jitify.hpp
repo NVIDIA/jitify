@@ -1553,8 +1553,10 @@ static const char* jitsafe_header_ostream =
     "basic_ostream<CharT, Traits>& os );\n"
     "template< class CharT, class Traits > basic_ostream<CharT, Traits>& "
     "operator<<( basic_ostream<CharT,Traits>& os, const char* c );\n"
+    "#if __cplusplus >= 201103L\n"
     "template< class CharT, class Traits, class T > basic_ostream<CharT, "
     "Traits>& operator<<( basic_ostream<CharT,Traits>&& os, const T& value );\n"
+    "#endif  // __cplusplus >= 201103L\n"
     "} // namespace __jitify_ostream_ns\n"
     "namespace std { using namespace __jitify_ostream_ns; }\n"
     "using namespace __jitify_ostream_ns;\n";
