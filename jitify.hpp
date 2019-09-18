@@ -1898,8 +1898,15 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   }
   // Use the compute capability of the current device
   // TODO: Check these API calls for errors
+  cudaError_t status;
   int device;
-  cudaGetDevice(&device);
+  status = cudaGetDevice(&device);
+  if (status != cudaSuccess) {
+    throw std::runtime_error(
+        std::string(
+            "Failed to detect GPU architecture: cudaGetDevice failed: ") +
+        cudaGetErrorString(status));
+  }
   int cc_major;
   cudaDeviceGetAttribute(&cc_major, cudaDevAttrComputeCapabilityMajor, device);
   int cc_minor;
