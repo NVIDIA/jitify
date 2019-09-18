@@ -1088,10 +1088,10 @@ class CUDAKernel {
     return const_ptr;
   }
 
-  std::string function_name() const { return _func_name; }
-  std::string ptx() const { return _ptx; }
-  std::vector<std::string> link_files() const { return _link_files; }
-  std::vector<std::string> link_paths() const { return _link_paths; }
+  const std::string& function_name() const { return _func_name; }
+  const std::string& ptx() const { return _ptx; }
+  const std::vector<std::string>& link_files() const { return _link_files; }
+  const std::vector<std::string>& link_paths() const { return _link_paths; }
 };
 
 static const char* jitsafe_header_preinclude_h = R"(
@@ -2498,6 +2498,20 @@ class KernelInstantiation {
   inline CUdeviceptr get_constant_ptr(const char* name) const {
     return _impl->cuda_kernel().get_constant_ptr(name);
   }
+
+  const std::string& mangled_name() const {
+    return _impl->cuda_kernel().function_name();
+  }
+
+  const std::string& ptx() const { return _impl->cuda_kernel().ptx(); }
+
+  const std::vector<std::string>& link_files() const {
+    return _impl->cuda_kernel().link_files();
+  }
+
+  const std::vector<std::string>& link_paths() const {
+    return _impl->cuda_kernel().link_paths();
+  }
 };
 
 /*! An object representing a kernel made up of a Program, a name and options.
@@ -3411,6 +3425,20 @@ class KernelInstantiation {
 
   CUdeviceptr get_constant_ptr(const char* name) const {
     return _cuda_kernel->get_constant_ptr(name);
+  }
+
+  const std::string& mangled_name() const {
+    return _cuda_kernel->function_name();
+  }
+
+  const std::string& ptx() const { return _cuda_kernel->ptx(); }
+
+  const std::vector<std::string>& link_files() const {
+    return _cuda_kernel->link_files();
+  }
+
+  const std::vector<std::string>& link_paths() const {
+    return _cuda_kernel->link_paths();
   }
 };
 
