@@ -49,6 +49,7 @@ Jitify provides/takes care of the following things:
  * Compiling specifically for the current device's compute capability
  * Support for CUDA versions 7.0, 7.5, 8.0, 9.x, 10.x
  * Convenient parallel_for function and lambda support
+ * \*New\* jitify::experimental API provides serialization capabilities to enable [user-managed hashing and caching](https://github.com/rapidsai/cudf/blob/v0.9.0/cpp/src/jit/cache.h)
 
 Things you can do with Jitify and NVRTC:
 
