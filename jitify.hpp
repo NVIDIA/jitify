@@ -3042,10 +3042,6 @@ namespace experimental {
 
 using jitify::file_callback_type;
 
-using std::map;
-using std::string;
-using std::vector;
-
 namespace serialization {
 
 namespace detail {
@@ -3066,12 +3062,12 @@ inline bool deserialize(std::istream& stream, size_t* size) {
   return stream.good();
 }
 
-inline void serialize(std::ostream& stream, string const& s) {
+inline void serialize(std::ostream& stream, std::string const& s) {
   serialize(stream, s.size());
   stream.write(s.data(), s.size());
 }
 
-inline bool deserialize(std::istream& stream, string* s) {
+inline bool deserialize(std::istream& stream, std::string* s) {
   size_t size;
   if (!deserialize(stream, &size)) return false;
   s->resize(size);
@@ -3081,14 +3077,14 @@ inline bool deserialize(std::istream& stream, string* s) {
   return stream.good();
 }
 
-inline void serialize(std::ostream& stream, vector<string> const& v) {
+inline void serialize(std::ostream& stream, std::vector<std::string> const& v) {
   serialize(stream, v.size());
   for (auto const& s : v) {
     serialize(stream, s);
   }
 }
 
-inline bool deserialize(std::istream& stream, vector<string>* v) {
+inline bool deserialize(std::istream& stream, std::vector<std::string>* v) {
   size_t size;
   if (!deserialize(stream, &size)) return false;
   v->resize(size);
@@ -3098,7 +3094,8 @@ inline bool deserialize(std::istream& stream, vector<string>* v) {
   return true;
 }
 
-inline void serialize(std::ostream& stream, map<string, string> const& m) {
+inline void serialize(std::ostream& stream,
+                      std::map<std::string, std::string> const& m) {
   serialize(stream, m.size());
   for (auto const& kv : m) {
     serialize(stream, kv.first);
@@ -3106,11 +3103,12 @@ inline void serialize(std::ostream& stream, map<string, string> const& m) {
   }
 }
 
-inline bool deserialize(std::istream& stream, map<string, string>* m) {
+inline bool deserialize(std::istream& stream,
+                        std::map<std::string, std::string>* m) {
   size_t size;
   if (!deserialize(stream, &size)) return false;
   for (size_t i = 0; i < size; ++i) {
-    string key;
+    std::string key;
     if (!deserialize(stream, &key)) return false;
     if (!deserialize(stream, &(*m)[key])) return false;
   }
@@ -3149,7 +3147,7 @@ inline bool deserialize_magic_number(std::istream& stream) {
 }  // namespace detail
 
 template <typename... Values>
-inline string serialize(Values const&... values) {
+inline std::string serialize(Values const&... values) {
   std::ostringstream ss(std::stringstream::out | std::stringstream::binary);
   detail::serialize_magic_number(ss);
   detail::serialize(ss, values...);
@@ -3157,7 +3155,7 @@ inline string serialize(Values const&... values) {
 }
 
 template <typename... Values>
-inline bool deserialize(string const& serialized, Values*... values) {
+inline bool deserialize(std::string const& serialized, Values*... values) {
   std::istringstream ss(serialized,
                         std::stringstream::in | std::stringstream::binary);
   if (!detail::deserialize_magic_number(ss)) return false;
@@ -3177,9 +3175,9 @@ class KernelLauncher;
 class Program {
  private:
   friend class KernelInstantiation;
-  string _name;
-  vector<string> _options;
-  map<string, string> _sources;
+  std::string _name;
+  std::vector<std::string> _options;
+  std::map<std::string, std::string> _sources;
 
   // Private constructor used by deserialize()
   Program() {}
@@ -3222,11 +3220,12 @@ class Program {
    *  \note Jitify automatically includes NVRTC-safe versions of some
    *  standard library headers.
    */
-  Program(string const& cuda_source, vector<string> const& given_headers = {},
-          vector<string> const& given_options = {},
+  Program(std::string const& cuda_source,
+          std::vector<std::string> const& given_headers = {},
+          std::vector<std::string> const& given_options = {},
           file_callback_type file_callback = nullptr) {
     // Add built-in JIT-safe headers
-    vector<string> headers = given_headers;
+    std::vector<std::string> headers = given_headers;
     for (int i = 0; i < detail::jitsafe_headers_count; ++i) {
       const char* hdr_name = detail::jitsafe_header_names[i];
       const char* hdr_source = detail::jitsafe_headers[i];
@@ -3235,7 +3234,7 @@ class Program {
 
     _options = given_options;
     detail::add_options_from_env(_options);
-    vector<string> include_paths;
+    std::vector<std::string> include_paths;
     detail::load_program(cuda_source, headers, file_callback, &include_paths,
                          &_sources, &_options, &_name);
   }
@@ -3246,7 +3245,7 @@ class Program {
    *
    * \see serialize
    */
-  static Program deserialize(string const& serialized_program) {
+  static Program deserialize(std::string const& serialized_program) {
     Program program;
     if (!serialization::deserialize(serialized_program, &program._name,
                                     &program._options, &program._sources)) {
@@ -3259,7 +3258,7 @@ class Program {
    *
    * \see deserialize
    */
-  string serialize() const {
+  std::string serialize() const {
     // Note: Must update kSerializationVersion if this is changed.
     return serialization::serialize(_name, _options, _sources);
   };
@@ -3271,18 +3270,19 @@ class Program {
    * \param options A vector of options to be passed to the NVRTC
    * compiler when compiling this kernel.
    */
-  Kernel kernel(string const& name, vector<string> const& options = {}) const;
+  Kernel kernel(std::string const& name,
+                std::vector<std::string> const& options = {}) const;
 };
 
 class Kernel {
   friend class KernelInstantiation;
   Program const* _program;
-  string _name;
-  vector<string> _options;
+  std::string _name;
+  std::vector<std::string> _options;
 
  public:
-  Kernel(Program const* program, string const& name,
-         vector<string> const& options = {})
+  Kernel(Program const* program, std::string const& name,
+         std::vector<std::string> const& options = {})
       : _program(program), _name(name), _options(options) {}
 
   /*! Instantiate the kernel.
@@ -3296,7 +3296,8 @@ class Kernel {
    *    explicitly specified.
    */
   KernelInstantiation instantiate(
-      vector<string> const& template_args = vector<string>()) const;
+      std::vector<std::string> const& template_args =
+          std::vector<std::string>()) const;
 
   // Regular template instantiation syntax (note limited flexibility)
   /*! Instantiate the kernel.
@@ -3333,31 +3334,31 @@ class KernelInstantiation {
   std::unique_ptr<detail::CUDAKernel> _cuda_kernel;
 
   // Private constructor used by deserialize()
-  KernelInstantiation(string const& func_name, string const& ptx,
-                      vector<string> const& link_files,
-                      vector<string> const& link_paths)
+  KernelInstantiation(std::string const& func_name, std::string const& ptx,
+                      std::vector<std::string> const& link_files,
+                      std::vector<std::string> const& link_paths)
       : _cuda_kernel(new detail::CUDAKernel(func_name.c_str(), ptx.c_str(),
                                             link_files, link_paths)) {}
 
  public:
   KernelInstantiation(Kernel const& kernel,
-                      vector<string> const& template_args) {
+                      std::vector<std::string> const& template_args) {
     Program const* program = kernel._program;
 
-    string template_inst =
+    std::string template_inst =
         (template_args.empty() ? ""
                                : reflection::reflect_template(template_args));
-    string instantiation = kernel._name + template_inst;
+    std::string instantiation = kernel._name + template_inst;
 
-    vector<string> options;
+    std::vector<std::string> options;
     options.insert(options.begin(), program->_options.begin(),
                    program->_options.end());
     options.insert(options.begin(), kernel._options.begin(),
                    kernel._options.end());
     detail::detect_and_add_cuda_arch(options);
 
-    string log, ptx, mangled_instantiation;
-    vector<string> linker_files, linker_paths;
+    std::string log, ptx, mangled_instantiation;
+    std::vector<std::string> linker_files, linker_paths;
     detail::instantiate_kernel(program->_name, program->_sources, instantiation,
                                options, &log, &ptx, &mangled_instantiation,
                                &linker_files, &linker_paths);
@@ -3374,9 +3375,10 @@ class KernelInstantiation {
    *
    * \see serialize
    */
-  static KernelInstantiation deserialize(string const& serialized_kernel_inst) {
-    string func_name, ptx;
-    vector<string> link_files, link_paths;
+  static KernelInstantiation deserialize(
+      std::string const& serialized_kernel_inst) {
+    std::string func_name, ptx;
+    std::vector<std::string> link_files, link_paths;
     if (!serialization::deserialize(serialized_kernel_inst, &func_name, &ptx,
                                     &link_files, &link_paths)) {
       throw std::runtime_error("Failed to deserialize kernel instantiation");
@@ -3388,7 +3390,7 @@ class KernelInstantiation {
    *
    * \see deserialize
    */
-  string serialize() const {
+  std::string serialize() const {
     // Note: Must update kSerializationVersion if this is changed.
     return serialization::serialize(
         _cuda_kernel->function_name(), _cuda_kernel->ptx(),
@@ -3469,10 +3471,10 @@ class KernelLauncher {
    *    as code-strings. This parameter is optional and is only used to print
    *    out the function signature.
    */
-  CUresult launch(vector<void*> arg_ptrs = {},
-                  vector<string> arg_types = {}) const {
+  CUresult launch(std::vector<void*> arg_ptrs = {},
+                  std::vector<std::string> arg_types = {}) const {
 #if JITIFY_PRINT_LAUNCH
-    string arg_types_string =
+    std::string arg_types_string =
         (arg_types.empty() ? "..." : reflection::reflect_list(arg_types));
     std::cout << "Launching " << _kernel_inst->_cuda_kernel->function_name()
               << "<<<" << _grid << "," << _block << "," << _smem << ","
@@ -3489,30 +3491,31 @@ class KernelLauncher {
    */
   template <typename... ArgTypes>
   CUresult launch(ArgTypes... args) const {
-    return this->launch(vector<void*>({(void*)&args...}),
+    return this->launch(std::vector<void*>({(void*)&args...}),
                         {reflection::reflect<ArgTypes>()...});
   }
 };
 
-inline Kernel Program::kernel(string const& name,
-                              vector<string> const& options) const {
+inline Kernel Program::kernel(std::string const& name,
+                              std::vector<std::string> const& options) const {
   return Kernel(this, name, options);
 }
 
 inline KernelInstantiation Kernel::instantiate(
-    vector<string> const& template_args) const {
+    std::vector<std::string> const& template_args) const {
   return KernelInstantiation(*this, template_args);
 }
 
 template <typename... TemplateArgs>
 inline KernelInstantiation Kernel::instantiate() const {
   return this->instantiate(
-      vector<string>({reflection::reflect<TemplateArgs>()...}));
+      std::vector<std::string>({reflection::reflect<TemplateArgs>()...}));
 }
 
 template <typename... TemplateArgs>
 inline KernelInstantiation Kernel::instantiate(TemplateArgs... targs) const {
-  return this->instantiate(vector<string>({reflection::reflect(targs)...}));
+  return this->instantiate(
+      std::vector<std::string>({reflection::reflect(targs)...}));
 }
 
 inline KernelLauncher KernelInstantiation::configure(
