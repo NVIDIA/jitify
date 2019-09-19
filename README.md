@@ -73,6 +73,18 @@ A small utility called stringify is included for converting text files into
 C string literals, which provides a convenient way to integrate JIT-compiled
 sources into a build.
 
+### Running tests
+
+Tests can be run with the following command:
+
+```shell
+$ make test
+```
+
+This will automatically download and build the
+[GoogleTest](https://github.com/google/googletest) library, which
+requires [CMake](https://cmake.org) to be available on the system.
+
 ## Documentation
 
 ### Examples
