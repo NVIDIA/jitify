@@ -3003,7 +3003,6 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
 namespace experimental {
 
 using jitify::file_callback_type;
-using namespace jitify;
 
 using std::map;
 using std::string;
