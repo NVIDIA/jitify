@@ -2992,9 +2992,7 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
 
 #endif  // __cplusplus >= 201103L
 
-}  // namespace jitify
-
-namespace jitify_v2 {
+namespace experimental {
 
 using jitify::file_callback_type;
 using namespace jitify;
@@ -3470,7 +3468,9 @@ inline KernelLauncher KernelInstantiation::configure_1d_max_occupancy(
   return this->configure(grid, block, smem, stream);
 }
 
-}  // namespace jitify_v2
+}  // namespace experimental
+
+}  // namespace jitify
 
 #if defined(_WIN32) || defined(_WIN64)
 #pragma pop_macro("strtok_r")

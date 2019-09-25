@@ -115,7 +115,7 @@ bool test_simple() {
 }
 
 template <typename T>
-bool test_simple_v2() {
+bool test_simple_experimental() {
   const char* program_source =
       "my_program\n"
       "template<int N, typename T>\n"
@@ -127,8 +127,9 @@ bool test_simple_v2() {
       "    }\n"
       "}\n";
   std::vector<std::string> opts;
-  jitify_v2::Program program_orig(program_source, {}, opts);
-  auto program = jitify_v2::Program::deserialize(program_orig.serialize());
+  jitify::experimental::Program program_orig(program_source, {}, opts);
+  auto program =
+      jitify::experimental::Program::deserialize(program_orig.serialize());
   T h_data = 5;
   T* d_data;
   cudaMalloc((void**)&d_data, sizeof(T));
@@ -138,8 +139,8 @@ bool test_simple_v2() {
   using jitify::reflection::type_of;
   auto kernel_inst_orig =
       program.kernel("my_kernel").instantiate(3, type_of(*d_data));
-  auto kernel_inst =
-      jitify_v2::KernelInstantiation::deserialize(kernel_inst_orig.serialize());
+  auto kernel_inst = jitify::experimental::KernelInstantiation::deserialize(
+      kernel_inst_orig.serialize());
   CHECK_CUDA(kernel_inst.configure(grid, block).launch(d_data));
   cudaMemcpy(&h_data, d_data, sizeof(T), cudaMemcpyDeviceToHost);
   cudaFree(d_data);
@@ -329,7 +330,7 @@ int main(int argc, char* argv[]) {
 
   // Uncached
   bool test_simple_result = test_simple<float>();
-  bool test_simple_v2_result = test_simple_v2<float>();
+  bool test_simple_experimental_result = test_simple_experimental<float>();
   bool test_kernels_result = test_kernels<float>();
   bool test_parallel_for_result = test_parallel_for<float>();
   bool test_constant_result = test_constant();
@@ -342,8 +343,8 @@ int main(int argc, char* argv[]) {
 
   std::cout << "test_simple<float>:       " << TEST_RESULT(test_simple_result)
             << std::endl;
-  std::cout << "test_simple_v2<float>:    "
-            << TEST_RESULT(test_simple_v2_result) << std::endl;
+  std::cout << "test_simple_experimental<float>:    "
+            << TEST_RESULT(test_simple_experimental_result) << std::endl;
   std::cout << "test_kernels<float>:      " << TEST_RESULT(test_kernels_result)
             << std::endl;
   std::cout << "test_parallel_for<float>: "
@@ -351,8 +352,9 @@ int main(int argc, char* argv[]) {
   std::cout << "test_constant:            " << TEST_RESULT(test_constant_result)
             << std::endl;
 
-  return (!test_simple_result + !test_simple_v2_result + !test_kernels_result +
-          !test_parallel_for_result + !test_constant_result);
+  return (!test_simple_result + !test_simple_experimental_result +
+          !test_kernels_result + !test_parallel_for_result +
+          !test_constant_result);
 #else
   std::cout << "Tests require building with C++11 support (make CXX11=1)"
             << std::endl;
