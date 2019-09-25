@@ -917,14 +917,16 @@ class CUDAKernel {
   inline void create_module(std::vector<std::string> link_files,
                             std::vector<std::string> link_paths) {
 #ifndef JITIFY_PRINT_LINKER_LOG
-    // WAR since linker log does not seem to be constructed using a single call to cuModuleLoadDataEx
+    // WAR since linker log does not seem to be constructed using a single call
+    // to cuModuleLoadDataEx.
     if (link_files.empty()) {
       cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(), _opts.size(),
                                         _opts.data(), _optvals.data()));
     } else
 #endif
     {
-      cuda_safe_call(cuLinkCreate(_opts.size(), _opts.data(), _optvals.data(), &_link_state));
+      cuda_safe_call(cuLinkCreate(_opts.size(), _opts.data(), _optvals.data(),
+                                  &_link_state));
       cuda_safe_call(cuLinkAddData(_link_state, CU_JIT_INPUT_PTX,
                                    (void*)_ptx.c_str(), _ptx.size(),
                                    "jitified_source.ptx", 0, 0, 0));
@@ -959,7 +961,9 @@ class CUDAKernel {
     }
 #ifdef JITIFY_PRINT_LINKER_LOG
     std::cout << "---------------------------------------" << std::endl;
-    std::cout << "--- Linker for " << reflection::detail::demangle(_func_name.c_str()) << " ---" << std::endl;
+    std::cout << "--- Linker for "
+              << reflection::detail::demangle(_func_name.c_str()) << " ---"
+              << std::endl;
     std::cout << "---------------------------------------" << std::endl;
     std::cout << _info_log << std::endl;
     std::cout << "---------------------------------------" << std::endl;
@@ -1008,15 +1012,15 @@ class CUDAKernel {
   inline void set_linker_log() {
 #ifdef JITIFY_PRINT_LINKER_LOG
     _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
-    _optvals.push_back((void *) _info_log);
+    _optvals.push_back((void*)_info_log);
     _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
-    _optvals.push_back((void *) (long)_log_size);
+    _optvals.push_back((void*)(long)_log_size);
     _opts.push_back(CU_JIT_LOG_VERBOSE);
-    _optvals.push_back((void *)1);
+    _optvals.push_back((void*)1);
 #endif
   }
 
-public:
+ public:
   inline CUDAKernel() : _link_state(0), _module(0), _kernel(0) {}
   inline CUDAKernel(const CUDAKernel& other) = delete;
   inline CUDAKernel& operator=(const CUDAKernel& other) = delete;
@@ -1901,21 +1905,26 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   //         on older versions of CUDA.
   // TODO: It would be better to detect this somehow, rather than hard-coding it
 
-  // Tegra chips do not have forwards compatibility so we need to special case them
-  bool is_tegra = ( (cc_major == 3 && cc_minor == 2) || // Logan
-                    (cc_major == 5 && cc_minor == 3) || // Erista
-                    (cc_major == 6 && cc_minor == 2) || // Parker
-                    (cc_major == 7 && cc_minor == 2) ); // Xavier
+  // Tegra chips do not have forwards compatibility so we need to special case
+  // them.
+  bool is_tegra = ((cc_major == 3 && cc_minor == 2) ||  // Logan
+                   (cc_major == 5 && cc_minor == 3) ||  // Erista
+                   (cc_major == 6 && cc_minor == 2) ||  // Parker
+                   (cc_major == 7 && cc_minor == 2));   // Xavier
   if (!is_tegra) {
     // ensure that future CUDA versions just work (even if suboptimal)
     const int cuda_major = std::min(10, CUDA_VERSION / 1000);
+    // clang-format off
     switch (cuda_major) {
-    case 10: cc = std::min(cc, 75); break; // Turing
-    case 9: cc = std::min(cc, 70); break;  // Volta
-    case 8: cc = std::min(cc, 61); break;  // Pascal
-    case 7: cc = std::min(cc, 52); break;  // Maxwell
-    default: throw std::runtime_error("Unexpected CUDA major version " + std::to_string(cuda_major));
+      case 10: cc = std::min(cc, 75); break; // Turing
+      case  9: cc = std::min(cc, 70); break; // Volta
+      case  8: cc = std::min(cc, 61); break; // Pascal
+      case  7: cc = std::min(cc, 52); break; // Maxwell
+      default:
+        throw std::runtime_error("Unexpected CUDA major version " +
+                                 std::to_string(cuda_major));
     }
+    // clang-format on
   }
 
   std::stringstream ss;
@@ -2074,7 +2083,7 @@ inline void load_program(std::string const& cuda_source,
   *program_name = program_sources->begin()->first;
 
   // Load header sources
-  for (std::string const &header : headers) {
+  for (std::string const& header : headers) {
     if (!detail::load_source(header, *program_sources, "", *include_paths,
                              file_callback)) {
       // **TODO: Deal with source not found
@@ -2084,104 +2093,103 @@ inline void load_program(std::string const& cuda_source,
 
 #if JITIFY_PRINT_SOURCE
   std::string& program_source = (*program_sources)[*program_name];
-    std::cout << "---------------------------------------" << std::endl;
-    std::cout << "--- Source of " << *program_name << " ---" << std::endl;
-    std::cout << "---------------------------------------" << std::endl;
-    detail::print_with_line_numbers(program_source);
-    std::cout << "---------------------------------------" << std::endl;
+  std::cout << "---------------------------------------" << std::endl;
+  std::cout << "--- Source of " << *program_name << " ---" << std::endl;
+  std::cout << "---------------------------------------" << std::endl;
+  detail::print_with_line_numbers(program_source);
+  std::cout << "---------------------------------------" << std::endl;
 #endif
 
-    std::vector<std::string> compiler_options, linker_files, linker_paths;
-    detail::split_compiler_and_linker_options(
-        *program_options, &compiler_options, &linker_files, &linker_paths);
+  std::vector<std::string> compiler_options, linker_files, linker_paths;
+  detail::split_compiler_and_linker_options(*program_options, &compiler_options,
+                                            &linker_files, &linker_paths);
 
-    // If no arch is specified at this point we use whatever the current
-    // context is. This ensures we pick up the correct internal headers
-    // for arch-dependent compilation, e.g., some intrinsics are only
-    // present for specific architectures.
-    detail::detect_and_add_cuda_arch(compiler_options);
+  // If no arch is specified at this point we use whatever the current
+  // context is. This ensures we pick up the correct internal headers
+  // for arch-dependent compilation, e.g., some intrinsics are only
+  // present for specific architectures.
+  detail::detect_and_add_cuda_arch(compiler_options);
 
-    // Iteratively try to compile the sources, and use the resulting errors to
-    // identify missing headers.
-    std::string log;
-    nvrtcResult ret;
-    while ((ret = detail::compile_kernel(*program_name, *program_sources,
-                                         compiler_options, "", &log)) ==
-           NVRTC_ERROR_COMPILATION) {
-      std::string include_name;
-      std::string include_parent;
-      int line_num = 0;
-      if (!detail::extract_include_info_from_compile_error(
-              log, include_name, include_parent, line_num)) {
+  // Iteratively try to compile the sources, and use the resulting errors to
+  // identify missing headers.
+  std::string log;
+  nvrtcResult ret;
+  while ((ret = detail::compile_kernel(*program_name, *program_sources,
+                                       compiler_options, "", &log)) ==
+         NVRTC_ERROR_COMPILATION) {
+    std::string include_name;
+    std::string include_parent;
+    int line_num = 0;
+    if (!detail::extract_include_info_from_compile_error(
+            log, include_name, include_parent, line_num)) {
 #if JITIFY_PRINT_LOG
-        detail::print_compile_log(*program_name, log);
+      detail::print_compile_log(*program_name, log);
 #endif
-        // There was a non include-related compilation error
-        // TODO: How to handle error?
-        throw std::runtime_error("Runtime compilation failed");
-      }
-
-      // Try to load the new header
-      std::string include_path = detail::path_base(include_parent);
-      if (!detail::load_source(include_name, *program_sources, include_path,
-                               *include_paths, file_callback)) {
-        // Comment-out the include line and print a warning
-        if (!program_sources->count(include_parent)) {
-          // ***TODO: Unless there's another mechanism (e.g., potentially
-          //            the parent path vs. filename problem), getting
-          //            here means include_parent was found automatically
-          //            in a system include path.
-          //            We need a WAR to zap it from *its parent*.
-
-          typedef std::map<std::string, std::string> source_map;
-          for (source_map::const_iterator it = program_sources->begin();
-               it != program_sources->end(); ++it) {
-            std::cout << "  " << it->first << std::endl;
-          }
-          throw std::out_of_range(include_parent +
-                                  " not in loaded sources!"
-                                  " This may be due to a header being loaded by"
-                                  " NVRTC without Jitify's knowledge.");
-        }
-        std::string& parent_source = (*program_sources)[include_parent];
-        parent_source = detail::comment_out_code_line(line_num, parent_source);
-#if JITIFY_PRINT_LOG
-        std::cout << include_parent << "(" << line_num
-                  << "): warning: " << include_name << ": File not found"
-                  << std::endl;
-#endif
-      }
+      // There was a non include-related compilation error
+      // TODO: How to handle error?
+      throw std::runtime_error("Runtime compilation failed");
     }
-    if (ret != NVRTC_SUCCESS) {
-#if JITIFY_PRINT_LOG
-      if (ret == NVRTC_ERROR_INVALID_OPTION) {
-        std::cout << "Compiler options: ";
-        for (int i = 0; i < (int)compiler_options.size(); ++i) {
-          std::cout << compiler_options[i] << " ";
+
+    // Try to load the new header
+    std::string include_path = detail::path_base(include_parent);
+    if (!detail::load_source(include_name, *program_sources, include_path,
+                             *include_paths, file_callback)) {
+      // Comment-out the include line and print a warning
+      if (!program_sources->count(include_parent)) {
+        // ***TODO: Unless there's another mechanism (e.g., potentially
+        //            the parent path vs. filename problem), getting
+        //            here means include_parent was found automatically
+        //            in a system include path.
+        //            We need a WAR to zap it from *its parent*.
+
+        typedef std::map<std::string, std::string> source_map;
+        for (source_map::const_iterator it = program_sources->begin();
+             it != program_sources->end(); ++it) {
+          std::cout << "  " << it->first << std::endl;
         }
-        std::cout << std::endl;
+        throw std::out_of_range(include_parent +
+                                " not in loaded sources!"
+                                " This may be due to a header being loaded by"
+                                " NVRTC without Jitify's knowledge.");
       }
+      std::string& parent_source = (*program_sources)[include_parent];
+      parent_source = detail::comment_out_code_line(line_num, parent_source);
+#if JITIFY_PRINT_LOG
+      std::cout << include_parent << "(" << line_num
+                << "): warning: " << include_name << ": File not found"
+                << std::endl;
 #endif
-      throw std::runtime_error(std::string("NVRTC error: ") +
-                               nvrtcGetErrorString(ret));
     }
   }
+  if (ret != NVRTC_SUCCESS) {
+#if JITIFY_PRINT_LOG
+    if (ret == NVRTC_ERROR_INVALID_OPTION) {
+      std::cout << "Compiler options: ";
+      for (int i = 0; i < (int)compiler_options.size(); ++i) {
+        std::cout << compiler_options[i] << " ";
+      }
+      std::cout << std::endl;
+    }
+#endif
+    throw std::runtime_error(std::string("NVRTC error: ") +
+                             nvrtcGetErrorString(ret));
+  }
+}
 
-inline void
-instantiate_kernel(std::string const& program_name,
-                   std::map<std::string, std::string> const& program_sources,
-                   std::string const& instantiation,
-                   std::vector<std::string> const& options, std::string* log,
-                   std::string* ptx, std::string* mangled_instantiation,
-                   std::vector<std::string>* linker_files,
-                   std::vector<std::string>* linker_paths) {
+inline void instantiate_kernel(
+    std::string const& program_name,
+    std::map<std::string, std::string> const& program_sources,
+    std::string const& instantiation, std::vector<std::string> const& options,
+    std::string* log, std::string* ptx, std::string* mangled_instantiation,
+    std::vector<std::string>* linker_files,
+    std::vector<std::string>* linker_paths) {
   std::vector<std::string> compiler_options;
   detail::split_compiler_and_linker_options(options, &compiler_options,
                                             linker_files, linker_paths);
 
-  nvrtcResult ret = detail::compile_kernel(program_name, program_sources,
-                                           compiler_options, instantiation,
-                                           log, ptx, mangled_instantiation);
+  nvrtcResult ret =
+      detail::compile_kernel(program_name, program_sources, compiler_options,
+                             instantiation, log, ptx, mangled_instantiation);
 #if JITIFY_PRINT_LOG
   if (log->size() > 1) {
     detail::print_compile_log(program_name, *log);
@@ -2205,9 +2213,9 @@ instantiate_kernel(std::string const& program_name,
 }
 
 inline void get_1d_max_occupancy(CUfunction func,
-                                 CUoccupancyB2DSize smem_callback, size_t *smem,
+                                 CUoccupancyB2DSize smem_callback, size_t* smem,
                                  int max_block_size, unsigned int flags,
-                                 int *grid, int *block) {
+                                 int* grid, int* block) {
   if (!func) {
     throw std::runtime_error(
         "Kernel pointer is NULL; you may need to define JITIFY_THREAD_SAFE "
@@ -2216,7 +2224,7 @@ inline void get_1d_max_occupancy(CUfunction func,
   CUresult res = cuOccupancyMaxPotentialBlockSizeWithFlags(
       grid, block, func, smem_callback, *smem, max_block_size, flags);
   if (res != CUDA_SUCCESS) {
-    const char *msg;
+    const char* msg;
     cuGetErrorName(res, &msg);
     throw std::runtime_error(msg);
   }
@@ -2997,9 +3005,9 @@ namespace experimental {
 using jitify::file_callback_type;
 using namespace jitify;
 
+using std::map;
 using std::string;
 using std::vector;
-using std::map;
 
 namespace serialization {
 
