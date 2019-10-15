@@ -49,6 +49,7 @@ Jitify provides/takes care of the following things:
  * Compiling specifically for the current device's compute capability
  * Support for CUDA versions 7.0, 7.5, 8.0, 9.x, 10.x
  * Convenient parallel_for function and lambda support
+ * \*New\* jitify::experimental API provides serialization capabilities to enable [user-managed hashing and caching](https://github.com/rapidsai/cudf/blob/v0.9.0/cpp/src/jit/cache.h)
 
 Things you can do with Jitify and NVRTC:
 
@@ -71,6 +72,18 @@ Link with: `-ldl -lcuda -lnvrtc`
 A small utility called stringify is included for converting text files into
 C string literals, which provides a convenient way to integrate JIT-compiled
 sources into a build.
+
+### Running tests
+
+Tests can be run with the following command:
+
+```shell
+$ make test
+```
+
+This will automatically download and build the
+[GoogleTest](https://github.com/google/googletest) library, which
+requires [CMake](https://cmake.org) to be available on the system.
 
 ## Documentation
 

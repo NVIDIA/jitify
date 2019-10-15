@@ -1,11 +1,11 @@
 
-GXX     ?= g++
 DOXYGEN ?= doxygen
 CXXFLAGS ?= -O3 -Wall -g -fmessage-length=80
 
 CXX11 ?= 1
 
 CUDA_DIR ?= /usr/local/cuda
+CUDA_INC_DIR ?= $(CUDA_DIR)/include
 
 CXXFLAGS += -pthread
 
@@ -26,21 +26,56 @@ else ifeq ($(UNAME_S),Darwin)
 	CUDA_LIB_DIR = $(CUDA_DIR)/lib
 endif
 
-INC += -I$(CUDA_DIR)/include
+INC += -I$(CUDA_INC_DIR)
 LIB += -ldl -L$(CUDA_LIB_DIR) -lcuda -lcudart -lnvrtc
 
 HEADERS = jitify.hpp \
           example_headers/my_header1.cuh.jit \
           example_headers/my_header2.cuh
 
+all: jitify_example
+
 jitify_example: jitify_example.cpp $(HEADERS)
-	$(GXX) -o $@ $< $(CXXFLAGS) $(INC) $(LIB)
+	$(CXX) -o $@ $< $(CXXFLAGS) $(INC) $(LIB)
 
 %.jit: % stringify
 	./stringify $< > $@
 
 stringify: stringify.cpp
-	$(GXX) -o $@ $< -O3 -Wall
+	$(CXX) -o $@ $< -O3 -Wall
+
+get-deps:
+	sudo apt-get update
+	# CMake is needed to build gtest.
+	sudo apt-get install -y cmake
+.PHONY: get-deps
+
+GTEST_DIR = googletest
+GTEST_STATIC_LIB = $(GTEST_DIR)/build/googlemock/gtest/libgtest.a
+$(GTEST_STATIC_LIB):
+	rm -rf $(GTEST_DIR)
+	git clone https://github.com/google/googletest.git $(GTEST_DIR)
+	cd $(GTEST_DIR) && git checkout release-1.8.1 && rm -rf build && mkdir build && cd build && cmake .. && make -j8
+
+GTEST_INC = -I$(GTEST_DIR)/googletest/include
+GTEST_LIB = -L$(GTEST_DIR)/build/googlemock/gtest -lgtest -lgtest_main -pthread
+
+CUB_DIR ?= /tmp/cub
+CUB_HEADER = $(CUB_DIR)/cub/cub.cuh
+$(CUB_HEADER):
+	rm -rf $(CUB_DIR)
+	git clone https://github.com/NVlabs/cub.git $(CUB_DIR)
+	cd $(CUB_DIR) && git checkout v1.8.0
+
+CUB_INC = -I$(CUB_DIR)
+JITIFY_TEST_DEFINES = -DCUDA_INC_DIR="\"$(CUDA_INC_DIR)\"" -DCUB_DIR="\"$(CUB_DIR)\""
+
+jitify_test: jitify_test.cpp $(HEADERS) $(GTEST_STATIC_LIB) $(CUB_HEADER)
+	$(CXX) -o $@ $< -std=c++11 -O3 -Wall $(JITIFY_TEST_DEFINES) $(INC) $(GTEST_INC) $(CUB_INC) $(LIB) $(GTEST_LIB)
+
+test: jitify_test
+	./jitify_test
+.PHONY: test
 
 doc: jitify.hpp Doxyfile
 	$(DOXYGEN) Doxyfile
@@ -50,4 +85,7 @@ clean:
 	rm -f stringify
 	rm -f example_headers/*.jit
 	rm -f jitify_example
+	rm -f jitify_test
+	rm -rf $(GTEST_DIR)
+	rm -rf $(CUB_DIR)
 .PHONY: clean

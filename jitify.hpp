@@ -471,7 +471,8 @@ inline bool load_source(
     std::string filename, std::map<std::string, std::string>& sources,
     std::string current_dir = "",
     std::vector<std::string> include_paths = std::vector<std::string>(),
-    file_callback_type file_callback = 0, bool remove_missing_headers = true) {
+    file_callback_type file_callback = 0,
+    std::map<std::string, std::string>* fullpaths = nullptr) {
   std::istream* source_stream = 0;
   std::stringstream string_stream;
   std::ifstream file_stream;
@@ -518,6 +519,10 @@ inline bool load_source(
         }
         source_stream = &file_stream;
       }
+    }
+    if (fullpaths) {
+      // Record the full file path corresponding to this include name.
+      (*fullpaths)[filename] = fullpath;
     }
   }
   sources[filename] = std::string();
@@ -1083,10 +1088,10 @@ class CUDAKernel {
     return const_ptr;
   }
 
-  std::string function_name() const { return _func_name; }
-  std::string ptx() const { return _ptx; }
-  std::vector<std::string> link_files() const { return _link_files; }
-  std::vector<std::string> link_paths() const { return _link_paths; }
+  const std::string& function_name() const { return _func_name; }
+  const std::string& ptx() const { return _ptx; }
+  const std::vector<std::string>& link_files() const { return _link_files; }
+  const std::vector<std::string>& link_paths() const { return _link_paths; }
 };
 
 static const char* jitsafe_header_preinclude_h = R"(
@@ -1241,6 +1246,7 @@ static const char* jitsafe_header_limits =
     "	static inline __host__ __device__ T min() { return Min; }\n"
     "	static inline __host__ __device__ T max() { return Max; }\n"
     "	enum {\n"
+    "       is_specialized = true,\n"
     "		digits     = (Digits == -1) ? (int)(sizeof(T)*8 - (Min != 0)) "
     ": Digits,\n"
     "		digits10   = (digits * 30103) / 100000,\n"
@@ -1253,7 +1259,9 @@ static const char* jitsafe_header_limits =
     "	};\n"
     "};\n"
     "} // namespace detail\n"
-    "template<typename T> struct numeric_limits {};\n"
+    "template<typename T> struct numeric_limits {\n"
+    "    enum { is_specialized = false };\n"
+    "};\n"
     "template<> struct numeric_limits<bool>               : public "
     "__jitify_detail::IntegerLimits<bool,              false,    true,1> {};\n"
     "template<> struct numeric_limits<char>               : public "
@@ -1550,8 +1558,10 @@ static const char* jitsafe_header_ostream =
     "basic_ostream<CharT, Traits>& os );\n"
     "template< class CharT, class Traits > basic_ostream<CharT, Traits>& "
     "operator<<( basic_ostream<CharT,Traits>& os, const char* c );\n"
+    "#if __cplusplus >= 201103L\n"
     "template< class CharT, class Traits, class T > basic_ostream<CharT, "
     "Traits>& operator<<( basic_ostream<CharT,Traits>&& os, const T& value );\n"
+    "#endif  // __cplusplus >= 201103L\n"
     "} // namespace __jitify_ostream_ns\n"
     "namespace std { using namespace __jitify_ostream_ns; }\n"
     "using namespace __jitify_ostream_ns;\n";
@@ -1886,6 +1896,7 @@ inline void add_options_from_env(std::vector<std::string>& options) {
 
 inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   for (int i = 0; i < (int)options.size(); ++i) {
+    // Note that this will also match the middle of "--gpu-architecture".
     if (options[i].find("-arch") != std::string::npos) {
       // Arch already specified in options
       return;
@@ -1893,8 +1904,15 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   }
   // Use the compute capability of the current device
   // TODO: Check these API calls for errors
+  cudaError_t status;
   int device;
-  cudaGetDevice(&device);
+  status = cudaGetDevice(&device);
+  if (status != cudaSuccess) {
+    throw std::runtime_error(
+        std::string(
+            "Failed to detect GPU architecture: cudaGetDevice failed: ") +
+        cudaGetErrorString(status));
+  }
   int cc_major;
   cudaDeviceGetAttribute(&cc_major, cudaDevAttrComputeCapabilityMajor, device);
   int cc_minor;
@@ -1930,6 +1948,23 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   std::stringstream ss;
   ss << cc;
   options.push_back("-arch=compute_" + ss.str());
+}
+
+inline void detect_and_add_cxx11_flag(std::vector<std::string>& options) {
+  // Reverse loop so we can erase on the fly.
+  for (int i = (int)options.size() - 1; i >= 0; --i) {
+    if (options[i].find("-std=c++98") != std::string::npos) {
+      // NVRTC doesn't support specifying c++98 explicitly, so we remove it.
+      options.erase(options.begin() + i);
+      return;
+    } else if (options[i].find("-std") != std::string::npos) {
+      // Some other standard was explicitly specified, don't change anything.
+      return;
+    }
+  }
+  // Jitify must be compiled with C++11 support, so we default to enabling it
+  // for the JIT-compiled code too.
+  options.push_back("-std=c++11");
 }
 
 inline void split_compiler_and_linker_options(
@@ -2082,10 +2117,13 @@ inline void load_program(std::string const& cuda_source,
   }
   *program_name = program_sources->begin()->first;
 
+  // Maps header include names to their full file paths.
+  std::map<std::string, std::string> header_fullpaths;
+
   // Load header sources
   for (std::string const& header : headers) {
     if (!detail::load_source(header, *program_sources, "", *include_paths,
-                             file_callback)) {
+                             file_callback, &header_fullpaths)) {
       // **TODO: Deal with source not found
       throw std::runtime_error("Source not found: " + header);
     }
@@ -2109,6 +2147,7 @@ inline void load_program(std::string const& cuda_source,
   // for arch-dependent compilation, e.g., some intrinsics are only
   // present for specific architectures.
   detail::detect_and_add_cuda_arch(compiler_options);
+  detail::detect_and_add_cxx11_flag(compiler_options);
 
   // Iteratively try to compile the sources, and use the resulting errors to
   // identify missing headers.
@@ -2131,9 +2170,13 @@ inline void load_program(std::string const& cuda_source,
     }
 
     // Try to load the new header
-    std::string include_path = detail::path_base(include_parent);
+    // Note: This fullpath lookup is needed because the compiler error
+    // messages have the include name of the header instead of its full path.
+    std::string include_parent_fullpath = header_fullpaths[include_parent];
+    std::string include_path = detail::path_base(include_parent_fullpath);
     if (!detail::load_source(include_name, *program_sources, include_path,
-                             *include_paths, file_callback)) {
+                             *include_paths, file_callback,
+                             &header_fullpaths)) {
       // Comment-out the include line and print a warning
       if (!program_sources->count(include_parent)) {
         // ***TODO: Unless there's another mechanism (e.g., potentially
@@ -2474,6 +2517,20 @@ class KernelInstantiation {
   inline CUdeviceptr get_constant_ptr(const char* name) const {
     return _impl->cuda_kernel().get_constant_ptr(name);
   }
+
+  const std::string& mangled_name() const {
+    return _impl->cuda_kernel().function_name();
+  }
+
+  const std::string& ptx() const { return _impl->cuda_kernel().ptx(); }
+
+  const std::vector<std::string>& link_files() const {
+    return _impl->cuda_kernel().link_files();
+  }
+
+  const std::vector<std::string>& link_paths() const {
+    return _impl->cuda_kernel().link_paths();
+  }
 };
 
 /*! An object representing a kernel made up of a Program, a name and options.
@@ -2744,6 +2801,7 @@ Kernel_impl::Kernel_impl(Program_impl const& program, std::string name,
   _options.insert(_options.end(), _program.options().begin(),
                   _program.options().end());
   detail::detect_and_add_cuda_arch(_options);
+  detail::detect_and_add_cxx11_flag(_options);
   std::string options_string = reflection::reflect_list(_options);
   using detail::hash_combine;
   using detail::hash_larson64;
@@ -3004,10 +3062,6 @@ namespace experimental {
 
 using jitify::file_callback_type;
 
-using std::map;
-using std::string;
-using std::vector;
-
 namespace serialization {
 
 namespace detail {
@@ -3028,12 +3082,12 @@ inline bool deserialize(std::istream& stream, size_t* size) {
   return stream.good();
 }
 
-inline void serialize(std::ostream& stream, string const& s) {
+inline void serialize(std::ostream& stream, std::string const& s) {
   serialize(stream, s.size());
   stream.write(s.data(), s.size());
 }
 
-inline bool deserialize(std::istream& stream, string* s) {
+inline bool deserialize(std::istream& stream, std::string* s) {
   size_t size;
   if (!deserialize(stream, &size)) return false;
   s->resize(size);
@@ -3043,14 +3097,14 @@ inline bool deserialize(std::istream& stream, string* s) {
   return stream.good();
 }
 
-inline void serialize(std::ostream& stream, vector<string> const& v) {
+inline void serialize(std::ostream& stream, std::vector<std::string> const& v) {
   serialize(stream, v.size());
   for (auto const& s : v) {
     serialize(stream, s);
   }
 }
 
-inline bool deserialize(std::istream& stream, vector<string>* v) {
+inline bool deserialize(std::istream& stream, std::vector<std::string>* v) {
   size_t size;
   if (!deserialize(stream, &size)) return false;
   v->resize(size);
@@ -3060,7 +3114,8 @@ inline bool deserialize(std::istream& stream, vector<string>* v) {
   return true;
 }
 
-inline void serialize(std::ostream& stream, map<string, string> const& m) {
+inline void serialize(std::ostream& stream,
+                      std::map<std::string, std::string> const& m) {
   serialize(stream, m.size());
   for (auto const& kv : m) {
     serialize(stream, kv.first);
@@ -3068,11 +3123,12 @@ inline void serialize(std::ostream& stream, map<string, string> const& m) {
   }
 }
 
-inline bool deserialize(std::istream& stream, map<string, string>* m) {
+inline bool deserialize(std::istream& stream,
+                        std::map<std::string, std::string>* m) {
   size_t size;
   if (!deserialize(stream, &size)) return false;
   for (size_t i = 0; i < size; ++i) {
-    string key;
+    std::string key;
     if (!deserialize(stream, &key)) return false;
     if (!deserialize(stream, &(*m)[key])) return false;
   }
@@ -3111,7 +3167,7 @@ inline bool deserialize_magic_number(std::istream& stream) {
 }  // namespace detail
 
 template <typename... Values>
-inline string serialize(Values const&... values) {
+inline std::string serialize(Values const&... values) {
   std::ostringstream ss(std::stringstream::out | std::stringstream::binary);
   detail::serialize_magic_number(ss);
   detail::serialize(ss, values...);
@@ -3119,7 +3175,7 @@ inline string serialize(Values const&... values) {
 }
 
 template <typename... Values>
-inline bool deserialize(string const& serialized, Values*... values) {
+inline bool deserialize(std::string const& serialized, Values*... values) {
   std::istringstream ss(serialized,
                         std::stringstream::in | std::stringstream::binary);
   if (!detail::deserialize_magic_number(ss)) return false;
@@ -3139,9 +3195,9 @@ class KernelLauncher;
 class Program {
  private:
   friend class KernelInstantiation;
-  string _name;
-  vector<string> _options;
-  map<string, string> _sources;
+  std::string _name;
+  std::vector<std::string> _options;
+  std::map<std::string, std::string> _sources;
 
   // Private constructor used by deserialize()
   Program() {}
@@ -3184,11 +3240,12 @@ class Program {
    *  \note Jitify automatically includes NVRTC-safe versions of some
    *  standard library headers.
    */
-  Program(string const& cuda_source, vector<string> const& given_headers = {},
-          vector<string> const& given_options = {},
+  Program(std::string const& cuda_source,
+          std::vector<std::string> const& given_headers = {},
+          std::vector<std::string> const& given_options = {},
           file_callback_type file_callback = nullptr) {
     // Add built-in JIT-safe headers
-    vector<string> headers = given_headers;
+    std::vector<std::string> headers = given_headers;
     for (int i = 0; i < detail::jitsafe_headers_count; ++i) {
       const char* hdr_name = detail::jitsafe_header_names[i];
       const char* hdr_source = detail::jitsafe_headers[i];
@@ -3197,7 +3254,7 @@ class Program {
 
     _options = given_options;
     detail::add_options_from_env(_options);
-    vector<string> include_paths;
+    std::vector<std::string> include_paths;
     detail::load_program(cuda_source, headers, file_callback, &include_paths,
                          &_sources, &_options, &_name);
   }
@@ -3208,7 +3265,7 @@ class Program {
    *
    * \see serialize
    */
-  static Program deserialize(string const& serialized_program) {
+  static Program deserialize(std::string const& serialized_program) {
     Program program;
     if (!serialization::deserialize(serialized_program, &program._name,
                                     &program._options, &program._sources)) {
@@ -3221,7 +3278,7 @@ class Program {
    *
    * \see deserialize
    */
-  string serialize() const {
+  std::string serialize() const {
     // Note: Must update kSerializationVersion if this is changed.
     return serialization::serialize(_name, _options, _sources);
   };
@@ -3233,18 +3290,19 @@ class Program {
    * \param options A vector of options to be passed to the NVRTC
    * compiler when compiling this kernel.
    */
-  Kernel kernel(string const& name, vector<string> const& options = {}) const;
+  Kernel kernel(std::string const& name,
+                std::vector<std::string> const& options = {}) const;
 };
 
 class Kernel {
   friend class KernelInstantiation;
   Program const* _program;
-  string _name;
-  vector<string> _options;
+  std::string _name;
+  std::vector<std::string> _options;
 
  public:
-  Kernel(Program const* program, string const& name,
-         vector<string> const& options = {})
+  Kernel(Program const* program, std::string const& name,
+         std::vector<std::string> const& options = {})
       : _program(program), _name(name), _options(options) {}
 
   /*! Instantiate the kernel.
@@ -3258,7 +3316,8 @@ class Kernel {
    *    explicitly specified.
    */
   KernelInstantiation instantiate(
-      vector<string> const& template_args = vector<string>()) const;
+      std::vector<std::string> const& template_args =
+          std::vector<std::string>()) const;
 
   // Regular template instantiation syntax (note limited flexibility)
   /*! Instantiate the kernel.
@@ -3295,31 +3354,32 @@ class KernelInstantiation {
   std::unique_ptr<detail::CUDAKernel> _cuda_kernel;
 
   // Private constructor used by deserialize()
-  KernelInstantiation(string const& func_name, string const& ptx,
-                      vector<string> const& link_files,
-                      vector<string> const& link_paths)
+  KernelInstantiation(std::string const& func_name, std::string const& ptx,
+                      std::vector<std::string> const& link_files,
+                      std::vector<std::string> const& link_paths)
       : _cuda_kernel(new detail::CUDAKernel(func_name.c_str(), ptx.c_str(),
                                             link_files, link_paths)) {}
 
  public:
   KernelInstantiation(Kernel const& kernel,
-                      vector<string> const& template_args) {
+                      std::vector<std::string> const& template_args) {
     Program const* program = kernel._program;
 
-    string template_inst =
+    std::string template_inst =
         (template_args.empty() ? ""
                                : reflection::reflect_template(template_args));
-    string instantiation = kernel._name + template_inst;
+    std::string instantiation = kernel._name + template_inst;
 
-    vector<string> options;
+    std::vector<std::string> options;
     options.insert(options.begin(), program->_options.begin(),
                    program->_options.end());
     options.insert(options.begin(), kernel._options.begin(),
                    kernel._options.end());
     detail::detect_and_add_cuda_arch(options);
+    detail::detect_and_add_cxx11_flag(options);
 
-    string log, ptx, mangled_instantiation;
-    vector<string> linker_files, linker_paths;
+    std::string log, ptx, mangled_instantiation;
+    std::vector<std::string> linker_files, linker_paths;
     detail::instantiate_kernel(program->_name, program->_sources, instantiation,
                                options, &log, &ptx, &mangled_instantiation,
                                &linker_files, &linker_paths);
@@ -3336,9 +3396,10 @@ class KernelInstantiation {
    *
    * \see serialize
    */
-  static KernelInstantiation deserialize(string const& serialized_kernel_inst) {
-    string func_name, ptx;
-    vector<string> link_files, link_paths;
+  static KernelInstantiation deserialize(
+      std::string const& serialized_kernel_inst) {
+    std::string func_name, ptx;
+    std::vector<std::string> link_files, link_paths;
     if (!serialization::deserialize(serialized_kernel_inst, &func_name, &ptx,
                                     &link_files, &link_paths)) {
       throw std::runtime_error("Failed to deserialize kernel instantiation");
@@ -3350,7 +3411,7 @@ class KernelInstantiation {
    *
    * \see deserialize
    */
-  string serialize() const {
+  std::string serialize() const {
     // Note: Must update kSerializationVersion if this is changed.
     return serialization::serialize(
         _cuda_kernel->function_name(), _cuda_kernel->ptx(),
@@ -3384,6 +3445,24 @@ class KernelInstantiation {
       int max_block_size = 0, size_t smem = 0,
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const;
+
+  CUdeviceptr get_constant_ptr(const char* name) const {
+    return _cuda_kernel->get_constant_ptr(name);
+  }
+
+  const std::string& mangled_name() const {
+    return _cuda_kernel->function_name();
+  }
+
+  const std::string& ptx() const { return _cuda_kernel->ptx(); }
+
+  const std::vector<std::string>& link_files() const {
+    return _cuda_kernel->link_files();
+  }
+
+  const std::vector<std::string>& link_paths() const {
+    return _cuda_kernel->link_paths();
+  }
 };
 
 class KernelLauncher {
@@ -3413,10 +3492,10 @@ class KernelLauncher {
    *    as code-strings. This parameter is optional and is only used to print
    *    out the function signature.
    */
-  CUresult launch(vector<void*> arg_ptrs = {},
-                  vector<string> arg_types = {}) const {
+  CUresult launch(std::vector<void*> arg_ptrs = {},
+                  std::vector<std::string> arg_types = {}) const {
 #if JITIFY_PRINT_LAUNCH
-    string arg_types_string =
+    std::string arg_types_string =
         (arg_types.empty() ? "..." : reflection::reflect_list(arg_types));
     std::cout << "Launching " << _kernel_inst->_cuda_kernel->function_name()
               << "<<<" << _grid << "," << _block << "," << _smem << ","
@@ -3433,30 +3512,31 @@ class KernelLauncher {
    */
   template <typename... ArgTypes>
   CUresult launch(ArgTypes... args) const {
-    return this->launch(vector<void*>({(void*)&args...}),
+    return this->launch(std::vector<void*>({(void*)&args...}),
                         {reflection::reflect<ArgTypes>()...});
   }
 };
 
-inline Kernel Program::kernel(string const& name,
-                              vector<string> const& options) const {
+inline Kernel Program::kernel(std::string const& name,
+                              std::vector<std::string> const& options) const {
   return Kernel(this, name, options);
 }
 
 inline KernelInstantiation Kernel::instantiate(
-    vector<string> const& template_args) const {
+    std::vector<std::string> const& template_args) const {
   return KernelInstantiation(*this, template_args);
 }
 
 template <typename... TemplateArgs>
 inline KernelInstantiation Kernel::instantiate() const {
   return this->instantiate(
-      vector<string>({reflection::reflect<TemplateArgs>()...}));
+      std::vector<std::string>({reflection::reflect<TemplateArgs>()...}));
 }
 
 template <typename... TemplateArgs>
 inline KernelInstantiation Kernel::instantiate(TemplateArgs... targs) const {
-  return this->instantiate(vector<string>({reflection::reflect(targs)...}));
+  return this->instantiate(
+      std::vector<std::string>({reflection::reflect(targs)...}));
 }
 
 inline KernelLauncher KernelInstantiation::configure(
