@@ -487,10 +487,10 @@ static const char* const thrust_program_source =
 TEST(JitifyTest, ThrustHeaders) {
   // Checks that basic Thrust headers can be compiled.
   jitify::JitCache kernel_cache;
-  auto program_v1 =
-      kernel_cache.program(thrust_program_source, {}, {"-I" CUDA_INC_DIR});
-  auto program_v2 = jitify::experimental::Program(thrust_program_source, {},
-                                                  {"-I" CUDA_INC_DIR});
+  auto program_v1 = kernel_cache.program(thrust_program_source, {},
+                                         {"-I" CUDA_INC_DIR, "-std=c++98"});
+  auto program_v2 = jitify::experimental::Program(
+      thrust_program_source, {}, {"-I" CUDA_INC_DIR, "-std=c++98"});
 }
 
 static const char* const cub_program_source =

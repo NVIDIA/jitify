@@ -1896,6 +1896,7 @@ inline void add_options_from_env(std::vector<std::string>& options) {
 
 inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   for (int i = 0; i < (int)options.size(); ++i) {
+    // Note that this will also match the middle of "--gpu-architecture".
     if (options[i].find("-arch") != std::string::npos) {
       // Arch already specified in options
       return;
@@ -1947,6 +1948,23 @@ inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
   std::stringstream ss;
   ss << cc;
   options.push_back("-arch=compute_" + ss.str());
+}
+
+inline void detect_and_add_cxx11_flag(std::vector<std::string>& options) {
+  // Reverse loop so we can erase on the fly.
+  for (int i = (int)options.size() - 1; i >= 0; --i) {
+    if (options[i].find("-std=c++98") != std::string::npos) {
+      // NVRTC doesn't support specifying c++98 explicitly, so we remove it.
+      options.erase(options.begin() + i);
+      return;
+    } else if (options[i].find("-std") != std::string::npos) {
+      // Some other standard was explicitly specified, don't change anything.
+      return;
+    }
+  }
+  // Jitify must be compiled with C++11 support, so we default to enabling it
+  // for the JIT-compiled code too.
+  options.push_back("-std=c++11");
 }
 
 inline void split_compiler_and_linker_options(
@@ -2129,6 +2147,7 @@ inline void load_program(std::string const& cuda_source,
   // for arch-dependent compilation, e.g., some intrinsics are only
   // present for specific architectures.
   detail::detect_and_add_cuda_arch(compiler_options);
+  detail::detect_and_add_cxx11_flag(compiler_options);
 
   // Iteratively try to compile the sources, and use the resulting errors to
   // identify missing headers.
@@ -2782,6 +2801,7 @@ Kernel_impl::Kernel_impl(Program_impl const& program, std::string name,
   _options.insert(_options.end(), _program.options().begin(),
                   _program.options().end());
   detail::detect_and_add_cuda_arch(_options);
+  detail::detect_and_add_cxx11_flag(_options);
   std::string options_string = reflection::reflect_list(_options);
   using detail::hash_combine;
   using detail::hash_larson64;
@@ -3356,6 +3376,7 @@ class KernelInstantiation {
     options.insert(options.begin(), kernel._options.begin(),
                    kernel._options.end());
     detail::detect_and_add_cuda_arch(options);
+    detail::detect_and_add_cxx11_flag(options);
 
     std::string log, ptx, mangled_instantiation;
     std::vector<std::string> linker_files, linker_paths;
