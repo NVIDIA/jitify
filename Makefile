@@ -1,5 +1,4 @@
 
-GXX     ?= g++
 DOXYGEN ?= doxygen
 CXXFLAGS ?= -O3 -Wall -g -fmessage-length=80
 
@@ -33,14 +32,16 @@ HEADERS = jitify.hpp \
           example_headers/my_header1.cuh.jit \
           example_headers/my_header2.cuh
 
+all: jitify_example
+
 jitify_example: jitify_example.cpp $(HEADERS)
-	$(GXX) -o $@ $< $(CXXFLAGS) $(INC) $(LIB)
+	$(CXX) -o $@ $< $(CXXFLAGS) $(INC) $(LIB)
 
 %.jit: % stringify
 	./stringify $< > $@
 
 stringify: stringify.cpp
-	$(GXX) -o $@ $< -O3 -Wall
+	$(CXX) -o $@ $< -O3 -Wall
 
 get-deps:
 	sudo apt-get update
@@ -49,14 +50,14 @@ get-deps:
 .PHONY: get-deps
 
 GTEST_DIR = googletest
-GTEST_LIB = $(GTEST_DIR)/build/googlemock/gtest/libgtest.a
-$(GTEST_LIB):
+GTEST_STATIC_LIB = $(GTEST_DIR)/build/googlemock/gtest/libgtest.a
+$(GTEST_STATIC_LIB):
 	rm -rf $(GTEST_DIR)
 	git clone https://github.com/google/googletest.git $(GTEST_DIR)
 	cd $(GTEST_DIR) && git checkout release-1.8.1 && rm -rf build && mkdir build && cd build && cmake .. && make -j8
 
-INC += -I$(GTEST_DIR)/googletest/include
-LIB += -L$(GTEST_DIR)/build/googlemock/gtest -lgtest -lgtest_main -pthread
+GTEST_INC = -I$(GTEST_DIR)/googletest/include
+GTEST_LIB = -L$(GTEST_DIR)/build/googlemock/gtest -lgtest -lgtest_main -pthread
 
 # Note that this cub dir is hard-coded in the tests too, to be looked up at runtime.
 CUB_DIR = /tmp/cub
@@ -66,10 +67,10 @@ $(CUB_HEADER):
 	git clone https://github.com/NVlabs/cub.git $(CUB_DIR)
 	cd $(CUB_DIR) && git checkout v1.8.0
 
-INC += -I$(CUB_DIR)
+CUB_INC = -I$(CUB_DIR)
 
-jitify_test: jitify_test.cpp $(HEADERS) $(GTEST_LIB) $(CUB_HEADER)
-	$(CXX) -o $@ $< -std=c++11 -O3 -Wall $(INC) $(LIB)
+jitify_test: jitify_test.cpp $(HEADERS) $(GTEST_STATIC_LIB) $(CUB_HEADER)
+	$(CXX) -o $@ $< -std=c++11 -O3 -Wall $(INC) $(GTEST_INC) $(CUB_INC) $(LIB) $(GTEST_LIB)
 
 test: jitify_test
 	./jitify_test
