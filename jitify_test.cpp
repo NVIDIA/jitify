@@ -43,9 +43,6 @@ JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 
 #include <iostream>
 
-#define CUDA_INC_DIR "/usr/local/cuda/include"
-#define CUB_DIR "/tmp/cub"  // This must match the path in the Makefile.
-
 #define CHECK_CUDA(call)                                                  \
   do {                                                                    \
     CUresult status = call;                                               \

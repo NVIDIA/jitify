@@ -5,6 +5,7 @@ CXXFLAGS ?= -O3 -Wall -g -fmessage-length=80
 CXX11 ?= 1
 
 CUDA_DIR ?= /usr/local/cuda
+CUDA_INC_DIR ?= $(CUDA_DIR)/include
 
 CXXFLAGS += -pthread
 
@@ -25,7 +26,7 @@ else ifeq ($(UNAME_S),Darwin)
 	CUDA_LIB_DIR = $(CUDA_DIR)/lib
 endif
 
-INC += -I$(CUDA_DIR)/include
+INC += -I$(CUDA_INC_DIR)
 LIB += -ldl -L$(CUDA_LIB_DIR) -lcuda -lcudart -lnvrtc
 
 HEADERS = jitify.hpp \
@@ -59,8 +60,7 @@ $(GTEST_STATIC_LIB):
 GTEST_INC = -I$(GTEST_DIR)/googletest/include
 GTEST_LIB = -L$(GTEST_DIR)/build/googlemock/gtest -lgtest -lgtest_main -pthread
 
-# Note that this cub dir is hard-coded in the tests too, to be looked up at runtime.
-CUB_DIR = /tmp/cub
+CUB_DIR ?= /tmp/cub
 CUB_HEADER = $(CUB_DIR)/cub/cub.cuh
 $(CUB_HEADER):
 	rm -rf $(CUB_DIR)
@@ -68,9 +68,10 @@ $(CUB_HEADER):
 	cd $(CUB_DIR) && git checkout v1.8.0
 
 CUB_INC = -I$(CUB_DIR)
+JITIFY_TEST_DEFINES = -DCUDA_INC_DIR="\"$(CUDA_INC_DIR)\"" -DCUB_DIR="\"$(CUB_DIR)\""
 
 jitify_test: jitify_test.cpp $(HEADERS) $(GTEST_STATIC_LIB) $(CUB_HEADER)
-	$(CXX) -o $@ $< -std=c++11 -O3 -Wall $(INC) $(GTEST_INC) $(CUB_INC) $(LIB) $(GTEST_LIB)
+	$(CXX) -o $@ $< -std=c++11 -O3 -Wall $(JITIFY_TEST_DEFINES) $(INC) $(GTEST_INC) $(CUB_INC) $(LIB) $(GTEST_LIB)
 
 test: jitify_test
 	./jitify_test
