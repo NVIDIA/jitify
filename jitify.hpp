@@ -1813,6 +1813,36 @@ static const char* jitsafe_header_algorithm = R"(
     #endif
  )";
 
+static const char* jitsafe_header_time_h = R"(
+    #pragma once
+    #define NULL 0
+    #define CLOCKS_PER_SEC 1000000
+    namespace __jitify_time_ns {
+    typedef unsigned long size_t;
+    typedef long clock_t;
+    typedef long time_t;
+    struct tm {
+      int tm_sec;
+      int tm_min;
+      int tm_hour;
+      int tm_mday;
+      int tm_mon;
+      int tm_year;
+      int tm_wday;
+      int tm_yday;
+      int tm_isdst;
+    };
+    #if __cplusplus >= 201703L
+    struct timespec {
+      time_t tv_sec;
+      long tv_nsec;
+    };
+    #endif
+    }  // namespace __jitify_time_ns
+    namespace std { using namespace __jitify_time_ns; }
+    using namespace __jitify_time_ns;
+ )";
+
 static const char* jitsafe_headers[] = {
     jitsafe_header_preinclude_h, jitsafe_header_float_h,
     jitsafe_header_float_h,      jitsafe_header_limits_h,
@@ -1829,7 +1859,8 @@ static const char* jitsafe_headers[] = {
     jitsafe_header_istream,      jitsafe_header_sstream,
     jitsafe_header_vector,       jitsafe_header_string,
     jitsafe_header_stdexcept,    jitsafe_header_mutex,
-    jitsafe_header_algorithm};
+    jitsafe_header_algorithm,    jitsafe_header_time_h,
+    jitsafe_header_time_h};
 static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "float.h",
                                              "cfloat",
@@ -1860,7 +1891,9 @@ static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
                                              "string",
                                              "stdexcept",
                                              "mutex",
-                                             "algorithm"};
+                                             "algorithm",
+                                             "time.h",
+                                             "ctime"};
 
 template <class T, size_t N>
 size_t array_size(T (&)[N]) {
