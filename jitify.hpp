@@ -136,6 +136,7 @@
 #define JITIFY_PRINT_PTX 1
 #define JITIFY_PRINT_LINKER_LOG 1
 #define JITIFY_PRINT_LAUNCH 1
+#define JITIFY_PRINT_HEADER_PATHS 1
 #endif
 
 #define JITIFY_FORCE_UNDEFINED_SYMBOL(x) void* x##_forced = (void*)&x
@@ -404,6 +405,17 @@ inline bool extract_include_info_from_compile_error(std::string log,
   return true;
 }
 
+inline bool is_include_directive_with_quotes(const std::string& source, int line_num) {
+  // TODO: Check each find() for failure.
+  size_t beg = 0;
+  for (int i = 1; i < line_num; ++i) {
+    beg = source.find("\n", beg) + 1;
+  }
+  beg = source.find("include", beg) + 7;
+  beg = source.find_first_of("\"<", beg);
+  return source[beg] == '"';
+}
+
 inline std::string comment_out_code_line(int line_num, std::string source) {
   size_t beg = 0;
   for (int i = 1; i < line_num; ++i) {
@@ -467,12 +479,15 @@ inline std::vector<std::string> split_string(std::string str,
   return results;
 }
 
+static const std::map<std::string, std::string>& get_jitsafe_headers_map();
+
 inline bool load_source(
     std::string filename, std::map<std::string, std::string>& sources,
     std::string current_dir = "",
     std::vector<std::string> include_paths = std::vector<std::string>(),
     file_callback_type file_callback = 0,
-    std::map<std::string, std::string>* fullpaths = nullptr) {
+    std::map<std::string, std::string>* fullpaths = nullptr,
+    bool search_current_dir = true) {
   std::istream* source_stream = 0;
   std::stringstream string_stream;
   std::ifstream file_stream;
@@ -501,23 +516,38 @@ inline bool load_source(
         string_stream << source;
         source_stream = &string_stream;
       } catch (std::runtime_error) {
-        // Finally, try loading from filesystem
-        file_stream.open(fullpath.c_str());
-        if (!file_stream) {
-          bool found_file = false;
+        // Try loading from filesystem
+        bool found_file = false;
+        if (search_current_dir) {
+          file_stream.open(fullpath.c_str());
+          if (file_stream) {
+            source_stream = &file_stream;
+            found_file = true;
+          }
+        }
+        // Search include directories
+        if (!found_file) {
           for (int i = 0; i < (int)include_paths.size(); ++i) {
             fullpath = path_join(include_paths[i], filename);
             file_stream.open(fullpath.c_str());
             if (file_stream) {
+              source_stream = &file_stream;
               found_file = true;
               break;
             }
           }
           if (!found_file) {
-            return false;
+            // Try loading from builtin headers
+            fullpath = path_join("__jitify_builtin", filename);
+            auto it = get_jitsafe_headers_map().find(filename);
+            if (it != get_jitsafe_headers_map().end()) {
+              string_stream << it->second;
+              source_stream = &string_stream;
+            } else {
+              return false;
+            }
           }
         }
-        source_stream = &file_stream;
       }
     }
     if (fullpaths) {
@@ -1843,63 +1873,58 @@ static const char* jitsafe_header_time_h = R"(
     using namespace __jitify_time_ns;
  )";
 
-static const char* jitsafe_headers[] = {
-    jitsafe_header_preinclude_h, jitsafe_header_float_h,
-    jitsafe_header_float_h,      jitsafe_header_limits_h,
-    jitsafe_header_limits_h,     jitsafe_header_stdint_h,
-    jitsafe_header_stdint_h,     jitsafe_header_stddef_h,
-    jitsafe_header_stddef_h,     jitsafe_header_stdlib_h,
-    jitsafe_header_stdlib_h,     jitsafe_header_stdio_h,
-    jitsafe_header_stdio_h,      jitsafe_header_string_h,
-    jitsafe_header_cstring,      jitsafe_header_iterator,
-    jitsafe_header_limits,       jitsafe_header_type_traits,
-    jitsafe_header_utility,      jitsafe_header_math,
-    jitsafe_header_math,         jitsafe_header_complex,
-    jitsafe_header_iostream,     jitsafe_header_ostream,
-    jitsafe_header_istream,      jitsafe_header_sstream,
-    jitsafe_header_vector,       jitsafe_header_string,
-    jitsafe_header_stdexcept,    jitsafe_header_mutex,
-    jitsafe_header_algorithm,    jitsafe_header_time_h,
-    jitsafe_header_time_h};
-static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
-                                             "float.h",
-                                             "cfloat",
-                                             "limits.h",
-                                             "climits",
-                                             "stdint.h",
-                                             "cstdint",
-                                             "stddef.h",
-                                             "cstddef",
-                                             "stdlib.h",
-                                             "cstdlib",
-                                             "stdio.h",
-                                             "cstdio",
-                                             "string.h",
-                                             "cstring",
-                                             "iterator",
-                                             "limits",
-                                             "type_traits",
-                                             "utility",
-                                             "math",
-                                             "cmath",
-                                             "complex",
-                                             "iostream",
-                                             "ostream",
-                                             "istream",
-                                             "sstream",
-                                             "vector",
-                                             "string",
-                                             "stdexcept",
-                                             "mutex",
-                                             "algorithm",
-                                             "time.h",
-                                             "ctime"};
+// WAR: These need to be pre-included as a workaround for NVRTC implicitly using
+// /usr/include as an include path. The other built-in headers will be included
+// lazily as needed.
+static const char* preinclude_jitsafe_header_names[] = {
+    "limits.h", "stdint.h", "stdlib.h", "stdio.h", "string.h", "time.h",
+};
 
 template <class T, size_t N>
 size_t array_size(T (&)[N]) {
   return N;
 }
-const int jitsafe_headers_count = array_size(jitsafe_headers);
+const int preinclude_jitsafe_headers_count =
+    array_size(preinclude_jitsafe_header_names);
+
+static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
+  static const std::map<std::string, std::string> jitsafe_headers_map = {
+      {"jitify_preinclude.h", jitsafe_header_preinclude_h},
+      {"float.h", jitsafe_header_float_h},
+      {"cfloat", jitsafe_header_float_h},
+      {"limits.h", jitsafe_header_limits_h},
+      {"climits", jitsafe_header_limits_h},
+      {"stdint.h", jitsafe_header_stdint_h},
+      {"cstdint", jitsafe_header_stdint_h},
+      {"stddef.h", jitsafe_header_stddef_h},
+      {"cstddef", jitsafe_header_stddef_h},
+      {"stdlib.h", jitsafe_header_stdlib_h},
+      {"cstdlib", jitsafe_header_stdlib_h},
+      {"stdio.h", jitsafe_header_stdio_h},
+      {"cstdio", jitsafe_header_stdio_h},
+      {"string.h", jitsafe_header_string_h},
+      {"cstring", jitsafe_header_string_h},
+      {"iterator", jitsafe_header_iterator},
+      {"limits", jitsafe_header_limits},
+      {"type_traits", jitsafe_header_type_traits},
+      {"utility", jitsafe_header_utility},
+      {"math", jitsafe_header_math},
+      {"cmath", jitsafe_header_math},
+      {"complex", jitsafe_header_complex},
+      {"iostream", jitsafe_header_iostream},
+      {"ostream", jitsafe_header_ostream},
+      {"istream", jitsafe_header_istream},
+      {"sstream", jitsafe_header_sstream},
+      {"vector", jitsafe_header_vector},
+      {"string", jitsafe_header_string},
+      {"stdexcept", jitsafe_header_stdexcept},
+      {"mutex", jitsafe_header_mutex},
+      {"algorithm", jitsafe_header_algorithm},
+      {"time.h", jitsafe_header_time_h},
+      {"ctime", jitsafe_header_time_h},
+  };
+  return jitsafe_headers_map;
+}
 
 inline void add_options_from_env(std::vector<std::string>& options) {
   // Add options from environment variable
@@ -2202,14 +2227,28 @@ inline void load_program(std::string const& cuda_source,
       throw std::runtime_error("Runtime compilation failed");
     }
 
+    bool is_included_with_quotes = false;
+    if (program_sources->count(include_parent)) {
+      const std::string& parent_source = (*program_sources)[include_parent];
+      is_included_with_quotes =
+          is_include_directive_with_quotes(parent_source, line_num);
+    }
+
     // Try to load the new header
     // Note: This fullpath lookup is needed because the compiler error
     // messages have the include name of the header instead of its full path.
     std::string include_parent_fullpath = header_fullpaths[include_parent];
     std::string include_path = detail::path_base(include_parent_fullpath);
-    if (!detail::load_source(include_name, *program_sources, include_path,
-                             *include_paths, file_callback,
-                             &header_fullpaths)) {
+    if (detail::load_source(include_name, *program_sources, include_path,
+                            *include_paths, file_callback, &header_fullpaths,
+                            is_included_with_quotes)) {
+#if JITIFY_PRINT_HEADER_PATHS
+      std::cout << "Found #include " << include_name << " from "
+                << include_parent << ":" << line_num << " ["
+                << include_parent_fullpath << "]"
+                << " at:\n  " << header_fullpaths[include_name] << std::endl;
+#endif
+    } else {  // Failed to find header file.
       // Comment-out the include line and print a warning
       if (!program_sources->count(include_parent)) {
         // ***TODO: Unless there's another mechanism (e.g., potentially
@@ -2858,10 +2897,11 @@ Program_impl::Program_impl(JitCache_impl& cache, std::string source,
     _hash = hash_combine(_hash, hash_larson64(headers[i].c_str()));
   }
   _hash = hash_combine(_hash, (uint64_t)file_callback);
-  // Add built-in JIT-safe headers
-  for (int i = 0; i < detail::jitsafe_headers_count; ++i) {
-    const char* hdr_name = detail::jitsafe_header_names[i];
-    const char* hdr_source = detail::jitsafe_headers[i];
+  // Add pre-include built-in JIT-safe headers
+  for (int i = 0; i < detail::preinclude_jitsafe_headers_count; ++i) {
+    const char* hdr_name = detail::preinclude_jitsafe_header_names[i];
+    const std::string& hdr_source =
+        detail::get_jitsafe_headers_map().at(hdr_name);
     headers.push_back(std::string(hdr_name) + "\n" + hdr_source);
   }
   // Merge options from parent
@@ -3277,11 +3317,12 @@ class Program {
           std::vector<std::string> const& given_headers = {},
           std::vector<std::string> const& given_options = {},
           file_callback_type file_callback = nullptr) {
-    // Add built-in JIT-safe headers
+    // Add pre-include built-in JIT-safe headers
     std::vector<std::string> headers = given_headers;
-    for (int i = 0; i < detail::jitsafe_headers_count; ++i) {
-      const char* hdr_name = detail::jitsafe_header_names[i];
-      const char* hdr_source = detail::jitsafe_headers[i];
+    for (int i = 0; i < detail::preinclude_jitsafe_headers_count; ++i) {
+      const char* hdr_name = detail::preinclude_jitsafe_header_names[i];
+      const std::string& hdr_source =
+          detail::get_jitsafe_headers_map().at(hdr_name);
       headers.push_back(std::string(hdr_name) + "\n" + hdr_source);
     }
 
