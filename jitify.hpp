@@ -440,7 +440,8 @@ inline bool extract_include_info_from_compile_error(std::string log,
   return true;
 }
 
-inline bool is_include_directive_with_quotes(const std::string& source, int line_num) {
+inline bool is_include_directive_with_quotes(const std::string& source,
+                                             int line_num) {
   // TODO: Check each find() for failure.
   size_t beg = 0;
   for (int i = 1; i < line_num; ++i) {
