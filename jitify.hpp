@@ -2137,7 +2137,7 @@ inline void load_program(std::string const& cuda_source,
     std::string const& opt = *iter;
     if (opt.substr(0, 2) == "-I") {
       include_paths->push_back(opt.substr(2));
-      program_options->erase(iter);
+      iter = program_options->erase(iter);
     } else {
       ++iter;
     }
