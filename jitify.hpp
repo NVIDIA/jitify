@@ -364,6 +364,41 @@ inline std::string path_join(std::string p1, std::string p2) {
   }
   return p1 + p2;
 }
+// Elides "/." and "/.." tokens from path.
+inline std::string path_simplify(const std::string& path) {
+  std::vector<std::string> dirs;
+  std::string cur_dir;
+  bool after_slash = false;
+  for (int i = 0; i < (int)path.size(); ++i) {
+    if (path[i] == '/') {
+      if (after_slash) continue;  // Ignore repeat slashes
+      after_slash = true;
+      if (cur_dir == ".." && !dirs.empty() && dirs.back() != "..") {
+        if (dirs.size() == 1 && dirs.front().empty()) {
+          throw std::runtime_error(
+              "Invalid path: back-traversals exceed depth of absolute path");
+        }
+        dirs.pop_back();
+      } else if (cur_dir != ".") {  // Ignore /./
+        dirs.push_back(cur_dir);
+      }
+      cur_dir.clear();
+    } else {
+      after_slash = false;
+      cur_dir.push_back(path[i]);
+    }
+  }
+  if (!after_slash) {
+    dirs.push_back(cur_dir);
+  }
+  std::stringstream ss;
+  for (int i = 0; i < (int)dirs.size() - 1; ++i) {
+    ss << dirs[i] << "/";
+  }
+  if (!dirs.empty()) ss << dirs.back();
+  if (after_slash) ss << "/";
+  return ss.str();
+}
 inline unsigned long long hash_larson64(const char* s,
                                         unsigned long long seed = 0) {
   unsigned long long hash = seed;
@@ -552,7 +587,7 @@ inline bool load_source(
     }
     if (fullpaths) {
       // Record the full file path corresponding to this include name.
-      (*fullpaths)[filename] = fullpath;
+      (*fullpaths)[filename] = path_simplify(fullpath);
     }
   }
   sources[filename] = std::string();
