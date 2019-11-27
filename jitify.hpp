@@ -1913,7 +1913,13 @@ static const char* jitsafe_header_time_h = R"(
 // /usr/include as an include path. The other built-in headers will be included
 // lazily as needed.
 static const char* preinclude_jitsafe_header_names[] = {
-    "limits.h", "stdint.h", "stdlib.h", "stdio.h", "string.h", "time.h",
+    "jitify_preinclude.h",
+    "limits.h",
+    "stdint.h",
+    "stdlib.h",
+    "stdio.h",
+    "string.h",
+    "time.h",
 };
 
 template <class T, size_t N>
@@ -1939,7 +1945,7 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"stdio.h", jitsafe_header_stdio_h},
       {"cstdio", jitsafe_header_stdio_h},
       {"string.h", jitsafe_header_string_h},
-      {"cstring", jitsafe_header_string_h},
+      {"cstring", jitsafe_header_cstring},
       {"iterator", jitsafe_header_iterator},
       {"limits", jitsafe_header_limits},
       {"type_traits", jitsafe_header_type_traits},
