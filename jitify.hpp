@@ -1304,7 +1304,7 @@ static const char* jitsafe_header_limits =
     "#pragma once\n"
     "#include <climits>\n"
     "\n"
-    "namespace __jitify_limits_ns {\n"
+    "namespace std {\n"
     "// TODO: Floating-point limits\n"
     "namespace __jitify_detail {\n"
     "template<class T, T Min, T Max, int Digits=-1>\n"
@@ -1366,9 +1366,7 @@ static const char* jitsafe_header_limits =
     "{};\n"
     "//template<typename T> struct numeric_limits { static const bool "
     "is_signed = ((T)(-1)<0); };\n"
-    "} // namespace __jitify_limits_ns\n"
-    "namespace std { using namespace __jitify_limits_ns; }\n"
-    "using namespace __jitify_limits_ns;\n";
+    "} // namespace std\n";
 
 // TODO: This is highly incomplete
 static const char* jitsafe_header_type_traits = R"(
