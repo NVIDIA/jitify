@@ -153,10 +153,10 @@ bool test_kernels() {
   // Note: The name is specified first, followed by a newline, then the code
   const char* program1 =
       "my_program1\n"
-      "#include <example_headers/my_header1.cuh>\n"
-      "#include <example_headers/my_header2.cuh>\n"
-      "#include <example_headers/my_header3.cuh>\n"
-      "#include <example_headers/my_header4.cuh>\n"
+      "#include \"example_headers/my_header1.cuh\"\n"
+      "#include \"example_headers/my_header2.cuh\"\n"
+      "#include \"example_headers/my_header3.cuh\"\n"
+      "#include \"example_headers/my_header4.cuh\"\n"
       "\n"
       "__global__\n"
       "void my_kernel1(float const* indata, float* outdata) {\n"
