@@ -32,6 +32,7 @@
 #define JITIFY_PRINT_PTX 1
 #define JITIFY_PRINT_LINKER_LOG 1
 #define JITIFY_PRINT_LAUNCH 1
+#define JITIFY_PRINT_HEADER_PATHS 1
 #include "jitify.hpp"
 
 #include "example_headers/my_header1.cuh.jit"
@@ -153,10 +154,10 @@ TEST(JitifyTest, Simple_experimental) {
 
 static const char* const multiple_kernels_program_source =
     "my_program1\n"
-    "#include <example_headers/my_header1.cuh>\n"
-    "#include <example_headers/my_header2.cuh>\n"
-    "#include <example_headers/my_header3.cuh>\n"
-    "#include <example_headers/my_header4.cuh>\n"
+    "#include \"example_headers/my_header1.cuh\"\n"
+    "#include \"example_headers/my_header2.cuh\"\n"
+    "#include \"example_headers/my_header3.cuh\"\n"
+    "#include \"example_headers/my_header4.cuh\"\n"
     "\n"
     "__global__\n"
     "void my_kernel1(float const* indata, float* outdata) {\n"

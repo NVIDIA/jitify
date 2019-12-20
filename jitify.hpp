@@ -136,6 +136,7 @@
 #define JITIFY_PRINT_PTX 1
 #define JITIFY_PRINT_LINKER_LOG 1
 #define JITIFY_PRINT_LAUNCH 1
+#define JITIFY_PRINT_HEADER_PATHS 1
 #endif
 
 #define JITIFY_FORCE_UNDEFINED_SYMBOL(x) void* x##_forced = (void*)&x
@@ -363,6 +364,41 @@ inline std::string path_join(std::string p1, std::string p2) {
   }
   return p1 + p2;
 }
+// Elides "/." and "/.." tokens from path.
+inline std::string path_simplify(const std::string& path) {
+  std::vector<std::string> dirs;
+  std::string cur_dir;
+  bool after_slash = false;
+  for (int i = 0; i < (int)path.size(); ++i) {
+    if (path[i] == '/') {
+      if (after_slash) continue;  // Ignore repeat slashes
+      after_slash = true;
+      if (cur_dir == ".." && !dirs.empty() && dirs.back() != "..") {
+        if (dirs.size() == 1 && dirs.front().empty()) {
+          throw std::runtime_error(
+              "Invalid path: back-traversals exceed depth of absolute path");
+        }
+        dirs.pop_back();
+      } else if (cur_dir != ".") {  // Ignore /./
+        dirs.push_back(cur_dir);
+      }
+      cur_dir.clear();
+    } else {
+      after_slash = false;
+      cur_dir.push_back(path[i]);
+    }
+  }
+  if (!after_slash) {
+    dirs.push_back(cur_dir);
+  }
+  std::stringstream ss;
+  for (int i = 0; i < (int)dirs.size() - 1; ++i) {
+    ss << dirs[i] << "/";
+  }
+  if (!dirs.empty()) ss << dirs.back();
+  if (after_slash) ss << "/";
+  return ss.str();
+}
 inline unsigned long long hash_larson64(const char* s,
                                         unsigned long long seed = 0) {
   unsigned long long hash = seed;
@@ -402,6 +438,18 @@ inline bool extract_include_info_from_compile_error(std::string log,
   line_num = atoi(
       log.substr(split + 1, log.find(")", split + 1) - (split + 1)).c_str());
   return true;
+}
+
+inline bool is_include_directive_with_quotes(const std::string& source,
+                                             int line_num) {
+  // TODO: Check each find() for failure.
+  size_t beg = 0;
+  for (int i = 1; i < line_num; ++i) {
+    beg = source.find("\n", beg) + 1;
+  }
+  beg = source.find("include", beg) + 7;
+  beg = source.find_first_of("\"<", beg);
+  return source[beg] == '"';
 }
 
 inline std::string comment_out_code_line(int line_num, std::string source) {
@@ -467,12 +515,15 @@ inline std::vector<std::string> split_string(std::string str,
   return results;
 }
 
+static const std::map<std::string, std::string>& get_jitsafe_headers_map();
+
 inline bool load_source(
     std::string filename, std::map<std::string, std::string>& sources,
     std::string current_dir = "",
     std::vector<std::string> include_paths = std::vector<std::string>(),
     file_callback_type file_callback = 0,
-    std::map<std::string, std::string>* fullpaths = nullptr) {
+    std::map<std::string, std::string>* fullpaths = nullptr,
+    bool search_current_dir = true) {
   std::istream* source_stream = 0;
   std::stringstream string_stream;
   std::ifstream file_stream;
@@ -501,28 +552,43 @@ inline bool load_source(
         string_stream << source;
         source_stream = &string_stream;
       } catch (std::runtime_error const&) {
-        // Finally, try loading from filesystem
-        file_stream.open(fullpath.c_str());
-        if (!file_stream) {
-          bool found_file = false;
+        // Try loading from filesystem
+        bool found_file = false;
+        if (search_current_dir) {
+          file_stream.open(fullpath.c_str());
+          if (file_stream) {
+            source_stream = &file_stream;
+            found_file = true;
+          }
+        }
+        // Search include directories
+        if (!found_file) {
           for (int i = 0; i < (int)include_paths.size(); ++i) {
             fullpath = path_join(include_paths[i], filename);
             file_stream.open(fullpath.c_str());
             if (file_stream) {
+              source_stream = &file_stream;
               found_file = true;
               break;
             }
           }
           if (!found_file) {
-            return false;
+            // Try loading from builtin headers
+            fullpath = path_join("__jitify_builtin", filename);
+            auto it = get_jitsafe_headers_map().find(filename);
+            if (it != get_jitsafe_headers_map().end()) {
+              string_stream << it->second;
+              source_stream = &string_stream;
+            } else {
+              return false;
+            }
           }
         }
-        source_stream = &file_stream;
       }
     }
     if (fullpaths) {
       // Record the full file path corresponding to this include name.
-      (*fullpaths)[filename] = fullpath;
+      (*fullpaths)[filename] = path_simplify(fullpath);
     }
   }
   sources[filename] = std::string();
@@ -1095,11 +1161,11 @@ class CUDAKernel {
 };
 
 static const char* jitsafe_header_preinclude_h = R"(
-// WAR for Thrust (which appears to have forgotten to include this in result_of_adaptable_function.h
-#include <type_traits>
+//// WAR for Thrust (which appears to have forgotten to include this in result_of_adaptable_function.h
+//#include <type_traits>
 
-// WAR for Thrust (which appear to have forgotten to include this in error_code.h)
-#include <string>
+//// WAR for Thrust (which appear to have forgotten to include this in error_code.h)
+//#include <string>
 
 // WAR for Thrust (which only supports gnuc, clang or msvc)
 #define __GNUC__ 4
@@ -1238,13 +1304,18 @@ static const char* jitsafe_header_limits =
     "#pragma once\n"
     "#include <climits>\n"
     "\n"
-    "namespace __jitify_limits_ns {\n"
+    "namespace std {\n"
     "// TODO: Floating-point limits\n"
     "namespace __jitify_detail {\n"
     "template<class T, T Min, T Max, int Digits=-1>\n"
     "struct IntegerLimits {\n"
     "	static inline __host__ __device__ T min() { return Min; }\n"
     "	static inline __host__ __device__ T max() { return Max; }\n"
+    "#if __cplusplus >= 201103L\n"
+    "	static constexpr inline __host__ __device__ T lowest() noexcept {\n"
+    "		return Min;\n"
+    "	}\n"
+    "#endif  // __cplusplus >= 201103L\n"
     "	enum {\n"
     "       is_specialized = true,\n"
     "		digits     = (Digits == -1) ? (int)(sizeof(T)*8 - (Min != 0)) "
@@ -1300,9 +1371,7 @@ static const char* jitsafe_header_limits =
     "{};\n"
     "//template<typename T> struct numeric_limits { static const bool "
     "is_signed = ((T)(-1)<0); };\n"
-    "} // namespace __jitify_limits_ns\n"
-    "namespace std { using namespace __jitify_limits_ns; }\n"
-    "using namespace __jitify_limits_ns;\n";
+    "} // namespace std\n";
 
 // TODO: This is highly incomplete
 static const char* jitsafe_header_type_traits = R"(
@@ -1506,6 +1575,25 @@ static const char* jitsafe_header_stddef_h =
     //"enum { NULL = 0 };\n"
     "typedef unsigned long size_t;\n"
     "typedef   signed long ptrdiff_t;\n"
+    "#if __cplusplus >= 201103L\n"
+    "typedef decltype(nullptr) nullptr_t;\n"
+    "#if defined(_MSC_VER)\n"
+    "  typedef double max_align_t;\n"
+    "#elif defined(__APPLE__)\n"
+    "  typedef long double max_align_t;\n"
+    "#else\n"
+    "  // Define max_align_t to match the GCC definition.\n"
+    "  typedef struct {\n"
+    "    long long __jitify_max_align_nonce1\n"
+    "        __attribute__((__aligned__(__alignof__(long long))));\n"
+    "    long double __jitify_max_align_nonce2\n"
+    "        __attribute__((__aligned__(__alignof__(long double))));\n"
+    "  } max_align_t;\n"
+    "#endif\n"
+    "#endif  // __cplusplus >= 201103L\n"
+    "#if __cplusplus >= 201703L\n"
+    "enum class byte : unsigned char {};\n"
+    "#endif  // __cplusplus >= 201703L\n"
     "} // namespace __jitify_stddef_ns\n"
     "namespace std { using namespace __jitify_stddef_ns; }\n"
     "using namespace __jitify_stddef_ns;\n";
@@ -1843,63 +1931,64 @@ static const char* jitsafe_header_time_h = R"(
     using namespace __jitify_time_ns;
  )";
 
-static const char* jitsafe_headers[] = {
-    jitsafe_header_preinclude_h, jitsafe_header_float_h,
-    jitsafe_header_float_h,      jitsafe_header_limits_h,
-    jitsafe_header_limits_h,     jitsafe_header_stdint_h,
-    jitsafe_header_stdint_h,     jitsafe_header_stddef_h,
-    jitsafe_header_stddef_h,     jitsafe_header_stdlib_h,
-    jitsafe_header_stdlib_h,     jitsafe_header_stdio_h,
-    jitsafe_header_stdio_h,      jitsafe_header_string_h,
-    jitsafe_header_cstring,      jitsafe_header_iterator,
-    jitsafe_header_limits,       jitsafe_header_type_traits,
-    jitsafe_header_utility,      jitsafe_header_math,
-    jitsafe_header_math,         jitsafe_header_complex,
-    jitsafe_header_iostream,     jitsafe_header_ostream,
-    jitsafe_header_istream,      jitsafe_header_sstream,
-    jitsafe_header_vector,       jitsafe_header_string,
-    jitsafe_header_stdexcept,    jitsafe_header_mutex,
-    jitsafe_header_algorithm,    jitsafe_header_time_h,
-    jitsafe_header_time_h};
-static const char* jitsafe_header_names[] = {"jitify_preinclude.h",
-                                             "float.h",
-                                             "cfloat",
-                                             "limits.h",
-                                             "climits",
-                                             "stdint.h",
-                                             "cstdint",
-                                             "stddef.h",
-                                             "cstddef",
-                                             "stdlib.h",
-                                             "cstdlib",
-                                             "stdio.h",
-                                             "cstdio",
-                                             "string.h",
-                                             "cstring",
-                                             "iterator",
-                                             "limits",
-                                             "type_traits",
-                                             "utility",
-                                             "math",
-                                             "cmath",
-                                             "complex",
-                                             "iostream",
-                                             "ostream",
-                                             "istream",
-                                             "sstream",
-                                             "vector",
-                                             "string",
-                                             "stdexcept",
-                                             "mutex",
-                                             "algorithm",
-                                             "time.h",
-                                             "ctime"};
+// WAR: These need to be pre-included as a workaround for NVRTC implicitly using
+// /usr/include as an include path. The other built-in headers will be included
+// lazily as needed.
+static const char* preinclude_jitsafe_header_names[] = {
+    "jitify_preinclude.h",
+    "limits.h",
+    "stdint.h",
+    "stdlib.h",
+    "stdio.h",
+    "string.h",
+    "time.h",
+};
 
 template <class T, size_t N>
 size_t array_size(T (&)[N]) {
   return N;
 }
-const int jitsafe_headers_count = array_size(jitsafe_headers);
+const int preinclude_jitsafe_headers_count =
+    array_size(preinclude_jitsafe_header_names);
+
+static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
+  static const std::map<std::string, std::string> jitsafe_headers_map = {
+      {"jitify_preinclude.h", jitsafe_header_preinclude_h},
+      {"float.h", jitsafe_header_float_h},
+      {"cfloat", jitsafe_header_float_h},
+      {"limits.h", jitsafe_header_limits_h},
+      {"climits", jitsafe_header_limits_h},
+      {"stdint.h", jitsafe_header_stdint_h},
+      {"cstdint", jitsafe_header_stdint_h},
+      {"stddef.h", jitsafe_header_stddef_h},
+      {"cstddef", jitsafe_header_stddef_h},
+      {"stdlib.h", jitsafe_header_stdlib_h},
+      {"cstdlib", jitsafe_header_stdlib_h},
+      {"stdio.h", jitsafe_header_stdio_h},
+      {"cstdio", jitsafe_header_stdio_h},
+      {"string.h", jitsafe_header_string_h},
+      {"cstring", jitsafe_header_cstring},
+      {"iterator", jitsafe_header_iterator},
+      {"limits", jitsafe_header_limits},
+      {"type_traits", jitsafe_header_type_traits},
+      {"utility", jitsafe_header_utility},
+      {"math", jitsafe_header_math},
+      {"cmath", jitsafe_header_math},
+      {"complex", jitsafe_header_complex},
+      {"iostream", jitsafe_header_iostream},
+      {"ostream", jitsafe_header_ostream},
+      {"istream", jitsafe_header_istream},
+      {"sstream", jitsafe_header_sstream},
+      {"vector", jitsafe_header_vector},
+      {"string", jitsafe_header_string},
+      {"stdexcept", jitsafe_header_stdexcept},
+      {"mutex", jitsafe_header_mutex},
+      {"algorithm", jitsafe_header_algorithm},
+      {"time.h", jitsafe_header_time_h},
+      {"ctime", jitsafe_header_time_h},
+  };
+  return jitsafe_headers_map;
+}
 
 inline void add_options_from_env(std::vector<std::string>& options) {
   // Add options from environment variable
@@ -2137,7 +2226,7 @@ inline void load_program(std::string const& cuda_source,
     std::string const& opt = *iter;
     if (opt.substr(0, 2) == "-I") {
       include_paths->push_back(opt.substr(2));
-      program_options->erase(iter);
+      iter = program_options->erase(iter);
     } else {
       ++iter;
     }
@@ -2202,14 +2291,28 @@ inline void load_program(std::string const& cuda_source,
       throw std::runtime_error("Runtime compilation failed");
     }
 
+    bool is_included_with_quotes = false;
+    if (program_sources->count(include_parent)) {
+      const std::string& parent_source = (*program_sources)[include_parent];
+      is_included_with_quotes =
+          is_include_directive_with_quotes(parent_source, line_num);
+    }
+
     // Try to load the new header
     // Note: This fullpath lookup is needed because the compiler error
     // messages have the include name of the header instead of its full path.
     std::string include_parent_fullpath = header_fullpaths[include_parent];
     std::string include_path = detail::path_base(include_parent_fullpath);
-    if (!detail::load_source(include_name, *program_sources, include_path,
-                             *include_paths, file_callback,
-                             &header_fullpaths)) {
+    if (detail::load_source(include_name, *program_sources, include_path,
+                            *include_paths, file_callback, &header_fullpaths,
+                            is_included_with_quotes)) {
+#if JITIFY_PRINT_HEADER_PATHS
+      std::cout << "Found #include " << include_name << " from "
+                << include_parent << ":" << line_num << " ["
+                << include_parent_fullpath << "]"
+                << " at:\n  " << header_fullpaths[include_name] << std::endl;
+#endif
+    } else {  // Failed to find header file.
       // Comment-out the include line and print a warning
       if (!program_sources->count(include_parent)) {
         // ***TODO: Unless there's another mechanism (e.g., potentially
@@ -2858,10 +2961,11 @@ Program_impl::Program_impl(JitCache_impl& cache, std::string source,
     _hash = hash_combine(_hash, hash_larson64(headers[i].c_str()));
   }
   _hash = hash_combine(_hash, (uint64_t)file_callback);
-  // Add built-in JIT-safe headers
-  for (int i = 0; i < detail::jitsafe_headers_count; ++i) {
-    const char* hdr_name = detail::jitsafe_header_names[i];
-    const char* hdr_source = detail::jitsafe_headers[i];
+  // Add pre-include built-in JIT-safe headers
+  for (int i = 0; i < detail::preinclude_jitsafe_headers_count; ++i) {
+    const char* hdr_name = detail::preinclude_jitsafe_header_names[i];
+    const std::string& hdr_source =
+        detail::get_jitsafe_headers_map().at(hdr_name);
     headers.push_back(std::string(hdr_name) + "\n" + hdr_source);
   }
   // Merge options from parent
@@ -3277,11 +3381,12 @@ class Program {
           std::vector<std::string> const& given_headers = {},
           std::vector<std::string> const& given_options = {},
           file_callback_type file_callback = nullptr) {
-    // Add built-in JIT-safe headers
+    // Add pre-include built-in JIT-safe headers
     std::vector<std::string> headers = given_headers;
-    for (int i = 0; i < detail::jitsafe_headers_count; ++i) {
-      const char* hdr_name = detail::jitsafe_header_names[i];
-      const char* hdr_source = detail::jitsafe_headers[i];
+    for (int i = 0; i < detail::preinclude_jitsafe_headers_count; ++i) {
+      const char* hdr_name = detail::preinclude_jitsafe_header_names[i];
+      const std::string& hdr_source =
+          detail::get_jitsafe_headers_map().at(hdr_name);
       headers.push_back(std::string(hdr_name) + "\n" + hdr_source);
     }
 
