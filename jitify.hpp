@@ -417,27 +417,34 @@ inline bool extract_include_info_from_compile_error(std::string log,
                                                     std::string& name,
                                                     std::string& parent,
                                                     int& line_num) {
-  static const std::string pattern = "cannot open source file \"";
-  size_t beg = log.find(pattern);
-  if (beg == std::string::npos) {
-    return false;
-  }
-  beg += pattern.size();
-  size_t end = log.find("\"", beg);
-  name = log.substr(beg, end - beg);
 
-  size_t line_beg = log.rfind("\n", beg);
-  if (line_beg == std::string::npos) {
-    line_beg = 0;
-  } else {
-    line_beg += 1;
+  static const std::vector<std::string> pattern = {"could not open source file \"",
+                                                   "cannot open source file \""};
+
+  for (auto &p : pattern) {
+    size_t beg = log.find(p);
+    if (beg != std::string::npos) {
+      beg += p.size();
+      size_t end = log.find("\"", beg);
+      name = log.substr(beg, end - beg);
+
+      size_t line_beg = log.rfind("\n", beg);
+      if (line_beg == std::string::npos) {
+        line_beg = 0;
+      } else {
+        line_beg += 1;
+      }
+
+      size_t split = log.find("(", line_beg);
+      parent = log.substr(line_beg, split - line_beg);
+      line_num = atoi(
+                      log.substr(split + 1, log.find(")", split + 1) - (split + 1)).c_str());
+
+      return true;
+    }
   }
 
-  size_t split = log.find("(", line_beg);
-  parent = log.substr(line_beg, split - line_beg);
-  line_num = atoi(
-      log.substr(split + 1, log.find(")", split + 1) - (split + 1)).c_str());
-  return true;
+  return false;
 }
 
 inline bool is_include_directive_with_quotes(const std::string& source,
