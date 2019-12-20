@@ -1510,6 +1510,33 @@ static const char* jitsafe_header_type_traits = R"(
     template< class T > using decay_t = typename decay<T>::type;
     #endif
 
+    template<class T, T v>
+    struct integral_constant {
+    static constexpr T value = v;
+    typedef T value_type;
+    typedef integral_constant type; // using injected-class-name
+    constexpr operator value_type() const noexcept { return value; }
+    #if __cplusplus >= 201402L
+    constexpr value_type operator()() const noexcept { return value; }
+    #endif
+    };
+
+    template<class T> struct is_lvalue_reference     { static constexpr bool value = false; };
+    template<class T> struct is_lvalue_reference<T&> { static constexpr bool value = true; };
+
+    template< class From, class To >
+    struct is_convertible {
+    static constexpr bool value = true;
+    };
+
+    template< class From, class To >
+    struct is_base_of {
+    static constexpr bool value = true;
+    };
+
+    template< class T> struct alignment_of;
+    template <size_t Len, size_t Align = 16 > struct aligned_storage;
+
     } // namespace __jtiify_type_traits_ns
     namespace std { using namespace __jitify_type_traits_ns; }
     using namespace __jitify_type_traits_ns;
@@ -1938,6 +1965,17 @@ static const char* jitsafe_header_time_h = R"(
     using namespace __jitify_time_ns;
  )";
 
+static const char* jitsafe_header_tuple = R"(
+    #pragma once
+    #if __cplusplus >= 201103L
+    namespace __jitify_tuple_ns {
+    template<class... Types > class tuple;
+    } // namespace __jitify_tuple_ns
+    namespace std { using namespace __jitify_tuple_ns; }
+    using namespace __jitify_tuple_ns;
+    #endif
+ )";
+
 // WAR: These need to be pre-included as a workaround for NVRTC implicitly using
 // /usr/include as an include path. The other built-in headers will be included
 // lazily as needed.
@@ -1993,6 +2031,7 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"algorithm", jitsafe_header_algorithm},
       {"time.h", jitsafe_header_time_h},
       {"ctime", jitsafe_header_time_h},
+      {"tuple", jitsafe_header_tuple},
   };
   return jitsafe_headers_map;
 }
