@@ -1976,6 +1976,10 @@ static const char* jitsafe_header_tuple = R"(
     #endif
  )";
 
+static const char* jitsafe_header_assert = R"(
+    #pragma once
+ )";
+
 // WAR: These need to be pre-included as a workaround for NVRTC implicitly using
 // /usr/include as an include path. The other built-in headers will be included
 // lazily as needed.
@@ -1987,6 +1991,7 @@ static const char* preinclude_jitsafe_header_names[] = {
     "stdio.h",
     "string.h",
     "time.h",
+    "assert.h"
 };
 
 template <class T, size_t N>
@@ -2032,6 +2037,8 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"time.h", jitsafe_header_time_h},
       {"ctime", jitsafe_header_time_h},
       {"tuple", jitsafe_header_tuple},
+      {"assert.h", jitsafe_header_assert},
+      {"cassert", jitsafe_header_assert}
   };
   return jitsafe_headers_map;
 }

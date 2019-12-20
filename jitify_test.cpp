@@ -607,3 +607,23 @@ TEST(JitifyTest, EnvVarOptions) {
                std::runtime_error);
   setenv("JITIFY_OPTIONS", "", true);
 }
+
+static const char* const assert_program_source = R"(
+  #include <cassert>
+  __global__ void my_assert_kernel() {
+  assert(0 == 1);
+  }
+  )";
+
+TEST(JitifyTest, AssertHeader) {
+  // Checks that cassert works as expected
+  jitify::JitCache kernel_cache;
+  auto program = kernel_cache.program(assert_program_source, {},
+                                      {"-I" CUDA_INC_DIR});
+  dim3 grid(1);
+  dim3 block(1);
+  CHECK_CUDA((program.kernel("my_assert_kernel")
+              .instantiate<>()
+              .configure(grid, block)
+              .launch()));
+}
