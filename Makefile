@@ -36,7 +36,7 @@ HEADERS = jitify.hpp \
 all: jitify_example
 
 jitify_example: jitify_example.cpp $(HEADERS)
-	$(CXX) -o $@ $< $(CXXFLAGS) $(INC) $(LIB)
+	$(CXX) -o $@ $< $(CXXFLAGS) -DCUDA_INC_DIR="\"$(CUDA_INC_DIR)\"" $(INC) $(LIB)
 
 %.jit: % stringify
 	./stringify $< > $@
