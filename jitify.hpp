@@ -551,7 +551,7 @@ inline bool load_source(
         source.assign(embedded.begin(fullpath), embedded.end(fullpath));
         string_stream << source;
         source_stream = &string_stream;
-      } catch (std::runtime_error) {
+      } catch (std::runtime_error const &) {
         // Try loading from filesystem
         bool found_file = false;
         if (search_current_dir) {
