@@ -113,6 +113,8 @@
 #include <stdexcept>
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #if JITIFY_THREAD_SAFE
 #include <mutex>
@@ -2108,6 +2110,87 @@ inline void split_compiler_and_linker_options(
   }
 }
 
+inline bool pop_remove_unused_globals_flag(std::vector<std::string>* options) {
+  auto it = std::remove_if(
+      options->begin(), options->end(), [](const std::string& opt) {
+        return opt.find("-remove-unused-globals") != std::string::npos;
+      });
+  if (it != options->end()) {
+    options->resize(it - options->begin());
+    return true;
+  }
+  return false;
+}
+
+inline std::string ptx_parse_decl_name(const std::string& line) {
+  size_t name_end = line.find_first_of("[;");
+  if (name_end == std::string::npos) {
+    throw std::runtime_error(
+        "Failed to parse .global declaration in PTX: expected a semicolon");
+  }
+  size_t name_start_minus1 = line.find_last_of(" \t", name_end);
+  if (name_start_minus1 == std::string::npos) {
+    throw std::runtime_error(
+        "Failed to parse .global declaration in PTX: expected whitespace");
+  }
+  size_t name_start = name_start_minus1 + 1;
+  std::string name = line.substr(name_start, name_end - name_start);
+  return name;
+}
+
+inline void ptx_remove_unused_globals(std::string* ptx) {
+  std::istringstream iss(*ptx);
+  std::vector<std::string> lines;
+  std::unordered_map<size_t, std::string> line_num_to_global_name;
+  std::unordered_set<std::string> name_set;
+  for (std::string line; std::getline(iss, line);) {
+    size_t line_num = lines.size();
+    lines.push_back(line);
+    auto terms = split_string(line);
+    if (terms.size() <= 1) continue;  // Ignore lines with no arguments
+    if (terms[0].substr(0, 2) == "//") continue;  // Ignore comment lines
+    if (terms[0].substr(0, 7) == ".global") {
+      line_num_to_global_name.emplace(line_num, ptx_parse_decl_name(line));
+      continue;
+    }
+    if (terms[0][0] == '.') continue;  // Ignore .version, .reg, .param etc.
+    // Note: The first term will always be an instruction name; starting at 1
+    // also allows unchecked inspection of the previous term.
+    for (int i = 1; i < (int)terms.size(); ++i) {
+      if (terms[i].substr(0, 2) == "//") break;  // Ignore comments
+      // Note: The characters '.' and '%' are not treated as delimiters.
+      const char* token_delims = " \t()[]{},;+-*/~&|^?:=!<>\"'\\";
+      for (auto token : split_string(terms[i], -1, token_delims)) {
+        if (  // Ignore non-names
+            !(std::isalpha(token[0]) || token[0] == '_') ||
+            token.find('.') != std::string::npos ||
+            // Ignore variable/parameter declarations
+            terms[i - 1][0] == '.' ||
+            // Ignore branch instructions
+            (token == "bra" && terms[i - 1][0] == '@') ||
+            // Ignore branch labels
+            (token.substr(0, 2) == "BB" &&
+             terms[i - 1].substr(0, 3) == "bra")) {
+          continue;
+        }
+        name_set.insert(token);
+      }
+    }
+  }
+  std::ostringstream oss;
+  for (size_t line_num = 0; line_num < lines.size(); ++line_num) {
+    auto it = line_num_to_global_name.find(line_num);
+    if (it != line_num_to_global_name.end()) {
+      const std::string& name = it->second;
+      if (!name_set.count(name)) {
+        continue;  // Remove unused .global declaration.
+      }
+    }
+    oss << lines[line_num] << '\n';
+  }
+  *ptx = oss.str();
+}
+
 inline nvrtcResult compile_kernel(std::string program_name,
                                   std::map<std::string, std::string> sources,
                                   std::vector<std::string> options,
@@ -2132,6 +2215,10 @@ inline nvrtcResult compile_kernel(std::string program_name,
     header_names_c.push_back(name.c_str());
     header_sources_c.push_back(code.c_str());
   }
+
+  // TODO: This WAR is expected to be unnecessary as of CUDA > 10.2.
+  bool should_remove_unused_globals =
+      detail::pop_remove_unused_globals_flag(&options);
 
   std::vector<const char*> options_c(options.size() + 2);
   options_c[0] = "--device-as-default-execution-space";
@@ -2189,6 +2276,9 @@ inline nvrtcResult compile_kernel(std::string program_name,
     std::vector<char> vptx(ptxsize);
     CHECK_NVRTC(nvrtcGetPTX(nvrtc_program, vptx.data()));
     ptx->assign(vptx.data(), ptxsize);
+    if (should_remove_unused_globals) {
+      detail::ptx_remove_unused_globals(ptx);
+    }
   }
 
   if (!instantiation.empty() && mangled_instantiation) {
