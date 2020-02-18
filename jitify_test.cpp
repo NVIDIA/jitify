@@ -328,9 +328,8 @@ TEST(JitifyTest, ConstantMemory) {
   dim3 grid(1);
   dim3 block(1);
   {  // test __constant__ look up in kernel string using diffrent namespaces
-    jitify::Program program =
-        kernel_cache.program(constmem_program_source, 0,
-                             {"--use_fast_math", "-I" CUDA_INC_DIR});
+    jitify::Program program = kernel_cache.program(
+        constmem_program_source, 0, {"--use_fast_math", "-I" CUDA_INC_DIR});
     auto instance = program.kernel("constant_test").instantiate();
     int inval[] = {2, 4, 8};
     CHECK_CUDA(
@@ -385,8 +384,7 @@ TEST(JitifyTest, ConstantMemory_experimental) {
   dim3 block(1);
   {  // test __constant__ look up in kernel string using different namespaces
     jitify::experimental::Program program_orig(
-        constmem_program_source, {},
-        {"--use_fast_math", "-I" CUDA_INC_DIR});
+        constmem_program_source, {}, {"--use_fast_math", "-I" CUDA_INC_DIR});
     auto program =
         jitify::experimental::Program::deserialize(program_orig.serialize());
     auto instance = jitify::experimental::KernelInstantiation::deserialize(
@@ -486,14 +484,14 @@ TEST(JitifyTest, ThrustHeaders) {
   // Checks that basic Thrust headers can be compiled.
   jitify::JitCache kernel_cache;
 #if CUDA_VERSION < 11000
-  const char *cppstd = "-std=c++98";
+  const char* cppstd = "-std=c++98";
 #else
-  const char *cppstd = "-std=c++11";
+  const char* cppstd = "-std=c++11";
 #endif
   auto program_v1 = kernel_cache.program(thrust_program_source, {},
                                          {"-I" CUDA_INC_DIR, cppstd});
-  auto program_v2 = jitify::experimental::Program(
-      thrust_program_source, {}, {"-I" CUDA_INC_DIR, cppstd});
+  auto program_v2 = jitify::experimental::Program(thrust_program_source, {},
+                                                  {"-I" CUDA_INC_DIR, cppstd});
 }
 
 static const char* const cub_program_source =
@@ -672,12 +670,12 @@ static const char* const assert_program_source = R"(
 TEST(JitifyTest, AssertHeader) {
   // Checks that cassert works as expected
   jitify::JitCache kernel_cache;
-  auto program = kernel_cache.program(assert_program_source, {},
-                                      {"-I" CUDA_INC_DIR});
+  auto program =
+      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
   dim3 grid(1);
   dim3 block(1);
   CHECK_CUDA((program.kernel("my_assert_kernel")
-              .instantiate<>()
-              .configure(grid, block)
-              .launch()));
+                  .instantiate<>()
+                  .configure(grid, block)
+                  .launch()));
 }
