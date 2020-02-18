@@ -597,6 +597,60 @@ TEST(JitifyTest, CubBlockPrimitives) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+static const char* const unused_globals_source =
+    "unused_globals_program\n"
+    "struct Foo { static const int value = 7; };\n"
+    "struct Bar { int a; double b; };\n"
+    "__device__ float used_scalar;\n"
+    "__device__ float used_array[2];\n"
+    "__device__ Bar used_struct;\n"
+    "__device__ float unused_scalar;\n"
+    "__device__ float unused_array[3];\n"
+    "__device__ Bar unused_struct;\n"
+    "__device__ float reg, ret, bra;\n"  // Tricky names
+    "__global__ void foo_kernel(int* data) {\n"
+    "  if (blockIdx.x != 0 || threadIdx.x != 0) return;\n"
+    "  used_scalar = 1.f;\n"
+    "  used_array[1] = 2.f;\n"
+    "  used_struct.b = 3.f;\n"
+    "  __syncthreads();\n"
+    "  *data += Foo::value + used_scalar + used_array[1] + used_struct.b;\n"
+    "}\n";
+
+TEST(JitifyTest, RemoveUnusedGlobals) {
+  cudaFree(0);
+  auto program_v2 = jitify::experimental::Program(
+      unused_globals_source, {},
+      // Note: Flag added twice to test handling of repeats.
+      {"-remove-unused-globals", "--remove-unused-globals"});
+  auto kernel_inst_v2 = program_v2.kernel("foo_kernel").instantiate();
+  std::string ptx = kernel_inst_v2.ptx();
+  EXPECT_TRUE(ptx.find(".global .align 4 .f32 used_scalar;") !=
+              std::string::npos);
+  // Note: PTX represents arrays and structs as .b8 instead of the actual type.
+  EXPECT_TRUE(ptx.find(".global .align 4 .b8 used_array[8];") !=
+              std::string::npos);
+  EXPECT_TRUE(ptx.find(".global .align 8 .b8 used_struct[16];") !=
+              std::string::npos);
+  EXPECT_FALSE(ptx.find("_ZN3Foo5valueE") != std::string::npos);
+  EXPECT_FALSE(ptx.find("unused_scalar;") != std::string::npos);
+  EXPECT_FALSE(ptx.find("unused_array;") != std::string::npos);
+  EXPECT_FALSE(ptx.find("unused_struct;") != std::string::npos);
+  EXPECT_FALSE(ptx.find(".global .align 4 .f32 reg;") != std::string::npos);
+  EXPECT_FALSE(ptx.find(".global .align 4 .f32 ret;") != std::string::npos);
+  EXPECT_FALSE(ptx.find(".global .align 4 .f32 bra;") != std::string::npos);
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+  int h_data = 3;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+  CHECK_CUDA(kernel_inst_v2.configure(1, 1).launch(d_data));
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 16);
+  CHECK_CUDART(cudaFree(d_data));
+}
+
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
