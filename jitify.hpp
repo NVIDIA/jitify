@@ -2698,6 +2698,13 @@ class KernelInstantiation {
   inline KernelInstantiation(Kernel const& kernel,
                              std::vector<std::string> const& template_args);
 
+  /*! Implicit conversion to the underlying CUfunction object.
+   *
+   * \note This allows use of CUDA APIs like
+   *   cuOccupancyMaxActiveBlocksPerMultiprocessor.
+   */
+  inline operator CUfunction() const { return _impl->cuda_kernel(); }
+
   /*! Configure the kernel launch.
    *
    *  \see configure
@@ -3616,6 +3623,13 @@ class KernelInstantiation {
                                               ptx.c_str(), linker_files,
                                               linker_paths));
   }
+
+  /*! Implicit conversion to the underlying CUfunction object.
+   *
+   * \note This allows use of CUDA APIs like
+   *   cuOccupancyMaxActiveBlocksPerMultiprocessor.
+   */
+  operator CUfunction() const { return *_cuda_kernel; }
 
   /*! Restore a serialized kernel instantiation.
    *
