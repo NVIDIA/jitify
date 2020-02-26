@@ -1859,6 +1859,11 @@ static const char* jitsafe_header_math =
     // Note: Global namespace already includes CUDA math funcs
     "//using namespace __jitify_math_ns;\n";
 
+static const char* jitsafe_header_memory_h = R"(
+    #pragma once
+    #include <string.h>
+ )";
+
 // TODO: incomplete
 static const char* jitsafe_header_mutex = R"(
     #pragma once
@@ -1939,6 +1944,8 @@ static const char* jitsafe_header_time_h = R"(
 static const char* preinclude_jitsafe_header_names[] = {
     "jitify_preinclude.h",
     "limits.h",
+    "math.h",
+    "memory.h",
     "stdint.h",
     "stdlib.h",
     "stdio.h",
@@ -1974,8 +1981,9 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"limits", jitsafe_header_limits},
       {"type_traits", jitsafe_header_type_traits},
       {"utility", jitsafe_header_utility},
-      {"math", jitsafe_header_math},
+      {"math.h", jitsafe_header_math},
       {"cmath", jitsafe_header_math},
+      {"memory.h", jitsafe_header_memory_h},
       {"complex", jitsafe_header_complex},
       {"iostream", jitsafe_header_iostream},
       {"ostream", jitsafe_header_ostream},
@@ -2425,7 +2433,7 @@ inline void load_program(std::string const& cuda_source,
       parent_source = detail::comment_out_code_line(line_num, parent_source);
 #if JITIFY_PRINT_LOG
       std::cout << include_parent << "(" << line_num
-                << "): warning: " << include_name << ": File not found"
+                << "): warning: " << include_name << ": [jitify] File not found"
                 << std::endl;
 #endif
     }
@@ -2697,6 +2705,13 @@ class KernelInstantiation {
  public:
   inline KernelInstantiation(Kernel const& kernel,
                              std::vector<std::string> const& template_args);
+
+  /*! Implicit conversion to the underlying CUfunction object.
+   *
+   * \note This allows use of CUDA APIs like
+   *   cuOccupancyMaxActiveBlocksPerMultiprocessor.
+   */
+  inline operator CUfunction() const { return _impl->cuda_kernel(); }
 
   /*! Configure the kernel launch.
    *
@@ -3616,6 +3631,13 @@ class KernelInstantiation {
                                               ptx.c_str(), linker_files,
                                               linker_paths));
   }
+
+  /*! Implicit conversion to the underlying CUfunction object.
+   *
+   * \note This allows use of CUDA APIs like
+   *   cuOccupancyMaxActiveBlocksPerMultiprocessor.
+   */
+  operator CUfunction() const { return *_cuda_kernel; }
 
   /*! Restore a serialized kernel instantiation.
    *
