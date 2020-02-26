@@ -2425,7 +2425,7 @@ inline void load_program(std::string const& cuda_source,
       parent_source = detail::comment_out_code_line(line_num, parent_source);
 #if JITIFY_PRINT_LOG
       std::cout << include_parent << "(" << line_num
-                << "): warning: " << include_name << ": File not found"
+                << "): warning: " << include_name << ": [jitify] File not found"
                 << std::endl;
 #endif
     }
