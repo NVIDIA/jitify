@@ -1859,6 +1859,11 @@ static const char* jitsafe_header_math =
     // Note: Global namespace already includes CUDA math funcs
     "//using namespace __jitify_math_ns;\n";
 
+static const char* jitsafe_header_memory_h = R"(
+    #pragma once
+    #include <string.h>
+ )";
+
 // TODO: incomplete
 static const char* jitsafe_header_mutex = R"(
     #pragma once
@@ -1976,6 +1981,7 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"utility", jitsafe_header_utility},
       {"math.h", jitsafe_header_math},
       {"cmath", jitsafe_header_math},
+      {"memory.h", jitsafe_header_memory_h},
       {"complex", jitsafe_header_complex},
       {"iostream", jitsafe_header_iostream},
       {"ostream", jitsafe_header_ostream},
