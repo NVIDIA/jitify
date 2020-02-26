@@ -1944,6 +1944,8 @@ static const char* jitsafe_header_time_h = R"(
 static const char* preinclude_jitsafe_header_names[] = {
     "jitify_preinclude.h",
     "limits.h",
+    "math.h",
+    "memory.h",
     "stdint.h",
     "stdlib.h",
     "stdio.h",
