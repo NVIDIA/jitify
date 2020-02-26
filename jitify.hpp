@@ -1974,7 +1974,7 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"limits", jitsafe_header_limits},
       {"type_traits", jitsafe_header_type_traits},
       {"utility", jitsafe_header_utility},
-      {"math", jitsafe_header_math},
+      {"math.h", jitsafe_header_math},
       {"cmath", jitsafe_header_math},
       {"complex", jitsafe_header_complex},
       {"iostream", jitsafe_header_iostream},
