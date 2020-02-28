@@ -646,6 +646,22 @@ TEST(JitifyTest, RemoveUnusedGlobals) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+static const char* const curand_program_source =
+    "curand_program\n"
+    "#include <curand_kernel.h>\n"
+    "__global__ void my_kernel() {}\n"
+    "\n";
+
+TEST(JitifyTest, CuRandKernel) {
+  auto program_v2 = jitify::experimental::Program(
+      curand_program_source, {},
+      // Note: --remove-unused-globals is added to remove huge precomputed
+      // arrays that come from CURAND.
+      {"-I" CUDA_INC_DIR, "--remove-unused-globals"});
+  auto kernel_inst_v2 = program_v2.kernel("my_kernel").instantiate();
+  // TODO: Expand this test to actually call curand kernels and check outputs.
+}
+
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
