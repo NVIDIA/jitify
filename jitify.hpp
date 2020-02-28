@@ -993,13 +993,14 @@ class CUDAKernel {
     // WAR since linker log does not seem to be constructed using a single call
     // to cuModuleLoadDataEx.
     if (link_files.empty()) {
-      cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(), _opts.size(),
-                                        _opts.data(), _optvals.data()));
+      cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(),
+                                        (unsigned)_opts.size(), _opts.data(),
+                                        _optvals.data()));
     } else
 #endif
     {
-      cuda_safe_call(cuLinkCreate(_opts.size(), _opts.data(), _optvals.data(),
-                                  &_link_state));
+      cuda_safe_call(cuLinkCreate((unsigned)_opts.size(), _opts.data(),
+                                  _optvals.data(), &_link_state));
       cuda_safe_call(cuLinkAddData(_link_state, CU_JIT_INPUT_PTX,
                                    (void*)_ptx.c_str(), _ptx.size(),
                                    "jitified_source.ptx", 0, 0, 0));
@@ -1953,8 +1954,8 @@ static const char* preinclude_jitsafe_header_names[] = {
     "time.h",
 };
 
-template <class T, size_t N>
-size_t array_size(T (&)[N]) {
+template <class T, int N>
+int array_size(T (&)[N]) {
   return N;
 }
 const int preinclude_jitsafe_headers_count =
