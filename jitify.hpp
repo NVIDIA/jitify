@@ -2124,12 +2124,14 @@ inline std::string ptx_parse_decl_name(const std::string& line) {
   size_t name_end = line.find_first_of("[;");
   if (name_end == std::string::npos) {
     throw std::runtime_error(
-        "Failed to parse .global declaration in PTX: expected a semicolon");
+        "Failed to parse .global/.const declaration in PTX: expected a "
+        "semicolon");
   }
   size_t name_start_minus1 = line.find_last_of(" \t", name_end);
   if (name_start_minus1 == std::string::npos) {
     throw std::runtime_error(
-        "Failed to parse .global declaration in PTX: expected whitespace");
+        "Failed to parse .global/.const declaration in PTX: expected "
+        "whitespace");
   }
   size_t name_start = name_start_minus1 + 1;
   std::string name = line.substr(name_start, name_end - name_start);
@@ -2147,7 +2149,8 @@ inline void ptx_remove_unused_globals(std::string* ptx) {
     auto terms = split_string(line);
     if (terms.size() <= 1) continue;  // Ignore lines with no arguments
     if (terms[0].substr(0, 2) == "//") continue;  // Ignore comment lines
-    if (terms[0].substr(0, 7) == ".global") {
+    if (terms[0].substr(0, 7) == ".global" ||
+        terms[0].substr(0, 6) == ".const") {
       line_num_to_global_name.emplace(line_num, ptx_parse_decl_name(line));
       continue;
     }
