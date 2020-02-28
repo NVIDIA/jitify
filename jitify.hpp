@@ -807,7 +807,7 @@ struct type_reflection {
     //         return ret;
     //#endif
   }
-};
+};  // namespace detail
 template <typename T, T VALUE>
 struct type_reflection<NonType<T, VALUE> > {
   inline static std::string name() {
@@ -2023,7 +2023,7 @@ inline void add_options_from_env(std::vector<std::string>& options) {
   }
 #undef JITIFY_TOSTRING
 #undef JITIFY_TOSTRING_IMPL
-#endif
+#endif  // JITIFY_OPTIONS
 }
 
 inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
