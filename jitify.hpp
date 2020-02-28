@@ -42,7 +42,7 @@
   --------------------------------------
   Embedding source files into executable
   --------------------------------------
-  g++  ... -ldl -rdynamic
+  g++  ... -ldl -rdynamic -DJITIFY_ENABLE_EMBEDDED_FILES=1
   -Wl,-b,binary,my_kernel.cu,include/my_header.cuh,-b,default nvcc ... -ldl
   -Xcompiler "-rdynamic
   -Wl\,-b\,binary\,my_kernel.cu\,include/my_header.cuh\,-b\,default"
@@ -85,7 +85,9 @@
 #define JITIFY_THREAD_SAFE 1
 #endif
 
+#if JITIFY_ENABLE_EMBEDDED_FILES
 #include <dlfcn.h>
+#endif
 #include <stdint.h>
 #include <algorithm>
 #include <cstring>  // For strtok_r etc.
@@ -139,6 +141,7 @@
 #define JITIFY_PRINT_HEADER_PATHS 1
 #endif
 
+#if JITIFY_ENABLE_EMBEDDED_FILES
 #define JITIFY_FORCE_UNDEFINED_SYMBOL(x) void* x##_forced = (void*)&x
 /*! Include a source file that has been embedded into the executable using the
  *    GCC linker.
@@ -157,6 +160,7 @@
                                                        "_end");           \
   JITIFY_FORCE_UNDEFINED_SYMBOL(_jitify_binary_##name##_start);           \
   JITIFY_FORCE_UNDEFINED_SYMBOL(_jitify_binary_##name##_end)
+#endif  // JITIFY_ENABLE_EMBEDDED_FILES
 
 /*! Jitify library namespace
  */
@@ -280,6 +284,7 @@ inline std::string sanitize_filename(std::string name) {
   return replace_characters(name, "/\\.-: ?%*|\"<>", '_');
 }
 
+#if JITIFY_ENABLE_EMBEDDED_FILES
 class EmbeddedData {
   void* _app;
   EmbeddedData(EmbeddedData const&);
@@ -312,6 +317,7 @@ class EmbeddedData {
   }
   const uint8_t* end(std::string key) const { return (*this)[key + "_end"]; }
 };
+#endif  // JITIFY_ENABLE_EMBEDDED_FILES
 
 inline bool is_tokenchar(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -542,6 +548,7 @@ inline bool load_source(
     // Try loading from callback
     if (!file_callback ||
         !(source_stream = file_callback(fullpath, string_stream))) {
+#if JITIFY_ENABLE_EMBEDDED_FILES
       // Try loading as embedded file
       EmbeddedData embedded;
       std::string source;
@@ -549,7 +556,9 @@ inline bool load_source(
         source.assign(embedded.begin(fullpath), embedded.end(fullpath));
         string_stream << source;
         source_stream = &string_stream;
-      } catch (std::runtime_error const&) {
+      } catch (std::runtime_error const&)
+#endif  // JITIFY_ENABLE_EMBEDDED_FILES
+      {
         // Try loading from filesystem
         bool found_file = false;
         if (search_current_dir) {

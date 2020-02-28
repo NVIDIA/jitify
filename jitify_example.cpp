@@ -31,6 +31,9 @@
     and call kernels.
  */
 
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
+#define JITIFY_ENABLE_EMBEDDED_FILES 1
+#endif
 #define JITIFY_PRINT_INSTANTIATION 1
 #define JITIFY_PRINT_SOURCE 1
 #define JITIFY_PRINT_LOG 1
@@ -40,7 +43,7 @@
 #include "jitify.hpp"
 
 #include "example_headers/my_header1.cuh.jit"
-#ifdef LINUX  // Only supported by gcc on Linux
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
 JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 #endif
 
