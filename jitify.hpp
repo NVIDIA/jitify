@@ -2274,9 +2274,9 @@ inline nvrtcResult compile_kernel(std::string program_name,
     std::vector<char> vlog(logsize, 0);
     CHECK_NVRTC(nvrtcGetProgramLog(nvrtc_program, vlog.data()));
     log->assign(vlog.data(), logsize);
-    if (ret != NVRTC_SUCCESS) {
-      return ret;
-    }
+  }
+  if (ret != NVRTC_SUCCESS) {
+    return ret;
   }
 
   if (ptx) {
