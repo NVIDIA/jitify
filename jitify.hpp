@@ -1573,9 +1573,6 @@ static const char* jitsafe_header_stddef_h =
     "#pragma once\n"
     "#include <climits>\n"
     "namespace __jitify_stddef_ns {\n"
-    //"enum { NULL = 0 };\n"
-    "typedef unsigned long size_t;\n"
-    "typedef   signed long ptrdiff_t;\n"
     "#if __cplusplus >= 201103L\n"
     "typedef decltype(nullptr) nullptr_t;\n"
     "#if defined(_MSC_VER)\n"
@@ -1596,7 +1593,12 @@ static const char* jitsafe_header_stddef_h =
     "enum class byte : unsigned char {};\n"
     "#endif  // __cplusplus >= 201703L\n"
     "} // namespace __jitify_stddef_ns\n"
-    "namespace std { using namespace __jitify_stddef_ns; }\n"
+    "namespace std {\n"
+    "  // NVRTC provides built-in definitions of ::size_t and ::ptrdiff_t.\n"
+    "  using ::size_t;\n"
+    "  using ::ptrdiff_t;\n"
+    "  using namespace __jitify_stddef_ns;\n"
+    "} // namespace std\n"
     "using namespace __jitify_stddef_ns;\n";
 
 static const char* jitsafe_header_stdlib_h =
@@ -1912,8 +1914,6 @@ static const char* jitsafe_header_time_h = R"(
     #define NULL 0
     #define CLOCKS_PER_SEC 1000000
     namespace __jitify_time_ns {
-    typedef unsigned long size_t;
-    typedef long clock_t;
     typedef long time_t;
     struct tm {
       int tm_sec;
@@ -1933,7 +1933,12 @@ static const char* jitsafe_header_time_h = R"(
     };
     #endif
     }  // namespace __jitify_time_ns
-    namespace std { using namespace __jitify_time_ns; }
+    namespace std {
+      // NVRTC provides built-in definitions of ::size_t and ::clock_t.
+      using ::size_t;
+      using ::clock_t;
+      using namespace __jitify_time_ns;
+    }
     using namespace __jitify_time_ns;
  )";
 
