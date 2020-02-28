@@ -92,13 +92,6 @@
 #define __cplusplus _MSVC_LANG
 #endif
 
-#if defined(_WIN32) || defined(_WIN64)
-// WAR for strtok_r being called strtok_s on Windows
-#pragma push_macro("strtok_r")
-#undef strtok_r
-#define strtok_r strtok_s
-#endif
-
 #include <dlfcn.h>
 #include <stdint.h>
 #include <algorithm>
@@ -126,6 +119,18 @@
 #define NVRTC_GET_TYPE_NAME 1
 #endif
 #include <nvrtc.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+// WAR for strtok_r being called strtok_s on Windows
+#pragma push_macro("strtok_r")
+#undef strtok_r
+#define strtok_r strtok_s
+// WAR for min and max possibly being macros defined by windows.h
+#pragma push_macro("min")
+#pragma push_macro("max")
+#undef min
+#undef max
+#endif
 
 #ifndef JITIFY_PRINT_LOG
 #define JITIFY_PRINT_LOG 1
@@ -3811,6 +3816,8 @@ inline KernelLauncher KernelInstantiation::configure_1d_max_occupancy(
 }  // namespace jitify
 
 #if defined(_WIN32) || defined(_WIN64)
+#pragma pop_macro("max")
+#pragma pop_macro("min")
 #pragma pop_macro("strtok_r")
 #endif
 
