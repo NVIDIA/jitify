@@ -85,13 +85,6 @@
 #define JITIFY_THREAD_SAFE 1
 #endif
 
-// WAR for MSVC not correctly defining __cplusplus (before MSVC 2017)
-#ifdef _MSVC_LANG
-#pragma push_macro("__cplusplus")
-#undef __cplusplus
-#define __cplusplus _MSVC_LANG
-#endif
-
 #include <dlfcn.h>
 #include <stdint.h>
 #include <algorithm>
@@ -267,10 +260,8 @@ class vector : public std::vector<T> {
   vector(std::vector<T> const& vals) : super_type(vals) {}
   template <int N>
   vector(T const (&vals)[N]) : super_type(vals, vals + N) {}
-#if defined __cplusplus && __cplusplus >= 201103L
   vector(std::vector<T>&& vals) : super_type(vals) {}
   vector(std::initializer_list<T> vals) : super_type(vals) {}
-#endif
 };
 
 // Helper functions for parsing/manipulating source code
@@ -693,10 +684,7 @@ namespace reflection {
  */
 template <typename T, T VALUE_>
 struct NonType {
-#if defined __cplusplus && __cplusplus >= 201103L
-  constexpr
-#endif
-      static T VALUE = VALUE_;
+  constexpr static T VALUE = VALUE_;
 };
 
 // Forward declaration
@@ -926,13 +914,11 @@ inline Type<T const> type_of(T const& value) {
   return Type<T const>();
 }
 
-#if __cplusplus >= 201103L
 // Multiple value reflections one call, returning list of strings
 template <typename... Args>
 inline std::vector<std::string> reflect_all(Args... args) {
   return {reflect(args)...};
 }
-#endif  // __cplusplus >= 201103L
 
 inline std::string reflect_list(jitify::detail::vector<std::string> const& args,
                                 std::string opener = "",
@@ -954,14 +940,12 @@ inline std::string reflect_template(
   // Note: The space in " >" is a WAR to avoid '>>' appearing
   return reflect_list(args, "<", " >");
 }
-#if __cplusplus >= 201103L
 // TODO: See if can make this evaluate completely at compile-time
 template <typename... Ts>
 inline std::string reflect_template() {
   return reflect_template({reflect<Ts>()...});
   // return reflect_template<sizeof...(Ts)>({reflect<Ts>()...});
 }
-#endif
 
 }  // namespace reflection
 
@@ -2575,10 +2559,8 @@ class Program_impl {
                       jitify::detail::vector<std::string> headers = 0,
                       jitify::detail::vector<std::string> options = 0,
                       file_callback_type file_callback = 0);
-#if __cplusplus >= 201103L
   inline Program_impl(Program_impl const&) = default;
   inline Program_impl(Program_impl&&) = default;
-#endif
   inline std::vector<std::string> const& options() const {
     return _config->options;
   }
@@ -2602,10 +2584,8 @@ class Kernel_impl {
  public:
   inline Kernel_impl(Program_impl const& program, std::string name,
                      jitify::detail::vector<std::string> options = 0);
-#if __cplusplus >= 201103L
   inline Kernel_impl(Kernel_impl const&) = default;
   inline Kernel_impl(Kernel_impl&&) = default;
-#endif
 };
 
 class KernelInstantiation_impl {
@@ -2621,10 +2601,8 @@ class KernelInstantiation_impl {
  public:
   inline KernelInstantiation_impl(
       Kernel_impl const& kernel, std::vector<std::string> const& template_args);
-#if __cplusplus >= 201103L
   inline KernelInstantiation_impl(KernelInstantiation_impl const&) = default;
   inline KernelInstantiation_impl(KernelInstantiation_impl&&) = default;
-#endif
   detail::CUDAKernel const& cuda_kernel() const { return *_cuda_kernel; }
 };
 
@@ -2644,10 +2622,8 @@ class KernelLauncher_impl {
         _block(block),
         _smem(smem),
         _stream(stream) {}
-#if __cplusplus >= 201103L
   inline KernelLauncher_impl(KernelLauncher_impl const&) = default;
   inline KernelLauncher_impl(KernelLauncher_impl&&) = default;
-#endif
   inline CUresult launch(
       jitify::detail::vector<void*> arg_ptrs,
       jitify::detail::vector<std::string> arg_types = 0) const;
@@ -2679,7 +2655,6 @@ class KernelLauncher {
       jitify::detail::vector<std::string> arg_types = 0) const {
     return _impl->launch(arg_ptrs, arg_types);
   }
-#if __cplusplus >= 201103L
   // Regular function call syntax
   /*! Launch the kernel.
    *
@@ -2698,7 +2673,6 @@ class KernelLauncher {
     return this->launch(std::vector<void*>({(void*)&args...}),
                         {reflection::reflect<ArgTypes>()...});
   }
-#endif
 };
 
 /*! An object representing a kernel instantiation made up of a Kernel and
@@ -2807,7 +2781,7 @@ class Kernel {
           std::vector<std::string>()) const {
     return KernelInstantiation(*this, template_args);
   }
-#if __cplusplus >= 201103L
+
   // Regular template instantiation syntax (note limited flexibility)
   /*! Instantiate the kernel.
    *
@@ -2841,7 +2815,6 @@ class Kernel {
     return this->instantiate(
         std::vector<std::string>({reflection::reflect(targs)...}));
   }
-#endif
 };
 
 /*! An object representing a program made up of source code, headers
@@ -3102,8 +3075,6 @@ inline void Program_impl::load_sources(std::string source,
                        &_config->sources, &_config->options, &_config->name);
 }
 
-#if __cplusplus >= 201103L
-
 enum Location { HOST, DEVICE };
 
 /*! Specifies location and parameters for execution of an algorithm.
@@ -3303,8 +3274,6 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
       .configure(grid, block, 0, policy.stream)
       .launch(arg_ptrs);
 }
-
-#endif  // __cplusplus >= 201103L
 
 namespace experimental {
 
@@ -3819,8 +3788,4 @@ inline KernelLauncher KernelInstantiation::configure_1d_max_occupancy(
 #pragma pop_macro("max")
 #pragma pop_macro("min")
 #pragma pop_macro("strtok_r")
-#endif
-
-#ifdef _MSVC_LANG
-#pragma pop_macro("__cplusplus")
 #endif

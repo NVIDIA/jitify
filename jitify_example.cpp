@@ -81,8 +81,6 @@ std::istream* file_callback(std::string filename, std::iostream& tmp_stream) {
   }
 }
 
-#if __cplusplus >= 201103L
-
 template <typename T>
 bool test_simple() {
   const char* program_source =
@@ -322,10 +320,7 @@ bool test_parallel_for() {
   return true;
 }
 
-#endif  // C++11
-
 int main(int argc, char* argv[]) {
-#if __cplusplus >= 201103L
 #define TEST_RESULT(result) (result ? "PASSED" : "FAILED")
 
   // Uncached
@@ -355,9 +350,4 @@ int main(int argc, char* argv[]) {
   return (!test_simple_result + !test_simple_experimental_result +
           !test_kernels_result + !test_parallel_for_result +
           !test_constant_result);
-#else
-  std::cout << "Tests require building with C++11 support (make CXX11=1)"
-            << std::endl;
-  return 0;
-#endif
 }
