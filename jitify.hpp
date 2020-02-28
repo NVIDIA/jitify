@@ -962,6 +962,36 @@ inline std::string reflect_template() {
 
 namespace detail {
 
+// Demangles nested variable names using the PTX name mangling scheme
+// (which follows the Itanium64 ABI). E.g., _ZN1a3Foo2bcE -> a::Foo::bc.
+inline std::string demangle_ptx_variable_name(const char* name) {
+  std::stringstream ss;
+  const char* c = name;
+  if (*c++ != '_' || *c++ != 'Z') return name;  // Non-mangled name
+  if (*c++ != 'N') return "";  // Not a nested name, unsupported
+  while (true) {
+    // Parse identifier length.
+    int n = 0;
+    while (std::isdigit(*c)) {
+      n = n * 10 + (*c - '0');
+      c++;
+    }
+    if (!n) return "";  // Invalid or unsupported mangled name
+    // Parse identifier.
+    const char* c0 = c;
+    while (n-- && *c) c++;
+    if (!*c) return "";  // Mangled name is truncated
+    std::string id(c0, c);
+    // Identifiers starting with "_GLOBAL" are anonymous namespaces.
+    ss << (id.substr(0, 7) == "_GLOBAL" ? "(anonymous namespace)" : id);
+    // Nested name specifiers end with 'E'.
+    if (*c == 'E') break;
+    // There are more identifiers to come, add join token.
+    ss << "::";
+  }
+  return ss.str();
+}
+
 class CUDAKernel {
   std::vector<std::string> _link_files;
   std::vector<std::string> _link_paths;
@@ -1061,23 +1091,17 @@ class CUDAKernel {
       if (pos == std::string::npos) break;
       size_t end = _ptx.find(";", pos);
       std::string line = _ptx.substr(pos, end - pos);
+      pos = end;
       size_t constant_start = line.find_last_of(" ") + 1;
       size_t constant_end = line.find_last_of("[");
       std::string entry =
           line.substr(constant_start, constant_end - constant_start);
-
-#ifdef _MSC_VER  // interpret anything that doesn't begine ? as unmangled name
-      std::string key = (entry[0] != '?')
-                            ? entry.c_str()
-                            : reflection::detail::demangle(entry.c_str());
-#else  // interpret anything that doesn't begine _Z as unmangled name
-      std::string key = (entry[0] != '_' && entry[1] != 'Z')
-                            ? entry.c_str()
-                            : reflection::detail::demangle(entry.c_str());
-#endif
-
+      std::string key = detail::demangle_ptx_variable_name(entry.c_str());
+      // Skip unsupported mangled names. E.g., a static variable defined inside
+      // a function (such variables are not directly addressable from outside
+      // the function, so skipping them is the correct behavior).
+      if (key == "") continue;
       _constant_map[key] = entry;
-      pos = end;
     }
   }
 
