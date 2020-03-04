@@ -1003,7 +1003,7 @@ class CUDAKernel {
   CUfunction _kernel;
   std::string _func_name;
   std::string _ptx;
-  std::map<std::string, std::string> _constant_map;
+  std::map<std::string, std::string> _global_map;
   std::vector<CUjit_option> _opts;
   std::vector<void*> _optvals;
 #ifdef JITIFY_PRINT_LINKER_LOG
@@ -1086,25 +1086,26 @@ class CUDAKernel {
     _module = 0;
   }
 
-  // create a map of constants in the ptx file mapping demangled to mangled name
-  inline void create_constant_map() {
+  // create a map of __constant__ and __device__ variables in the ptx file
+  // mapping demangled to mangled name
+  inline void create_global_variable_map() {
     size_t pos = 0;
     while (pos < _ptx.size()) {
-      pos = _ptx.find(".const .align", pos);
+      pos = std::min(_ptx.find(".const .align", pos),
+                     _ptx.find(".global .align", pos));
       if (pos == std::string::npos) break;
       size_t end = _ptx.find(";", pos);
       std::string line = _ptx.substr(pos, end - pos);
       pos = end;
-      size_t constant_start = line.find_last_of(" ") + 1;
-      size_t constant_end = line.find_last_of("[");
-      std::string entry =
-          line.substr(constant_start, constant_end - constant_start);
+      size_t symbol_start = line.find_last_of(" ") + 1;
+      size_t symbol_end = line.find_last_of("[");
+      std::string entry = line.substr(symbol_start, symbol_end - symbol_start);
       std::string key = detail::demangle_ptx_variable_name(entry.c_str());
       // Skip unsupported mangled names. E.g., a static variable defined inside
       // a function (such variables are not directly addressable from outside
       // the function, so skipping them is the correct behavior).
       if (key == "") continue;
-      _constant_map[key] = entry;
+      _global_map[key] = entry;
     }
   }
 
@@ -1140,7 +1141,7 @@ class CUDAKernel {
         _optvals(optvals, optvals + nopts) {
     this->set_linker_log();
     this->create_module(link_files, link_paths);
-    this->create_constant_map();
+    this->create_global_variable_map();
   }
 
   inline CUDAKernel& set(const char* func_name, const char* ptx,
@@ -1157,7 +1158,7 @@ class CUDAKernel {
     _optvals.assign(optvals, optvals + nopts);
     this->set_linker_log();
     this->create_module(link_files, link_paths);
-    this->create_constant_map();
+    this->create_global_variable_map();
     return *this;
   }
   inline ~CUDAKernel() { this->destroy_module(); }
@@ -1169,17 +1170,16 @@ class CUDAKernel {
                           block.z, smem, stream, arg_ptrs.data(), NULL);
   }
 
-  inline CUdeviceptr get_constant_ptr(const char* name) const {
-    CUdeviceptr const_ptr = 0;
-    auto constant = _constant_map.find(name);
-    if (constant != _constant_map.end()) {
+  inline CUdeviceptr get_global_ptr(const char* name) const {
+    CUdeviceptr global_ptr = 0;
+    auto global = _global_map.find(name);
+    if (global != _global_map.end()) {
       cuda_safe_call(
-          cuModuleGetGlobal(&const_ptr, 0, _module, constant->second.c_str()));
+          cuModuleGetGlobal(&global_ptr, 0, _module, global->second.c_str()));
     } else {
-      throw std::runtime_error(std::string("failed to look up constant ") +
-                               name);
+      throw std::runtime_error(std::string("failed to look up global ") + name);
     }
-    return const_ptr;
+    return global_ptr;
   }
 
   const std::string& function_name() const { return _func_name; }
@@ -2780,8 +2780,19 @@ class KernelInstantiation {
     return this->configure(grid, block, smem, stream);
   }
 
+  /*
+   * \deprecated Use \p get_global_ptr instead.
+   */
   inline CUdeviceptr get_constant_ptr(const char* name) const {
-    return _impl->cuda_kernel().get_constant_ptr(name);
+    return get_global_ptr(name);
+  }
+
+  /*
+   * Get a device pointer to a global __constant__ or __device__ variable using
+   * its un-mangled name.
+   */
+  inline CUdeviceptr get_global_ptr(const char* name) const {
+    return _impl->cuda_kernel().get_global_ptr(name);
   }
 
   const std::string& mangled_name() const {
@@ -3716,8 +3727,19 @@ class KernelInstantiation {
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const;
 
+  /*
+   * \deprecated Use \p get_global_ptr instead.
+   */
   CUdeviceptr get_constant_ptr(const char* name) const {
-    return _cuda_kernel->get_constant_ptr(name);
+    return get_global_ptr(name);
+  }
+
+  /*
+   * Get a device pointer to a global __constant__ or __device__ variable using
+   * its un-mangled name.
+   */
+  CUdeviceptr get_global_ptr(const char* name) const {
+    return _cuda_kernel->get_global_ptr(name);
   }
 
   const std::string& mangled_name() const {
