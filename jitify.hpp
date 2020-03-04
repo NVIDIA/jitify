@@ -1008,6 +1008,7 @@ class CUDAKernel {
   std::vector<void*> _optvals;
 #ifdef JITIFY_PRINT_LINKER_LOG
   static const unsigned int _log_size = 8192;
+  char _error_log[_log_size];
   char _info_log[_log_size];
 #endif
 
@@ -1020,13 +1021,14 @@ class CUDAKernel {
   }
   inline void create_module(std::vector<std::string> link_files,
                             std::vector<std::string> link_paths) {
+    CUresult result;
 #ifndef JITIFY_PRINT_LINKER_LOG
     // WAR since linker log does not seem to be constructed using a single call
     // to cuModuleLoadDataEx.
     if (link_files.empty()) {
-      cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(),
-                                        (unsigned)_opts.size(), _opts.data(),
-                                        _optvals.data()));
+      result =
+          cuModuleLoadDataEx(&_module, _ptx.c_str(), (unsigned)_opts.size(),
+                             _opts.data(), _optvals.data());
     } else
 #endif
     {
@@ -1053,16 +1055,22 @@ class CUDAKernel {
         }
 #if JITIFY_PRINT_LOG
         if (result == CUDA_ERROR_FILE_NOT_FOUND) {
-          std::cout << "Error: Device library not found: " << link_file
+          std::cerr << "Linker error: Device library not found: " << link_file
                     << std::endl;
+        } else if (result != CUDA_SUCCESS) {
+          std::cerr << "Linker error: Failed to add file: " << link_file
+                    << std::endl;
+          std::cerr << _error_log << std::endl;
         }
 #endif
         cuda_safe_call(result);
       }
       size_t cubin_size;
       void* cubin;
-      cuda_safe_call(cuLinkComplete(_link_state, &cubin, &cubin_size));
-      cuda_safe_call(cuModuleLoadData(&_module, cubin));
+      result = cuLinkComplete(_link_state, &cubin, &cubin_size);
+      if (result == CUDA_SUCCESS) {
+        result = cuModuleLoadData(&_module, cubin);
+      }
     }
 #ifdef JITIFY_PRINT_LINKER_LOG
     std::cout << "---------------------------------------" << std::endl;
@@ -1071,8 +1079,11 @@ class CUDAKernel {
               << std::endl;
     std::cout << "---------------------------------------" << std::endl;
     std::cout << _info_log << std::endl;
+    std::cout << std::endl;
+    std::cout << _error_log << std::endl;
     std::cout << "---------------------------------------" << std::endl;
 #endif
+    cuda_safe_call(result);
     cuda_safe_call(cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
   }
   inline void destroy_module() {
@@ -1114,6 +1125,10 @@ class CUDAKernel {
     _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
     _optvals.push_back((void*)_info_log);
     _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
+    _optvals.push_back((void*)(long)_log_size);
+    _opts.push_back(CU_JIT_ERROR_LOG_BUFFER);
+    _optvals.push_back((void*)_error_log);
+    _opts.push_back(CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES);
     _optvals.push_back((void*)(long)_log_size);
     _opts.push_back(CU_JIT_LOG_VERBOSE);
     _optvals.push_back((void*)1);
