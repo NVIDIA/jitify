@@ -90,6 +90,7 @@
 #endif
 #include <stdint.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>  // For strtok_r etc.
 #include <deque>
 #include <fstream>
