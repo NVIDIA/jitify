@@ -42,7 +42,7 @@
   --------------------------------------
   Embedding source files into executable
   --------------------------------------
-  g++  ... -ldl -rdynamic
+  g++  ... -ldl -rdynamic -DJITIFY_ENABLE_EMBEDDED_FILES=1
   -Wl,-b,binary,my_kernel.cu,include/my_header.cuh,-b,default nvcc ... -ldl
   -Xcompiler "-rdynamic
   -Wl\,-b\,binary\,my_kernel.cu\,include/my_header.cuh\,-b\,default"
@@ -85,23 +85,12 @@
 #define JITIFY_THREAD_SAFE 1
 #endif
 
-// WAR for MSVC not correctly defining __cplusplus (before MSVC 2017)
-#ifdef _MSVC_LANG
-#pragma push_macro("__cplusplus")
-#undef __cplusplus
-#define __cplusplus _MSVC_LANG
-#endif
-
-#if defined(_WIN32) || defined(_WIN64)
-// WAR for strtok_r being called strtok_s on Windows
-#pragma push_macro("strtok_r")
-#undef strtok_r
-#define strtok_r strtok_s
-#endif
-
+#if JITIFY_ENABLE_EMBEDDED_FILES
 #include <dlfcn.h>
+#endif
 #include <stdint.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>  // For strtok_r etc.
 #include <deque>
 #include <fstream>
@@ -127,6 +116,18 @@
 #endif
 #include <nvrtc.h>
 
+#if defined(_WIN32) || defined(_WIN64)
+// WAR for strtok_r being called strtok_s on Windows
+#pragma push_macro("strtok_r")
+#undef strtok_r
+#define strtok_r strtok_s
+// WAR for min and max possibly being macros defined by windows.h
+#pragma push_macro("min")
+#pragma push_macro("max")
+#undef min
+#undef max
+#endif
+
 #ifndef JITIFY_PRINT_LOG
 #define JITIFY_PRINT_LOG 1
 #endif
@@ -141,6 +142,7 @@
 #define JITIFY_PRINT_HEADER_PATHS 1
 #endif
 
+#if JITIFY_ENABLE_EMBEDDED_FILES
 #define JITIFY_FORCE_UNDEFINED_SYMBOL(x) void* x##_forced = (void*)&x
 /*! Include a source file that has been embedded into the executable using the
  *    GCC linker.
@@ -159,6 +161,7 @@
                                                        "_end");           \
   JITIFY_FORCE_UNDEFINED_SYMBOL(_jitify_binary_##name##_start);           \
   JITIFY_FORCE_UNDEFINED_SYMBOL(_jitify_binary_##name##_end)
+#endif  // JITIFY_ENABLE_EMBEDDED_FILES
 
 /*! Jitify library namespace
  */
@@ -211,7 +214,9 @@ class ObjectCache {
     _capacity = capacity;
     this->discard_old();
   }
-  inline bool contains(const key_type& k) const { return _objects.count(k); }
+  inline bool contains(const key_type& k) const {
+    return (bool)_objects.count(k);
+  }
   inline void touch(const key_type& k) {
     if (!this->contains(k)) {
       throw std::runtime_error("Key not found in cache");
@@ -262,10 +267,8 @@ class vector : public std::vector<T> {
   vector(std::vector<T> const& vals) : super_type(vals) {}
   template <int N>
   vector(T const (&vals)[N]) : super_type(vals, vals + N) {}
-#if defined __cplusplus && __cplusplus >= 201103L
   vector(std::vector<T>&& vals) : super_type(vals) {}
   vector(std::initializer_list<T> vals) : super_type(vals) {}
-#endif
 };
 
 // Helper functions for parsing/manipulating source code
@@ -284,6 +287,7 @@ inline std::string sanitize_filename(std::string name) {
   return replace_characters(name, "/\\.-: ?%*|\"<>", '_');
 }
 
+#if JITIFY_ENABLE_EMBEDDED_FILES
 class EmbeddedData {
   void* _app;
   EmbeddedData(EmbeddedData const&);
@@ -316,6 +320,7 @@ class EmbeddedData {
   }
   const uint8_t* end(std::string key) const { return (*this)[key + "_end"]; }
 };
+#endif  // JITIFY_ENABLE_EMBEDDED_FILES
 
 inline bool is_tokenchar(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -546,6 +551,7 @@ inline bool load_source(
     // Try loading from callback
     if (!file_callback ||
         !(source_stream = file_callback(fullpath, string_stream))) {
+#if JITIFY_ENABLE_EMBEDDED_FILES
       // Try loading as embedded file
       EmbeddedData embedded;
       std::string source;
@@ -553,7 +559,9 @@ inline bool load_source(
         source.assign(embedded.begin(fullpath), embedded.end(fullpath));
         string_stream << source;
         source_stream = &string_stream;
-      } catch (std::runtime_error const&) {
+      } catch (std::runtime_error const&)
+#endif  // JITIFY_ENABLE_EMBEDDED_FILES
+      {
         // Try loading from filesystem
         bool found_file = false;
         if (search_current_dir) {
@@ -688,10 +696,7 @@ namespace reflection {
  */
 template <typename T, T VALUE_>
 struct NonType {
-#if defined __cplusplus && __cplusplus >= 201103L
-  constexpr
-#endif
-      static T VALUE = VALUE_;
+  constexpr static T VALUE = VALUE_;
 };
 
 // Forward declaration
@@ -807,7 +812,7 @@ struct type_reflection {
     //         return ret;
     //#endif
   }
-};
+};  // namespace detail
 template <typename T, T VALUE>
 struct type_reflection<NonType<T, VALUE> > {
   inline static std::string name() {
@@ -869,9 +874,9 @@ inline std::string reflect(T const& value) {
 /*! Generate a code-string for an integer non-type template argument.
  *  \code{.cpp}reflect<7>() --> "(int64_t)7"\endcode
  */
-template <long long N>
+template <int64_t N>
 inline std::string reflect() {
-  return reflect<NonType<int, N> >();
+  return reflect<NonType<int64_t, N> >();
 }
 // Non-type template arg reflection (explicit type)
 // E.g., reflect<int,7>() -> "(int)7"
@@ -921,13 +926,11 @@ inline Type<T const> type_of(T const& value) {
   return Type<T const>();
 }
 
-#if __cplusplus >= 201103L
 // Multiple value reflections one call, returning list of strings
 template <typename... Args>
 inline std::vector<std::string> reflect_all(Args... args) {
   return {reflect(args)...};
 }
-#endif  // __cplusplus >= 201103L
 
 inline std::string reflect_list(jitify::detail::vector<std::string> const& args,
                                 std::string opener = "",
@@ -949,20 +952,48 @@ inline std::string reflect_template(
   // Note: The space in " >" is a WAR to avoid '>>' appearing
   return reflect_list(args, "<", " >");
 }
-#if __cplusplus >= 201103L
 // TODO: See if can make this evaluate completely at compile-time
 template <typename... Ts>
 inline std::string reflect_template() {
   return reflect_template({reflect<Ts>()...});
   // return reflect_template<sizeof...(Ts)>({reflect<Ts>()...});
 }
-#endif
 
 }  // namespace reflection
 
 //! \cond
 
 namespace detail {
+
+// Demangles nested variable names using the PTX name mangling scheme
+// (which follows the Itanium64 ABI). E.g., _ZN1a3Foo2bcE -> a::Foo::bc.
+inline std::string demangle_ptx_variable_name(const char* name) {
+  std::stringstream ss;
+  const char* c = name;
+  if (*c++ != '_' || *c++ != 'Z') return name;  // Non-mangled name
+  if (*c++ != 'N') return "";  // Not a nested name, unsupported
+  while (true) {
+    // Parse identifier length.
+    int n = 0;
+    while (std::isdigit(*c)) {
+      n = n * 10 + (*c - '0');
+      c++;
+    }
+    if (!n) return "";  // Invalid or unsupported mangled name
+    // Parse identifier.
+    const char* c0 = c;
+    while (n-- && *c) c++;
+    if (!*c) return "";  // Mangled name is truncated
+    std::string id(c0, c);
+    // Identifiers starting with "_GLOBAL" are anonymous namespaces.
+    ss << (id.substr(0, 7) == "_GLOBAL" ? "(anonymous namespace)" : id);
+    // Nested name specifiers end with 'E'.
+    if (*c == 'E') break;
+    // There are more identifiers to come, add join token.
+    ss << "::";
+  }
+  return ss.str();
+}
 
 class CUDAKernel {
   std::vector<std::string> _link_files;
@@ -993,13 +1024,14 @@ class CUDAKernel {
     // WAR since linker log does not seem to be constructed using a single call
     // to cuModuleLoadDataEx.
     if (link_files.empty()) {
-      cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(), _opts.size(),
-                                        _opts.data(), _optvals.data()));
+      cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(),
+                                        (unsigned)_opts.size(), _opts.data(),
+                                        _optvals.data()));
     } else
 #endif
     {
-      cuda_safe_call(cuLinkCreate(_opts.size(), _opts.data(), _optvals.data(),
-                                  &_link_state));
+      cuda_safe_call(cuLinkCreate((unsigned)_opts.size(), _opts.data(),
+                                  _optvals.data(), &_link_state));
       cuda_safe_call(cuLinkAddData(_link_state, CU_JIT_INPUT_PTX,
                                    (void*)_ptx.c_str(), _ptx.size(),
                                    "jitified_source.ptx", 0, 0, 0));
@@ -1062,23 +1094,17 @@ class CUDAKernel {
       if (pos == std::string::npos) break;
       size_t end = _ptx.find(";", pos);
       std::string line = _ptx.substr(pos, end - pos);
+      pos = end;
       size_t constant_start = line.find_last_of(" ") + 1;
       size_t constant_end = line.find_last_of("[");
       std::string entry =
           line.substr(constant_start, constant_end - constant_start);
-
-#ifdef _MSC_VER  // interpret anything that doesn't begine ? as unmangled name
-      std::string key = (entry[0] != '?')
-                            ? entry.c_str()
-                            : reflection::detail::demangle(entry.c_str());
-#else  // interpret anything that doesn't begine _Z as unmangled name
-      std::string key = (entry[0] != '_' && entry[1] != 'Z')
-                            ? entry.c_str()
-                            : reflection::detail::demangle(entry.c_str());
-#endif
-
+      std::string key = detail::demangle_ptx_variable_name(entry.c_str());
+      // Skip unsupported mangled names. E.g., a static variable defined inside
+      // a function (such variables are not directly addressable from outside
+      // the function, so skipping them is the correct behavior).
+      if (key == "") continue;
       _constant_map[key] = entry;
-      pos = end;
     }
   }
 
@@ -1574,9 +1600,6 @@ static const char* jitsafe_header_stddef_h =
     "#pragma once\n"
     "#include <climits>\n"
     "namespace __jitify_stddef_ns {\n"
-    //"enum { NULL = 0 };\n"
-    "typedef unsigned long size_t;\n"
-    "typedef   signed long ptrdiff_t;\n"
     "#if __cplusplus >= 201103L\n"
     "typedef decltype(nullptr) nullptr_t;\n"
     "#if defined(_MSC_VER)\n"
@@ -1597,7 +1620,12 @@ static const char* jitsafe_header_stddef_h =
     "enum class byte : unsigned char {};\n"
     "#endif  // __cplusplus >= 201703L\n"
     "} // namespace __jitify_stddef_ns\n"
-    "namespace std { using namespace __jitify_stddef_ns; }\n"
+    "namespace std {\n"
+    "  // NVRTC provides built-in definitions of ::size_t and ::ptrdiff_t.\n"
+    "  using ::size_t;\n"
+    "  using ::ptrdiff_t;\n"
+    "  using namespace __jitify_stddef_ns;\n"
+    "} // namespace std\n"
     "using namespace __jitify_stddef_ns;\n";
 
 static const char* jitsafe_header_stdlib_h =
@@ -1913,8 +1941,6 @@ static const char* jitsafe_header_time_h = R"(
     #define NULL 0
     #define CLOCKS_PER_SEC 1000000
     namespace __jitify_time_ns {
-    typedef unsigned long size_t;
-    typedef long clock_t;
     typedef long time_t;
     struct tm {
       int tm_sec;
@@ -1934,7 +1960,12 @@ static const char* jitsafe_header_time_h = R"(
     };
     #endif
     }  // namespace __jitify_time_ns
-    namespace std { using namespace __jitify_time_ns; }
+    namespace std {
+      // NVRTC provides built-in definitions of ::size_t and ::clock_t.
+      using ::size_t;
+      using ::clock_t;
+      using namespace __jitify_time_ns;
+    }
     using namespace __jitify_time_ns;
  )";
 
@@ -1953,8 +1984,8 @@ static const char* preinclude_jitsafe_header_names[] = {
     "time.h",
 };
 
-template <class T, size_t N>
-size_t array_size(T (&)[N]) {
+template <class T, int N>
+int array_size(T (&)[N]) {
   return N;
 }
 const int preinclude_jitsafe_headers_count =
@@ -2023,7 +2054,7 @@ inline void add_options_from_env(std::vector<std::string>& options) {
   }
 #undef JITIFY_TOSTRING
 #undef JITIFY_TOSTRING_IMPL
-#endif
+#endif  // JITIFY_OPTIONS
 }
 
 inline void detect_and_add_cuda_arch(std::vector<std::string>& options) {
@@ -2134,12 +2165,14 @@ inline std::string ptx_parse_decl_name(const std::string& line) {
   size_t name_end = line.find_first_of("[;");
   if (name_end == std::string::npos) {
     throw std::runtime_error(
-        "Failed to parse .global declaration in PTX: expected a semicolon");
+        "Failed to parse .global/.const declaration in PTX: expected a "
+        "semicolon");
   }
   size_t name_start_minus1 = line.find_last_of(" \t", name_end);
   if (name_start_minus1 == std::string::npos) {
     throw std::runtime_error(
-        "Failed to parse .global declaration in PTX: expected whitespace");
+        "Failed to parse .global/.const declaration in PTX: expected "
+        "whitespace");
   }
   size_t name_start = name_start_minus1 + 1;
   std::string name = line.substr(name_start, name_end - name_start);
@@ -2157,7 +2190,8 @@ inline void ptx_remove_unused_globals(std::string* ptx) {
     auto terms = split_string(line);
     if (terms.size() <= 1) continue;  // Ignore lines with no arguments
     if (terms[0].substr(0, 2) == "//") continue;  // Ignore comment lines
-    if (terms[0].substr(0, 7) == ".global") {
+    if (terms[0].substr(0, 7) == ".global" ||
+        terms[0].substr(0, 6) == ".const") {
       line_num_to_global_name.emplace(line_num, ptx_parse_decl_name(line));
       continue;
     }
@@ -2209,7 +2243,7 @@ inline nvrtcResult compile_kernel(std::string program_name,
   // Build arrays of header names and sources
   std::vector<const char*> header_names_c;
   std::vector<const char*> header_sources_c;
-  int num_headers = sources.size() - 1;
+  int num_headers = (int)(sources.size() - 1);
   header_names_c.reserve(num_headers);
   header_sources_c.reserve(num_headers);
   typedef std::map<std::string, std::string> source_map;
@@ -2265,17 +2299,17 @@ inline nvrtcResult compile_kernel(std::string program_name,
   }
 #endif
 
-  nvrtcResult ret =
-      nvrtcCompileProgram(nvrtc_program, options_c.size(), options_c.data());
+  nvrtcResult ret = nvrtcCompileProgram(nvrtc_program, (int)options_c.size(),
+                                        options_c.data());
   if (log) {
     size_t logsize;
     CHECK_NVRTC(nvrtcGetProgramLogSize(nvrtc_program, &logsize));
     std::vector<char> vlog(logsize, 0);
     CHECK_NVRTC(nvrtcGetProgramLog(nvrtc_program, vlog.data()));
     log->assign(vlog.data(), logsize);
-    if (ret != NVRTC_SUCCESS) {
-      return ret;
-    }
+  }
+  if (ret != NVRTC_SUCCESS) {
+    return ret;
   }
 
   if (ptx) {
@@ -2490,9 +2524,9 @@ inline void instantiate_kernel(
 }
 
 inline void get_1d_max_occupancy(CUfunction func,
-                                 CUoccupancyB2DSize smem_callback, size_t* smem,
-                                 int max_block_size, unsigned int flags,
-                                 int* grid, int* block) {
+                                 CUoccupancyB2DSize smem_callback,
+                                 unsigned int* smem, int max_block_size,
+                                 unsigned int flags, int* grid, int* block) {
   if (!func) {
     throw std::runtime_error(
         "Kernel pointer is NULL; you may need to define JITIFY_THREAD_SAFE "
@@ -2506,7 +2540,7 @@ inline void get_1d_max_occupancy(CUfunction func,
     throw std::runtime_error(msg);
   }
   if (smem_callback) {
-    *smem = smem_callback(*block);
+    *smem = (unsigned int)smem_callback(*block);
   }
 }
 
@@ -2569,10 +2603,8 @@ class Program_impl {
                       jitify::detail::vector<std::string> headers = 0,
                       jitify::detail::vector<std::string> options = 0,
                       file_callback_type file_callback = 0);
-#if __cplusplus >= 201103L
   inline Program_impl(Program_impl const&) = default;
   inline Program_impl(Program_impl&&) = default;
-#endif
   inline std::vector<std::string> const& options() const {
     return _config->options;
   }
@@ -2596,10 +2628,8 @@ class Kernel_impl {
  public:
   inline Kernel_impl(Program_impl const& program, std::string name,
                      jitify::detail::vector<std::string> options = 0);
-#if __cplusplus >= 201103L
   inline Kernel_impl(Kernel_impl const&) = default;
   inline Kernel_impl(Kernel_impl&&) = default;
-#endif
 };
 
 class KernelInstantiation_impl {
@@ -2615,10 +2645,8 @@ class KernelInstantiation_impl {
  public:
   inline KernelInstantiation_impl(
       Kernel_impl const& kernel, std::vector<std::string> const& template_args);
-#if __cplusplus >= 201103L
   inline KernelInstantiation_impl(KernelInstantiation_impl const&) = default;
   inline KernelInstantiation_impl(KernelInstantiation_impl&&) = default;
-#endif
   detail::CUDAKernel const& cuda_kernel() const { return *_cuda_kernel; }
 };
 
@@ -2626,22 +2654,20 @@ class KernelLauncher_impl {
   KernelInstantiation_impl _kernel_inst;
   dim3 _grid;
   dim3 _block;
-  size_t _smem;
+  unsigned int _smem;
   cudaStream_t _stream;
 
  public:
   inline KernelLauncher_impl(KernelInstantiation_impl const& kernel_inst,
-                             dim3 grid, dim3 block, size_t smem = 0,
+                             dim3 grid, dim3 block, unsigned int smem = 0,
                              cudaStream_t stream = 0)
       : _kernel_inst(kernel_inst),
         _grid(grid),
         _block(block),
         _smem(smem),
         _stream(stream) {}
-#if __cplusplus >= 201103L
   inline KernelLauncher_impl(KernelLauncher_impl const&) = default;
   inline KernelLauncher_impl(KernelLauncher_impl&&) = default;
-#endif
   inline CUresult launch(
       jitify::detail::vector<void*> arg_ptrs,
       jitify::detail::vector<std::string> arg_types = 0) const;
@@ -2655,7 +2681,8 @@ class KernelLauncher {
 
  public:
   inline KernelLauncher(KernelInstantiation const& kernel_inst, dim3 grid,
-                        dim3 block, size_t smem = 0, cudaStream_t stream = 0);
+                        dim3 block, unsigned int smem = 0,
+                        cudaStream_t stream = 0);
 
   // Note: It's important that there is no implicit conversion required
   //         for arg_ptrs, because otherwise the parameter pack version
@@ -2673,7 +2700,6 @@ class KernelLauncher {
       jitify::detail::vector<std::string> arg_types = 0) const {
     return _impl->launch(arg_ptrs, arg_types);
   }
-#if __cplusplus >= 201103L
   // Regular function call syntax
   /*! Launch the kernel.
    *
@@ -2692,7 +2718,6 @@ class KernelLauncher {
     return this->launch(std::vector<void*>({(void*)&args...}),
                         {reflection::reflect<ArgTypes>()...});
   }
-#endif
 };
 
 /*! An object representing a kernel instantiation made up of a Kernel and
@@ -2717,7 +2742,7 @@ class KernelInstantiation {
    *
    *  \see configure
    */
-  inline KernelLauncher operator()(dim3 grid, dim3 block, size_t smem = 0,
+  inline KernelLauncher operator()(dim3 grid, dim3 block, unsigned int smem = 0,
                                    cudaStream_t stream = 0) const {
     return this->configure(grid, block, smem, stream);
   }
@@ -2729,7 +2754,7 @@ class KernelInstantiation {
    * bytes.
    *  \param stream The CUDA stream to launch the kernel in.
    */
-  inline KernelLauncher configure(dim3 grid, dim3 block, size_t smem = 0,
+  inline KernelLauncher configure(dim3 grid, dim3 block, unsigned int smem = 0,
                                   cudaStream_t stream = 0) const {
     return KernelLauncher(*this, grid, block, smem, stream);
   }
@@ -2744,7 +2769,7 @@ class KernelInstantiation {
    * \param flags The flags to pass to cuOccupancyMaxPotentialBlockSizeWithFlags.
    */
   inline KernelLauncher configure_1d_max_occupancy(
-      int max_block_size = 0, size_t smem = 0,
+      int max_block_size = 0, unsigned int smem = 0,
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const {
     int grid;
@@ -2801,7 +2826,7 @@ class Kernel {
           std::vector<std::string>()) const {
     return KernelInstantiation(*this, template_args);
   }
-#if __cplusplus >= 201103L
+
   // Regular template instantiation syntax (note limited flexibility)
   /*! Instantiate the kernel.
    *
@@ -2835,7 +2860,6 @@ class Kernel {
     return this->instantiate(
         std::vector<std::string>({reflection::reflect(targs)...}));
   }
-#endif
 };
 
 /*! An object representing a program made up of source code, headers
@@ -2949,7 +2973,7 @@ inline KernelInstantiation::KernelInstantiation(
     : _impl(new KernelInstantiation_impl(*kernel._impl, template_args)) {}
 
 inline KernelLauncher::KernelLauncher(KernelInstantiation const& kernel_inst,
-                                      dim3 grid, dim3 block, size_t smem,
+                                      dim3 grid, dim3 block, unsigned int smem,
                                       cudaStream_t stream)
     : _impl(new KernelLauncher_impl(*kernel_inst._impl, grid, block, smem,
                                     stream)) {}
@@ -3095,8 +3119,6 @@ inline void Program_impl::load_sources(std::string source,
   detail::load_program(source, headers, file_callback, &_config->include_paths,
                        &_config->sources, &_config->options, &_config->name);
 }
-
-#if __cplusplus >= 201103L
 
 enum Location { HOST, DEVICE };
 
@@ -3290,15 +3312,13 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
 
   size_t n = end - begin;
   dim3 block(policy.block_size);
-  dim3 grid(std::min((n - 1) / block.x + 1, size_t(65535)));
+  dim3 grid((unsigned int)std::min((n - 1) / block.x + 1, size_t(65535)));
   cudaSetDevice(policy.device);
   return program.kernel("parallel_for_kernel")
       .instantiate<IndexType>()
       .configure(grid, block, 0, policy.stream)
       .launch(arg_ptrs);
 }
-
-#endif  // __cplusplus >= 201103L
 
 namespace experimental {
 
@@ -3676,7 +3696,7 @@ class KernelInstantiation {
    * bytes.
    *  \param stream The CUDA stream to launch the kernel in.
    */
-  KernelLauncher configure(dim3 grid, dim3 block, size_t smem = 0,
+  KernelLauncher configure(dim3 grid, dim3 block, unsigned int smem = 0,
                            cudaStream_t stream = 0) const;
 
   /*! Configure the kernel launch with a 1-dimensional block and grid chosen
@@ -3692,7 +3712,7 @@ class KernelInstantiation {
    * cuOccupancyMaxPotentialBlockSizeWithFlags.
    */
   KernelLauncher configure_1d_max_occupancy(
-      int max_block_size = 0, size_t smem = 0,
+      int max_block_size = 0, unsigned int smem = 0,
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const;
 
@@ -3719,12 +3739,12 @@ class KernelLauncher {
   KernelInstantiation const* _kernel_inst;
   dim3 _grid;
   dim3 _block;
-  size_t _smem;
+  unsigned int _smem;
   cudaStream_t _stream;
 
  public:
   KernelLauncher(KernelInstantiation const* kernel_inst, dim3 grid, dim3 block,
-                 size_t smem = 0, cudaStream_t stream = 0)
+                 unsigned int smem = 0, cudaStream_t stream = 0)
       : _kernel_inst(kernel_inst),
         _grid(grid),
         _block(block),
@@ -3790,12 +3810,12 @@ inline KernelInstantiation Kernel::instantiate(TemplateArgs... targs) const {
 }
 
 inline KernelLauncher KernelInstantiation::configure(
-    dim3 grid, dim3 block, size_t smem, cudaStream_t stream) const {
+    dim3 grid, dim3 block, unsigned int smem, cudaStream_t stream) const {
   return KernelLauncher(this, grid, block, smem, stream);
 }
 
 inline KernelLauncher KernelInstantiation::configure_1d_max_occupancy(
-    int max_block_size, size_t smem, CUoccupancyB2DSize smem_callback,
+    int max_block_size, unsigned int smem, CUoccupancyB2DSize smem_callback,
     cudaStream_t stream, unsigned int flags) const {
   int grid;
   int block;
@@ -3810,9 +3830,7 @@ inline KernelLauncher KernelInstantiation::configure_1d_max_occupancy(
 }  // namespace jitify
 
 #if defined(_WIN32) || defined(_WIN64)
+#pragma pop_macro("max")
+#pragma pop_macro("min")
 #pragma pop_macro("strtok_r")
-#endif
-
-#ifdef _MSVC_LANG
-#pragma pop_macro("__cplusplus")
 #endif

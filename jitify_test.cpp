@@ -26,6 +26,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
+#define JITIFY_ENABLE_EMBEDDED_FILES 1
+#endif
 #define JITIFY_PRINT_INSTANTIATION 1
 #define JITIFY_PRINT_SOURCE 1
 #define JITIFY_PRINT_LOG 1
@@ -36,7 +39,7 @@
 #include "jitify.hpp"
 
 #include "example_headers/my_header1.cuh.jit"
-#ifdef LINUX  // Only supported by gcc on Linux
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
 JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 #endif
 
@@ -444,7 +447,7 @@ TEST(JitifyTest, ParallelFor) {
   T val = 3.14159f;
 
   jitify::ExecutionPolicy policy(jitify::DEVICE);
-  auto lambda = JITIFY_LAMBDA((d_out, val), d_out[i] = i * val);
+  auto lambda = JITIFY_LAMBDA((d_out, val), d_out[i] = (float)i * val);
   CHECK_CUDA(jitify::parallel_for(policy, 0, n, lambda));
 
   std::vector<T> h_out(n);
@@ -454,7 +457,7 @@ TEST(JitifyTest, ParallelFor) {
   CHECK_CUDART(cudaFree(d_out));
 
   for (int i = 0; i < n; ++i) {
-    EXPECT_FLOAT_EQ(h_out[i], i * val);
+    EXPECT_FLOAT_EQ(h_out[i], (T)i * val);
   }
 }
 
@@ -542,7 +545,7 @@ TEST(JitifyTest, CubBlockPrimitives) {
   float sum = 0;
   for (int i = 0; i < n; ++i) {
     // Start with values sorted in reverse.
-    h_data[i] = n - 1 - i;
+    h_data[i] = (float)(n - 1 - i);
     sum += h_data[i];
   }
   // Shuffle the values a bit.
@@ -551,7 +554,7 @@ TEST(JitifyTest, CubBlockPrimitives) {
   std::vector<float> h_expected(n);
   for (int i = 0; i < n; ++i) {
     // Expected sorted and normalized.
-    h_expected[i] = i / sum;
+    h_expected[i] = (float)i / sum;
   }
   std::vector<float> h_result(n);
   float* d_data;
@@ -644,6 +647,22 @@ TEST(JitifyTest, RemoveUnusedGlobals) {
       cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
   EXPECT_EQ(h_data, 16);
   CHECK_CUDART(cudaFree(d_data));
+}
+
+static const char* const curand_program_source =
+    "curand_program\n"
+    "#include <curand_kernel.h>\n"
+    "__global__ void my_kernel() {}\n"
+    "\n";
+
+TEST(JitifyTest, CuRandKernel) {
+  auto program_v2 = jitify::experimental::Program(
+      curand_program_source, {},
+      // Note: --remove-unused-globals is added to remove huge precomputed
+      // arrays that come from CURAND.
+      {"-I" CUDA_INC_DIR, "--remove-unused-globals"});
+  auto kernel_inst_v2 = program_v2.kernel("my_kernel").instantiate();
+  // TODO: Expand this test to actually call curand kernels and check outputs.
 }
 
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.

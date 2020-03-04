@@ -1,6 +1,6 @@
 
 DOXYGEN ?= doxygen
-CXXFLAGS ?= -O3 -Wall -g -fmessage-length=80
+CXXFLAGS ?= -O3 -Wall -Wconversion -g -fmessage-length=80
 
 CXX11 ?= 1
 
@@ -71,7 +71,7 @@ CUB_INC = -I$(CUB_DIR)
 JITIFY_TEST_DEFINES = -DCUDA_INC_DIR="\"$(CUDA_INC_DIR)\"" -DCUB_DIR="\"$(CUB_DIR)\""
 
 jitify_test: jitify_test.cpp $(HEADERS) $(GTEST_STATIC_LIB) $(CUB_HEADER)
-	$(CXX) -o $@ $< -std=c++11 -O3 -Wall $(JITIFY_TEST_DEFINES) $(INC) $(GTEST_INC) $(CUB_INC) $(LIB) $(GTEST_LIB)
+	$(CXX) -o $@ $< -std=c++11 $(CXXFLAGS) $(JITIFY_TEST_DEFINES) $(INC) $(GTEST_INC) $(CUB_INC) $(LIB) $(GTEST_LIB)
 
 test: jitify_test
 	./jitify_test
