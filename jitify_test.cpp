@@ -613,6 +613,7 @@ static const char* const unused_globals_source =
     "  used_struct.b = 3.f;\n"
     "  __syncthreads();\n"
     "  *data += Foo::value + used_scalar + used_array[1] + used_struct.b;\n"
+  "  printf(\"*data = %i\\n\", *data);\n"  // Produces global symbols named $str
     "}\n";
 
 TEST(JitifyTest, RemoveUnusedGlobals) {

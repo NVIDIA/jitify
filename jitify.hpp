@@ -2204,7 +2204,7 @@ inline void ptx_remove_unused_globals(std::string* ptx) {
       const char* token_delims = " \t()[]{},;+-*/~&|^?:=!<>\"'\\";
       for (auto token : split_string(terms[i], -1, token_delims)) {
         if (  // Ignore non-names
-            !(std::isalpha(token[0]) || token[0] == '_') ||
+            !(std::isalpha(token[0]) || token[0] == '_' || token[0] == '$') ||
             token.find('.') != std::string::npos ||
             // Ignore variable/parameter declarations
             terms[i - 1][0] == '.' ||
