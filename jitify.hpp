@@ -995,6 +995,43 @@ inline std::string demangle_ptx_variable_name(const char* name) {
   return ss.str();
 }
 
+inline bool endswith(const std::string& str, const std::string& suffix) {
+  return str.size() >= suffix.size() &&
+         str.substr(str.size() - suffix.size()) == suffix;
+}
+
+// Infers the JIT input type from the filename suffix. If no known suffix is
+// present, the filename is assumed to refer to a library, and the associated
+// suffix (and possibly prefix) is automatically added to the filename.
+inline CUjitInputType get_cuda_jit_input_type(std::string* filename) {
+  if (endswith(*filename, ".ptx")) {
+    return CU_JIT_INPUT_PTX;
+  } else if (endswith(*filename, ".cubin")) {
+    return CU_JIT_INPUT_CUBIN;
+  } else if (endswith(*filename, ".fatbin")) {
+    return CU_JIT_INPUT_FATBINARY;
+  } else if (endswith(*filename,
+#if defined _WIN32 || defined _WIN64
+                      ".obj"
+#else  // Linux
+                      ".o"
+#endif
+                      )) {
+    return CU_JIT_INPUT_OBJECT;
+  } else {  // Assume library
+#if defined _WIN32 || defined _WIN64
+    if (!endswith(*filename, ".lib")) {
+      *filename += ".lib";
+    }
+#else  // Linux
+    if (!endswith(*filename, ".a")) {
+      *filename = "lib" + *filename + ".a";
+    }
+#endif
+    return CU_JIT_INPUT_LIBRARY;
+  }
+}
+
 class CUDAKernel {
   std::vector<std::string> _link_files;
   std::vector<std::string> _link_paths;
@@ -1039,19 +1076,15 @@ class CUDAKernel {
                                    "jitified_source.ptx", 0, 0, 0));
       for (int i = 0; i < (int)link_files.size(); ++i) {
         std::string link_file = link_files[i];
-#if defined _WIN32 || defined _WIN64
-        link_file = link_file + ".lib";
-#else
-        link_file = "lib" + link_file + ".a";
-#endif
-        CUresult result = cuLinkAddFile(_link_state, CU_JIT_INPUT_LIBRARY,
+        CUjitInputType jit_input_type = get_cuda_jit_input_type(&link_file);
+        CUresult result = cuLinkAddFile(_link_state, jit_input_type,
                                         link_file.c_str(), 0, 0, 0);
         int path_num = 0;
         while (result == CUDA_ERROR_FILE_NOT_FOUND &&
                path_num < (int)link_paths.size()) {
           std::string filename = path_join(link_paths[path_num++], link_file);
-          result = cuLinkAddFile(_link_state, CU_JIT_INPUT_LIBRARY,
-                                 filename.c_str(), 0, 0, 0);
+          result = cuLinkAddFile(_link_state, jit_input_type, filename.c_str(),
+                                 0, 0, 0);
         }
 #if JITIFY_PRINT_LOG
         if (result == CUDA_ERROR_FILE_NOT_FOUND) {
