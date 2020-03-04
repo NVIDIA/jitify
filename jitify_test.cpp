@@ -45,7 +45,10 @@ JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 
 #include "gtest/gtest.h"
 
+#include <cstdio>
+#include <fstream>
 #include <iostream>
+#include <memory>
 
 #define CHECK_CUDA(call)                                                  \
   do {                                                                    \
@@ -686,6 +689,53 @@ TEST(JitifyTest, CuRandKernel) {
       {"-I" CUDA_INC_DIR, "--remove-unused-globals"});
   auto kernel_inst_v2 = program_v2.kernel("my_kernel").instantiate();
   // TODO: Expand this test to actually call curand kernels and check outputs.
+}
+
+static const char* const linktest_program1_source =
+    "linktest_program1\n"
+    "extern __constant__ int c = 5;\n"
+    "extern __device__ int d = 7;\n"
+    "extern __device__ int f(int i) { return i + 11; }\n"
+    "\n";
+
+static const char* const linktest_program2_source =
+    "linktest_program2\n"
+    "extern __constant__ int c;\n"
+    "extern __device__ int d;\n"
+    "extern __device__ int f(int);\n"
+    "__global__ void my_kernel(int* data) {\n"
+    "  *data = f(*data + c + d);\n"
+    "}\n"
+    "\n";
+
+TEST(JitifyTest, LinkExternalFiles) {
+  cudaFree(0);
+  // Ensure temporary file is deleted at the end.
+  std::unique_ptr<const char, int(*)(const char*)> ptx_filename(
+      "example_headers/linktest.ptx", std::remove);
+  {
+    std::ofstream ptx_file(ptx_filename.get());
+    ptx_file.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+    ptx_file << jitify::experimental::Program(linktest_program1_source, {},
+                                              {"-rdc=true"})
+                    .kernel("")
+                    .instantiate()
+                    .ptx();
+  }
+  auto program_v2 = jitify::experimental::Program(
+      linktest_program2_source, {},
+      {"-rdc=true", "-Lexample_headers", "-llinktest.ptx"});
+  auto kernel_inst_v2 = program_v2.kernel("my_kernel").instantiate();
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+  int h_data = 3;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+  CHECK_CUDA(kernel_inst_v2.configure(1, 1).launch(d_data));
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 26);
+  CHECK_CUDART(cudaFree(d_data));
 }
 
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
