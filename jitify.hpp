@@ -1084,7 +1084,12 @@ class CUDAKernel {
     std::cout << "---------------------------------------" << std::endl;
 #endif
     cuda_safe_call(result);
-    cuda_safe_call(cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
+    // Allow _func_name to be empty to support cases where we want to generate
+    // PTX containing extern symbol definitions but no kernels.
+    if (!_func_name.empty()) {
+      cuda_safe_call(
+          cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
+    }
   }
   inline void destroy_module() {
     if (_link_state) {
