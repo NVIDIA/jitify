@@ -214,7 +214,9 @@ class ObjectCache {
     _capacity = capacity;
     this->discard_old();
   }
-  inline bool contains(const key_type& k) const { return _objects.count(k); }
+  inline bool contains(const key_type& k) const {
+    return (bool)_objects.count(k);
+  }
   inline void touch(const key_type& k) {
     if (!this->contains(k)) {
       throw std::runtime_error("Key not found in cache");
@@ -872,9 +874,9 @@ inline std::string reflect(T const& value) {
 /*! Generate a code-string for an integer non-type template argument.
  *  \code{.cpp}reflect<7>() --> "(int64_t)7"\endcode
  */
-template <long long N>
+template <int64_t N>
 inline std::string reflect() {
-  return reflect<NonType<int, N> >();
+  return reflect<NonType<int64_t, N> >();
 }
 // Non-type template arg reflection (explicit type)
 // E.g., reflect<int,7>() -> "(int)7"
@@ -2241,7 +2243,7 @@ inline nvrtcResult compile_kernel(std::string program_name,
   // Build arrays of header names and sources
   std::vector<const char*> header_names_c;
   std::vector<const char*> header_sources_c;
-  int num_headers = sources.size() - 1;
+  int num_headers = (int)(sources.size() - 1);
   header_names_c.reserve(num_headers);
   header_sources_c.reserve(num_headers);
   typedef std::map<std::string, std::string> source_map;
@@ -2297,8 +2299,8 @@ inline nvrtcResult compile_kernel(std::string program_name,
   }
 #endif
 
-  nvrtcResult ret =
-      nvrtcCompileProgram(nvrtc_program, options_c.size(), options_c.data());
+  nvrtcResult ret = nvrtcCompileProgram(nvrtc_program, (int)options_c.size(),
+                                        options_c.data());
   if (log) {
     size_t logsize;
     CHECK_NVRTC(nvrtcGetProgramLogSize(nvrtc_program, &logsize));
@@ -2522,9 +2524,9 @@ inline void instantiate_kernel(
 }
 
 inline void get_1d_max_occupancy(CUfunction func,
-                                 CUoccupancyB2DSize smem_callback, size_t* smem,
-                                 int max_block_size, unsigned int flags,
-                                 int* grid, int* block) {
+                                 CUoccupancyB2DSize smem_callback,
+                                 unsigned int* smem, int max_block_size,
+                                 unsigned int flags, int* grid, int* block) {
   if (!func) {
     throw std::runtime_error(
         "Kernel pointer is NULL; you may need to define JITIFY_THREAD_SAFE "
@@ -2538,7 +2540,7 @@ inline void get_1d_max_occupancy(CUfunction func,
     throw std::runtime_error(msg);
   }
   if (smem_callback) {
-    *smem = smem_callback(*block);
+    *smem = (unsigned int)smem_callback(*block);
   }
 }
 
@@ -2652,12 +2654,12 @@ class KernelLauncher_impl {
   KernelInstantiation_impl _kernel_inst;
   dim3 _grid;
   dim3 _block;
-  size_t _smem;
+  unsigned int _smem;
   cudaStream_t _stream;
 
  public:
   inline KernelLauncher_impl(KernelInstantiation_impl const& kernel_inst,
-                             dim3 grid, dim3 block, size_t smem = 0,
+                             dim3 grid, dim3 block, unsigned int smem = 0,
                              cudaStream_t stream = 0)
       : _kernel_inst(kernel_inst),
         _grid(grid),
@@ -2679,7 +2681,8 @@ class KernelLauncher {
 
  public:
   inline KernelLauncher(KernelInstantiation const& kernel_inst, dim3 grid,
-                        dim3 block, size_t smem = 0, cudaStream_t stream = 0);
+                        dim3 block, unsigned int smem = 0,
+                        cudaStream_t stream = 0);
 
   // Note: It's important that there is no implicit conversion required
   //         for arg_ptrs, because otherwise the parameter pack version
@@ -2739,7 +2742,7 @@ class KernelInstantiation {
    *
    *  \see configure
    */
-  inline KernelLauncher operator()(dim3 grid, dim3 block, size_t smem = 0,
+  inline KernelLauncher operator()(dim3 grid, dim3 block, unsigned int smem = 0,
                                    cudaStream_t stream = 0) const {
     return this->configure(grid, block, smem, stream);
   }
@@ -2751,7 +2754,7 @@ class KernelInstantiation {
    * bytes.
    *  \param stream The CUDA stream to launch the kernel in.
    */
-  inline KernelLauncher configure(dim3 grid, dim3 block, size_t smem = 0,
+  inline KernelLauncher configure(dim3 grid, dim3 block, unsigned int smem = 0,
                                   cudaStream_t stream = 0) const {
     return KernelLauncher(*this, grid, block, smem, stream);
   }
@@ -2766,7 +2769,7 @@ class KernelInstantiation {
    * \param flags The flags to pass to cuOccupancyMaxPotentialBlockSizeWithFlags.
    */
   inline KernelLauncher configure_1d_max_occupancy(
-      int max_block_size = 0, size_t smem = 0,
+      int max_block_size = 0, unsigned int smem = 0,
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const {
     int grid;
@@ -2970,7 +2973,7 @@ inline KernelInstantiation::KernelInstantiation(
     : _impl(new KernelInstantiation_impl(*kernel._impl, template_args)) {}
 
 inline KernelLauncher::KernelLauncher(KernelInstantiation const& kernel_inst,
-                                      dim3 grid, dim3 block, size_t smem,
+                                      dim3 grid, dim3 block, unsigned int smem,
                                       cudaStream_t stream)
     : _impl(new KernelLauncher_impl(*kernel_inst._impl, grid, block, smem,
                                     stream)) {}
@@ -3309,7 +3312,7 @@ CUresult parallel_for(ExecutionPolicy policy, IndexType begin, IndexType end,
 
   size_t n = end - begin;
   dim3 block(policy.block_size);
-  dim3 grid(std::min((n - 1) / block.x + 1, size_t(65535)));
+  dim3 grid((unsigned int)std::min((n - 1) / block.x + 1, size_t(65535)));
   cudaSetDevice(policy.device);
   return program.kernel("parallel_for_kernel")
       .instantiate<IndexType>()
@@ -3693,7 +3696,7 @@ class KernelInstantiation {
    * bytes.
    *  \param stream The CUDA stream to launch the kernel in.
    */
-  KernelLauncher configure(dim3 grid, dim3 block, size_t smem = 0,
+  KernelLauncher configure(dim3 grid, dim3 block, unsigned int smem = 0,
                            cudaStream_t stream = 0) const;
 
   /*! Configure the kernel launch with a 1-dimensional block and grid chosen
@@ -3709,7 +3712,7 @@ class KernelInstantiation {
    * cuOccupancyMaxPotentialBlockSizeWithFlags.
    */
   KernelLauncher configure_1d_max_occupancy(
-      int max_block_size = 0, size_t smem = 0,
+      int max_block_size = 0, unsigned int smem = 0,
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const;
 
@@ -3736,12 +3739,12 @@ class KernelLauncher {
   KernelInstantiation const* _kernel_inst;
   dim3 _grid;
   dim3 _block;
-  size_t _smem;
+  unsigned int _smem;
   cudaStream_t _stream;
 
  public:
   KernelLauncher(KernelInstantiation const* kernel_inst, dim3 grid, dim3 block,
-                 size_t smem = 0, cudaStream_t stream = 0)
+                 unsigned int smem = 0, cudaStream_t stream = 0)
       : _kernel_inst(kernel_inst),
         _grid(grid),
         _block(block),
@@ -3807,12 +3810,12 @@ inline KernelInstantiation Kernel::instantiate(TemplateArgs... targs) const {
 }
 
 inline KernelLauncher KernelInstantiation::configure(
-    dim3 grid, dim3 block, size_t smem, cudaStream_t stream) const {
+    dim3 grid, dim3 block, unsigned int smem, cudaStream_t stream) const {
   return KernelLauncher(this, grid, block, smem, stream);
 }
 
 inline KernelLauncher KernelInstantiation::configure_1d_max_occupancy(
-    int max_block_size, size_t smem, CUoccupancyB2DSize smem_callback,
+    int max_block_size, unsigned int smem, CUoccupancyB2DSize smem_callback,
     cudaStream_t stream, unsigned int flags) const {
   int grid;
   int block;

@@ -306,7 +306,7 @@ bool test_parallel_for() {
   T val = 3.14159f;
 
   jitify::ExecutionPolicy policy(jitify::DEVICE);
-  auto lambda = JITIFY_LAMBDA((d_out, val), d_out[i] = i * val);
+  auto lambda = JITIFY_LAMBDA((d_out, val), d_out[i] = (T)i * val);
   CHECK_CUDA(jitify::parallel_for(policy, 0, n, lambda));
 
   std::vector<T> h_out(n);
@@ -315,8 +315,8 @@ bool test_parallel_for() {
   cudaFree(d_out);
 
   for (int i = 0; i < n; ++i) {
-    if (!are_close(h_out[i], i * val)) {
-      std::cout << h_out[i] << " != " << i * val << std::endl;
+    if (!are_close(h_out[i], (T)i * val)) {
+      std::cout << h_out[i] << " != " << (T)i * val << std::endl;
       return false;
     }
   }
