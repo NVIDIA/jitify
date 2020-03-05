@@ -995,6 +995,43 @@ inline std::string demangle_ptx_variable_name(const char* name) {
   return ss.str();
 }
 
+inline bool endswith(const std::string& str, const std::string& suffix) {
+  return str.size() >= suffix.size() &&
+         str.substr(str.size() - suffix.size()) == suffix;
+}
+
+// Infers the JIT input type from the filename suffix. If no known suffix is
+// present, the filename is assumed to refer to a library, and the associated
+// suffix (and possibly prefix) is automatically added to the filename.
+inline CUjitInputType get_cuda_jit_input_type(std::string* filename) {
+  if (endswith(*filename, ".ptx")) {
+    return CU_JIT_INPUT_PTX;
+  } else if (endswith(*filename, ".cubin")) {
+    return CU_JIT_INPUT_CUBIN;
+  } else if (endswith(*filename, ".fatbin")) {
+    return CU_JIT_INPUT_FATBINARY;
+  } else if (endswith(*filename,
+#if defined _WIN32 || defined _WIN64
+                      ".obj"
+#else  // Linux
+                      ".o"
+#endif
+                      )) {
+    return CU_JIT_INPUT_OBJECT;
+  } else {  // Assume library
+#if defined _WIN32 || defined _WIN64
+    if (!endswith(*filename, ".lib")) {
+      *filename += ".lib";
+    }
+#else  // Linux
+    if (!endswith(*filename, ".a")) {
+      *filename = "lib" + *filename + ".a";
+    }
+#endif
+    return CU_JIT_INPUT_LIBRARY;
+  }
+}
+
 class CUDAKernel {
   std::vector<std::string> _link_files;
   std::vector<std::string> _link_paths;
@@ -1003,11 +1040,12 @@ class CUDAKernel {
   CUfunction _kernel;
   std::string _func_name;
   std::string _ptx;
-  std::map<std::string, std::string> _constant_map;
+  std::map<std::string, std::string> _global_map;
   std::vector<CUjit_option> _opts;
   std::vector<void*> _optvals;
 #ifdef JITIFY_PRINT_LINKER_LOG
   static const unsigned int _log_size = 8192;
+  char _error_log[_log_size];
   char _info_log[_log_size];
 #endif
 
@@ -1020,13 +1058,14 @@ class CUDAKernel {
   }
   inline void create_module(std::vector<std::string> link_files,
                             std::vector<std::string> link_paths) {
+    CUresult result;
 #ifndef JITIFY_PRINT_LINKER_LOG
     // WAR since linker log does not seem to be constructed using a single call
     // to cuModuleLoadDataEx.
     if (link_files.empty()) {
-      cuda_safe_call(cuModuleLoadDataEx(&_module, _ptx.c_str(),
-                                        (unsigned)_opts.size(), _opts.data(),
-                                        _optvals.data()));
+      result =
+          cuModuleLoadDataEx(&_module, _ptx.c_str(), (unsigned)_opts.size(),
+                             _opts.data(), _optvals.data());
     } else
 #endif
     {
@@ -1037,32 +1076,34 @@ class CUDAKernel {
                                    "jitified_source.ptx", 0, 0, 0));
       for (int i = 0; i < (int)link_files.size(); ++i) {
         std::string link_file = link_files[i];
-#if defined _WIN32 || defined _WIN64
-        link_file = link_file + ".lib";
-#else
-        link_file = "lib" + link_file + ".a";
-#endif
-        CUresult result = cuLinkAddFile(_link_state, CU_JIT_INPUT_LIBRARY,
+        CUjitInputType jit_input_type = get_cuda_jit_input_type(&link_file);
+        CUresult result = cuLinkAddFile(_link_state, jit_input_type,
                                         link_file.c_str(), 0, 0, 0);
         int path_num = 0;
         while (result == CUDA_ERROR_FILE_NOT_FOUND &&
                path_num < (int)link_paths.size()) {
           std::string filename = path_join(link_paths[path_num++], link_file);
-          result = cuLinkAddFile(_link_state, CU_JIT_INPUT_LIBRARY,
-                                 filename.c_str(), 0, 0, 0);
+          result = cuLinkAddFile(_link_state, jit_input_type, filename.c_str(),
+                                 0, 0, 0);
         }
 #if JITIFY_PRINT_LOG
         if (result == CUDA_ERROR_FILE_NOT_FOUND) {
-          std::cout << "Error: Device library not found: " << link_file
+          std::cerr << "Linker error: Device library not found: " << link_file
                     << std::endl;
+        } else if (result != CUDA_SUCCESS) {
+          std::cerr << "Linker error: Failed to add file: " << link_file
+                    << std::endl;
+          std::cerr << _error_log << std::endl;
         }
 #endif
         cuda_safe_call(result);
       }
       size_t cubin_size;
       void* cubin;
-      cuda_safe_call(cuLinkComplete(_link_state, &cubin, &cubin_size));
-      cuda_safe_call(cuModuleLoadData(&_module, cubin));
+      result = cuLinkComplete(_link_state, &cubin, &cubin_size);
+      if (result == CUDA_SUCCESS) {
+        result = cuModuleLoadData(&_module, cubin);
+      }
     }
 #ifdef JITIFY_PRINT_LINKER_LOG
     std::cout << "---------------------------------------" << std::endl;
@@ -1071,9 +1112,17 @@ class CUDAKernel {
               << std::endl;
     std::cout << "---------------------------------------" << std::endl;
     std::cout << _info_log << std::endl;
+    std::cout << std::endl;
+    std::cout << _error_log << std::endl;
     std::cout << "---------------------------------------" << std::endl;
 #endif
-    cuda_safe_call(cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
+    cuda_safe_call(result);
+    // Allow _func_name to be empty to support cases where we want to generate
+    // PTX containing extern symbol definitions but no kernels.
+    if (!_func_name.empty()) {
+      cuda_safe_call(
+          cuModuleGetFunction(&_kernel, _module, _func_name.c_str()));
+    }
   }
   inline void destroy_module() {
     if (_link_state) {
@@ -1086,25 +1135,26 @@ class CUDAKernel {
     _module = 0;
   }
 
-  // create a map of constants in the ptx file mapping demangled to mangled name
-  inline void create_constant_map() {
+  // create a map of __constant__ and __device__ variables in the ptx file
+  // mapping demangled to mangled name
+  inline void create_global_variable_map() {
     size_t pos = 0;
     while (pos < _ptx.size()) {
-      pos = _ptx.find(".const .align", pos);
+      pos = std::min(_ptx.find(".const .align", pos),
+                     _ptx.find(".global .align", pos));
       if (pos == std::string::npos) break;
       size_t end = _ptx.find(";", pos);
       std::string line = _ptx.substr(pos, end - pos);
       pos = end;
-      size_t constant_start = line.find_last_of(" ") + 1;
-      size_t constant_end = line.find_last_of("[");
-      std::string entry =
-          line.substr(constant_start, constant_end - constant_start);
+      size_t symbol_start = line.find_last_of(" ") + 1;
+      size_t symbol_end = line.find_last_of("[");
+      std::string entry = line.substr(symbol_start, symbol_end - symbol_start);
       std::string key = detail::demangle_ptx_variable_name(entry.c_str());
       // Skip unsupported mangled names. E.g., a static variable defined inside
       // a function (such variables are not directly addressable from outside
       // the function, so skipping them is the correct behavior).
       if (key == "") continue;
-      _constant_map[key] = entry;
+      _global_map[key] = entry;
     }
   }
 
@@ -1113,6 +1163,10 @@ class CUDAKernel {
     _opts.push_back(CU_JIT_INFO_LOG_BUFFER);
     _optvals.push_back((void*)_info_log);
     _opts.push_back(CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES);
+    _optvals.push_back((void*)(long)_log_size);
+    _opts.push_back(CU_JIT_ERROR_LOG_BUFFER);
+    _optvals.push_back((void*)_error_log);
+    _opts.push_back(CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES);
     _optvals.push_back((void*)(long)_log_size);
     _opts.push_back(CU_JIT_LOG_VERBOSE);
     _optvals.push_back((void*)1);
@@ -1140,7 +1194,7 @@ class CUDAKernel {
         _optvals(optvals, optvals + nopts) {
     this->set_linker_log();
     this->create_module(link_files, link_paths);
-    this->create_constant_map();
+    this->create_global_variable_map();
   }
 
   inline CUDAKernel& set(const char* func_name, const char* ptx,
@@ -1157,7 +1211,7 @@ class CUDAKernel {
     _optvals.assign(optvals, optvals + nopts);
     this->set_linker_log();
     this->create_module(link_files, link_paths);
-    this->create_constant_map();
+    this->create_global_variable_map();
     return *this;
   }
   inline ~CUDAKernel() { this->destroy_module(); }
@@ -1169,17 +1223,16 @@ class CUDAKernel {
                           block.z, smem, stream, arg_ptrs.data(), NULL);
   }
 
-  inline CUdeviceptr get_constant_ptr(const char* name) const {
-    CUdeviceptr const_ptr = 0;
-    auto constant = _constant_map.find(name);
-    if (constant != _constant_map.end()) {
+  inline CUdeviceptr get_global_ptr(const char* name) const {
+    CUdeviceptr global_ptr = 0;
+    auto global = _global_map.find(name);
+    if (global != _global_map.end()) {
       cuda_safe_call(
-          cuModuleGetGlobal(&const_ptr, 0, _module, constant->second.c_str()));
+          cuModuleGetGlobal(&global_ptr, 0, _module, global->second.c_str()));
     } else {
-      throw std::runtime_error(std::string("failed to look up constant ") +
-                               name);
+      throw std::runtime_error(std::string("failed to look up global ") + name);
     }
-    return const_ptr;
+    return global_ptr;
   }
 
   const std::string& function_name() const { return _func_name; }
@@ -2204,7 +2257,7 @@ inline void ptx_remove_unused_globals(std::string* ptx) {
       const char* token_delims = " \t()[]{},;+-*/~&|^?:=!<>\"'\\";
       for (auto token : split_string(terms[i], -1, token_delims)) {
         if (  // Ignore non-names
-            !(std::isalpha(token[0]) || token[0] == '_') ||
+            !(std::isalpha(token[0]) || token[0] == '_' || token[0] == '$') ||
             token.find('.') != std::string::npos ||
             // Ignore variable/parameter declarations
             terms[i - 1][0] == '.' ||
@@ -2780,8 +2833,19 @@ class KernelInstantiation {
     return this->configure(grid, block, smem, stream);
   }
 
+  /*
+   * \deprecated Use \p get_global_ptr instead.
+   */
   inline CUdeviceptr get_constant_ptr(const char* name) const {
-    return _impl->cuda_kernel().get_constant_ptr(name);
+    return get_global_ptr(name);
+  }
+
+  /*
+   * Get a device pointer to a global __constant__ or __device__ variable using
+   * its un-mangled name.
+   */
+  inline CUdeviceptr get_global_ptr(const char* name) const {
+    return _impl->cuda_kernel().get_global_ptr(name);
   }
 
   const std::string& mangled_name() const {
@@ -3716,8 +3780,19 @@ class KernelInstantiation {
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const;
 
+  /*
+   * \deprecated Use \p get_global_ptr instead.
+   */
   CUdeviceptr get_constant_ptr(const char* name) const {
-    return _cuda_kernel->get_constant_ptr(name);
+    return get_global_ptr(name);
+  }
+
+  /*
+   * Get a device pointer to a global __constant__ or __device__ variable using
+   * its un-mangled name.
+   */
+  CUdeviceptr get_global_ptr(const char* name) const {
+    return _cuda_kernel->get_global_ptr(name);
   }
 
   const std::string& mangled_name() const {
