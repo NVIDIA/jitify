@@ -693,9 +693,9 @@ TEST(JitifyTest, CuRandKernel) {
 
 static const char* const linktest_program1_source =
     "linktest_program1\n"
-    "extern __constant__ int c = 5;\n"
-    "extern __device__ int d = 7;\n"
-    "extern __device__ int f(int i) { return i + 11; }\n"
+    "__constant__ int c = 5;\n"
+    "__device__ int d = 7;\n"
+    "__device__ int f(int i) { return i + 11; }\n"
     "\n";
 
 static const char* const linktest_program2_source =
