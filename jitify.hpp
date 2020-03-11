@@ -1086,7 +1086,7 @@ class CUDAKernel {
           result = cuLinkAddFile(_link_state, jit_input_type, filename.c_str(),
                                  0, 0, 0);
         }
-#if JITIFY_PRINT_LOG
+#if JITIFY_PRINT_LINKER_LOG
         if (result == CUDA_ERROR_FILE_NOT_FOUND) {
           std::cerr << "Linker error: Device library not found: " << link_file
                     << std::endl;
