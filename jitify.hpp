@@ -1143,7 +1143,8 @@ class CUDAKernel {
       pos = std::min(_ptx.find(".const .align", pos),
                      _ptx.find(".global .align", pos));
       if (pos == std::string::npos) break;
-      size_t end = _ptx.find(";", pos);
+      size_t end = _ptx.find_first_of(";=", pos);
+      if (_ptx[end] == '=') --end;
       std::string line = _ptx.substr(pos, end - pos);
       pos = end;
       size_t symbol_start = line.find_last_of(" ") + 1;
