@@ -116,6 +116,19 @@
 #endif
 #include <nvrtc.h>
 
+// For use by get_current_executable_path().
+#ifdef __linux__
+#include <linux/limits.h>  // For PATH_MAX
+
+#include <cstdlib>  // For realpath
+#define JITIFY_PATH_MAX PATH_MAX
+#elif defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+#define JITIFY_PATH_MAX MAX_PATH
+#else
+#error "Unsupported platform"
+#endif
+
 #if defined(_WIN32) || defined(_WIN64)
 // WAR for strtok_r being called strtok_s on Windows
 #pragma push_macro("strtok_r")
@@ -995,6 +1008,19 @@ inline std::string demangle_ptx_variable_name(const char* name) {
   return ss.str();
 }
 
+static const char* get_current_executable_path() {
+  static const char* path = []() -> const char* {
+    static char buffer[JITIFY_PATH_MAX] = {};
+#ifdef __linux__
+    if (!::realpath("/proc/self/exe", buffer)) return nullptr;
+#elif defined(_WIN32) || defined(_WIN64)
+    if (!GetModuleFileNameA(nullptr, buffer, JITIFY_PATH_MAX)) return nullptr;
+#endif
+    return buffer;
+  }();
+  return path;
+}
+
 inline bool endswith(const std::string& str, const std::string& suffix) {
   return str.size() >= suffix.size() &&
          str.substr(str.size() - suffix.size()) == suffix;
@@ -1076,7 +1102,15 @@ class CUDAKernel {
                                    "jitified_source.ptx", 0, 0, 0));
       for (int i = 0; i < (int)link_files.size(); ++i) {
         std::string link_file = link_files[i];
-        CUjitInputType jit_input_type = get_cuda_jit_input_type(&link_file);
+        CUjitInputType jit_input_type;
+        if (link_file == ".") {
+          // Special case for linking to current executable.
+          link_file = get_current_executable_path();
+          jit_input_type = CU_JIT_INPUT_OBJECT;
+        } else {
+          // Infer based on filename.
+          jit_input_type = get_cuda_jit_input_type(&link_file);
+        }
         CUresult result = cuLinkAddFile(_link_state, jit_input_type,
                                         link_file.c_str(), 0, 0, 0);
         int path_num = 0;
