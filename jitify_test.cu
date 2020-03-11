@@ -771,6 +771,37 @@ TEST(JitifyTest, LinkExternalFiles) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+namespace a {
+__host__ __device__ int external_device_func(int i) { return i + 1; }
+}
+
+static const char* const selflink_program_source =
+    "selflink_program\n"
+    "namespace a {\n"
+    "extern __device__ int external_device_func(int);\n"
+    "}\n"
+    "__global__ void my_kernel(int* data) {\n"
+    "  *data = a::external_device_func(*data);\n"
+    "}\n"
+    "\n";
+
+TEST(JitifyTest, LinkCurrentExecutable) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  auto program = Program(selflink_program_source, {}, {"-l."});
+  auto kernel_inst = program.kernel("my_kernel").instantiate();
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+  int h_data = 3;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+  CHECK_CUDA(kernel_inst.configure(1, 1).launch(d_data));
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 4);
+  CHECK_CUDART(cudaFree(d_data));
+}
+
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
