@@ -116,6 +116,19 @@
 #endif
 #include <nvrtc.h>
 
+// For use by get_current_executable_path().
+#ifdef __linux__
+#include <linux/limits.h>  // For PATH_MAX
+
+#include <cstdlib>  // For realpath
+#define JITIFY_PATH_MAX PATH_MAX
+#elif defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+#define JITIFY_PATH_MAX MAX_PATH
+#else
+#error "Unsupported platform"
+#endif
+
 #if defined(_WIN32) || defined(_WIN64)
 // WAR for strtok_r being called strtok_s on Windows
 #pragma push_macro("strtok_r")
@@ -995,6 +1008,19 @@ inline std::string demangle_ptx_variable_name(const char* name) {
   return ss.str();
 }
 
+static const char* get_current_executable_path() {
+  static const char* path = []() -> const char* {
+    static char buffer[JITIFY_PATH_MAX] = {};
+#ifdef __linux__
+    if (!::realpath("/proc/self/exe", buffer)) return nullptr;
+#elif defined(_WIN32) || defined(_WIN64)
+    if (!GetModuleFileNameA(nullptr, buffer, JITIFY_PATH_MAX)) return nullptr;
+#endif
+    return buffer;
+  }();
+  return path;
+}
+
 inline bool endswith(const std::string& str, const std::string& suffix) {
   return str.size() >= suffix.size() &&
          str.substr(str.size() - suffix.size()) == suffix;
@@ -1076,7 +1102,15 @@ class CUDAKernel {
                                    "jitified_source.ptx", 0, 0, 0));
       for (int i = 0; i < (int)link_files.size(); ++i) {
         std::string link_file = link_files[i];
-        CUjitInputType jit_input_type = get_cuda_jit_input_type(&link_file);
+        CUjitInputType jit_input_type;
+        if (link_file == ".") {
+          // Special case for linking to current executable.
+          link_file = get_current_executable_path();
+          jit_input_type = CU_JIT_INPUT_OBJECT;
+        } else {
+          // Infer based on filename.
+          jit_input_type = get_cuda_jit_input_type(&link_file);
+        }
         CUresult result = cuLinkAddFile(_link_state, jit_input_type,
                                         link_file.c_str(), 0, 0, 0);
         int path_num = 0;
@@ -1086,7 +1120,7 @@ class CUDAKernel {
           result = cuLinkAddFile(_link_state, jit_input_type, filename.c_str(),
                                  0, 0, 0);
         }
-#if JITIFY_PRINT_LOG
+#if JITIFY_PRINT_LINKER_LOG
         if (result == CUDA_ERROR_FILE_NOT_FOUND) {
           std::cerr << "Linker error: Device library not found: " << link_file
                     << std::endl;
@@ -1143,7 +1177,8 @@ class CUDAKernel {
       pos = std::min(_ptx.find(".const .align", pos),
                      _ptx.find(".global .align", pos));
       if (pos == std::string::npos) break;
-      size_t end = _ptx.find(";", pos);
+      size_t end = _ptx.find_first_of(";=", pos);
+      if (_ptx[end] == '=') --end;
       std::string line = _ptx.substr(pos, end - pos);
       pos = end;
       size_t symbol_start = line.find_last_of(" ") + 1;
@@ -1223,16 +1258,47 @@ class CUDAKernel {
                           block.z, smem, stream, arg_ptrs.data(), NULL);
   }
 
-  inline CUdeviceptr get_global_ptr(const char* name) const {
+  inline CUdeviceptr get_global_ptr(const char* name,
+                                    size_t* size = nullptr) const {
     CUdeviceptr global_ptr = 0;
     auto global = _global_map.find(name);
     if (global != _global_map.end()) {
-      cuda_safe_call(
-          cuModuleGetGlobal(&global_ptr, 0, _module, global->second.c_str()));
+      cuda_safe_call(cuModuleGetGlobal(&global_ptr, size, _module,
+                                       global->second.c_str()));
     } else {
       throw std::runtime_error(std::string("failed to look up global ") + name);
     }
     return global_ptr;
+  }
+
+  template <typename T>
+  inline CUresult get_global_data(const char* name, T* data, size_t count,
+                                  CUstream stream = 0) const {
+    size_t size_bytes;
+    CUdeviceptr ptr = get_global_ptr(name, &size_bytes);
+    size_t given_size_bytes = count * sizeof(T);
+    if (given_size_bytes != size_bytes) {
+      throw std::runtime_error(
+          std::string("Value for global variable ") + name +
+          " has wrong size: got " + std::to_string(given_size_bytes) +
+          " bytes, expected " + std::to_string(size_bytes));
+    }
+    return cuMemcpyDtoH(data, ptr, size_bytes);
+  }
+
+  template <typename T>
+  inline CUresult set_global_data(const char* name, const T* data, size_t count,
+                                  CUstream stream = 0) const {
+    size_t size_bytes;
+    CUdeviceptr ptr = get_global_ptr(name, &size_bytes);
+    size_t given_size_bytes = count * sizeof(T);
+    if (given_size_bytes != size_bytes) {
+      throw std::runtime_error(
+          std::string("Value for global variable ") + name +
+          " has wrong size: got " + std::to_string(given_size_bytes) +
+          " bytes, expected " + std::to_string(size_bytes));
+    }
+    return cuMemcpyHtoD(ptr, data, size_bytes);
   }
 
   const std::string& function_name() const { return _func_name; }
@@ -2836,16 +2902,59 @@ class KernelInstantiation {
   /*
    * \deprecated Use \p get_global_ptr instead.
    */
-  inline CUdeviceptr get_constant_ptr(const char* name) const {
-    return get_global_ptr(name);
+  inline CUdeviceptr get_constant_ptr(const char* name,
+                                      size_t* size = nullptr) const {
+    return get_global_ptr(name, size);
   }
 
   /*
    * Get a device pointer to a global __constant__ or __device__ variable using
+   * its un-mangled name. If provided, *size is set to the size of the variable
+   * in bytes.
+   */
+  inline CUdeviceptr get_global_ptr(const char* name,
+                                    size_t* size = nullptr) const {
+    return _impl->cuda_kernel().get_global_ptr(name, size);
+  }
+
+  /*
+   * Copy data from a global __constant__ or __device__ array to the host using
    * its un-mangled name.
    */
-  inline CUdeviceptr get_global_ptr(const char* name) const {
-    return _impl->cuda_kernel().get_global_ptr(name);
+  template <typename T>
+  inline CUresult get_global_array(const char* name, T* data, size_t count,
+                                   CUstream stream = 0) const {
+    return _impl->cuda_kernel().get_global_data(name, data, count, stream);
+  }
+
+  /*
+   * Copy a value from a global __constant__ or __device__ variable to the host
+   * using its un-mangled name.
+   */
+  template <typename T>
+  inline CUresult get_global_value(const char* name, T* value,
+                                   CUstream stream = 0) const {
+    return get_global_array(name, value, 1, stream);
+  }
+
+  /*
+   * Copy data from the host to a global __constant__ or __device__ array using
+   * its un-mangled name.
+   */
+  template <typename T>
+  inline CUresult set_global_array(const char* name, const T* data,
+                                   size_t count, CUstream stream = 0) const {
+    return _impl->cuda_kernel().set_global_data(name, data, count, stream);
+  }
+
+  /*
+   * Copy a value from the host to a global __constant__ or __device__ variable
+   * using its un-mangled name.
+   */
+  template <typename T>
+  inline CUresult set_global_value(const char* name, const T& value,
+                                   CUstream stream = 0) const {
+    return set_global_array(name, &value, 1, stream);
   }
 
   const std::string& mangled_name() const {
@@ -3783,16 +3892,57 @@ class KernelInstantiation {
   /*
    * \deprecated Use \p get_global_ptr instead.
    */
-  CUdeviceptr get_constant_ptr(const char* name) const {
-    return get_global_ptr(name);
+  CUdeviceptr get_constant_ptr(const char* name, size_t* size = nullptr) const {
+    return get_global_ptr(name, size);
   }
 
   /*
    * Get a device pointer to a global __constant__ or __device__ variable using
+   * its un-mangled name. If provided, *size is set to the size of the variable
+   * in bytes.
+   */
+  CUdeviceptr get_global_ptr(const char* name, size_t* size = nullptr) const {
+    return _cuda_kernel->get_global_ptr(name, size);
+  }
+
+  /*
+   * Copy data from a global __constant__ or __device__ array to the host using
    * its un-mangled name.
    */
-  CUdeviceptr get_global_ptr(const char* name) const {
-    return _cuda_kernel->get_global_ptr(name);
+  template <typename T>
+  CUresult get_global_array(const char* name, T* data, size_t count,
+                            CUstream stream = 0) const {
+    return _cuda_kernel->get_global_data(name, data, count, stream);
+  }
+
+  /*
+   * Copy a value from a global __constant__ or __device__ variable to the host
+   * using its un-mangled name.
+   */
+  template <typename T>
+  CUresult get_global_value(const char* name, T* value,
+                            CUstream stream = 0) const {
+    return get_global_array(name, value, 1, stream);
+  }
+
+  /*
+   * Copy data from the host to a global __constant__ or __device__ array using
+   * its un-mangled name.
+   */
+  template <typename T>
+  CUresult set_global_array(const char* name, const T* data, size_t count,
+                            CUstream stream = 0) const {
+    return _cuda_kernel->set_global_data(name, data, count, stream);
+  }
+
+  /*
+   * Copy a value from the host to a global __constant__ or __device__ variable
+   * using its un-mangled name.
+   */
+  template <typename T>
+  CUresult set_global_value(const char* name, const T& value,
+                            CUstream stream = 0) const {
+    return set_global_array(name, &value, 1, stream);
   }
 
   const std::string& mangled_name() const {
