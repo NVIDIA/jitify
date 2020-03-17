@@ -437,11 +437,10 @@ inline bool extract_include_info_from_compile_error(std::string log,
                                                     std::string& name,
                                                     std::string& parent,
                                                     int& line_num) {
+  static const std::vector<std::string> pattern = {
+      "could not open source file \"", "cannot open source file \""};
 
-  static const std::vector<std::string> pattern = {"could not open source file \"",
-                                                   "cannot open source file \""};
-
-  for (auto &p : pattern) {
+  for (auto& p : pattern) {
     size_t beg = log.find(p);
     if (beg != std::string::npos) {
       beg += p.size();
@@ -457,8 +456,9 @@ inline bool extract_include_info_from_compile_error(std::string log,
 
       size_t split = log.find("(", line_beg);
       parent = log.substr(line_beg, split - line_beg);
-      line_num = atoi(
-                      log.substr(split + 1, log.find(")", split + 1) - (split + 1)).c_str());
+      line_num =
+          atoi(log.substr(split + 1, log.find(")", split + 1) - (split + 1))
+                   .c_str());
 
       return true;
     }
