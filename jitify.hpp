@@ -778,15 +778,14 @@ inline std::string demangle(const char* verbose_name) {
 #else  // not MSVC
 #include <cxxabi.h>
 inline std::string demangle(const char* mangled_name) {
-  size_t bufsize = 1024;
-  auto buf = std::unique_ptr<char, decltype(free)*>(
-      reinterpret_cast<char*>(malloc(bufsize)), free);
+  size_t bufsize = 0;
+  char *buf = nullptr;
   std::string demangled_name;
   int status;
-  char* demangled_ptr =
-      abi::__cxa_demangle(mangled_name, buf.get(), &bufsize, &status);
+  auto demangled_ptr =
+    std::unique_ptr<char, decltype(free)*>(abi::__cxa_demangle(mangled_name, buf, &bufsize, &status), free);
   if (status == 0) {
-    demangled_name = demangled_ptr;  // all worked as expected
+    demangled_name = demangled_ptr.get();  // all worked as expected
   } else if (status == -2) {
     demangled_name = mangled_name;  // we interpret this as plain C name
   } else if (status == -1) {
@@ -2055,7 +2054,6 @@ static const char* jitsafe_header_algorithm = R"(
       return (b < a) ? b : a;
     }
 
-    #endif
     } // namespace __jitify_algorithm_ns
     namespace std { using namespace __jitify_algorithm_ns; }
     using namespace __jitify_algorithm_ns;
