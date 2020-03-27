@@ -779,11 +779,11 @@ inline std::string demangle(const char* verbose_name) {
 #include <cxxabi.h>
 inline std::string demangle(const char* mangled_name) {
   size_t bufsize = 0;
-  char *buf = nullptr;
+  char* buf = nullptr;
   std::string demangled_name;
   int status;
-  auto demangled_ptr =
-    std::unique_ptr<char, decltype(free)*>(abi::__cxa_demangle(mangled_name, buf, &bufsize, &status), free);
+  auto demangled_ptr = std::unique_ptr<char, decltype(free)*>(
+      abi::__cxa_demangle(mangled_name, buf, &bufsize, &status), free);
   if (status == 0) {
     demangled_name = demangled_ptr.get();  // all worked as expected
   } else if (status == -2) {
