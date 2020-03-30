@@ -671,7 +671,8 @@ static const char* const unused_globals_source =
     "  used_struct.b = 3.f;\n"
     "  __syncthreads();\n"
     "  *data += Foo::value + used_scalar + used_array[1] + used_struct.b;\n"
-  "  printf(\"*data = %i\\n\", *data);\n"  // Produces global symbols named $str
+    "  printf(\"*data = %i\\n\", *data);\n"  // Produces global symbols named
+                                             // $str
     "}\n";
 
 TEST(JitifyTest, RemoveUnusedGlobals) {
@@ -744,7 +745,7 @@ static const char* const linktest_program2_source =
 TEST(JitifyTest, LinkExternalFiles) {
   cudaFree(0);
   // Ensure temporary file is deleted at the end.
-  std::unique_ptr<const char, int(*)(const char*)> ptx_filename(
+  std::unique_ptr<const char, int (*)(const char*)> ptx_filename(
       "example_headers/linktest.ptx", std::remove);
   {
     std::ofstream ptx_file(ptx_filename.get());
@@ -773,7 +774,7 @@ TEST(JitifyTest, LinkExternalFiles) {
 
 namespace a {
 __host__ __device__ int external_device_func(int i) { return i + 1; }
-}
+}  // namespace a
 
 static const char* const selflink_program_source =
     "selflink_program\n"
