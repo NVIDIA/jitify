@@ -802,6 +802,54 @@ TEST(JitifyTest, LinkCurrentExecutable) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+static const char* const reflection_program_source =
+    "reflection_program\n"
+    "struct Base { virtual ~Base() {} };\n"
+    "template <typename T>\n"
+    "struct Derived : public Base {};\n"
+    "template<typename T>\n"
+    "__global__ void type_kernel() {}\n"
+    "template<unsigned short N>\n"
+    "__global__ void nontype_kernel() {}\n"
+    "\n";
+
+struct Base {
+  virtual ~Base() {}
+};
+template <typename T>
+struct Derived : public Base {};
+
+TEST(JitifyTest, Reflection) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  using jitify::reflection::instance_of;
+  Program program(reflection_program_source);
+  auto type_kernel = program.kernel("type_kernel");
+
+#define JITIFY_TYPE_REFLECTION_TEST(T)                   \
+  EXPECT_EQ(type_kernel.instantiate<T>().mangled_name(), \
+            type_kernel.instantiate({#T}).mangled_name())
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float);
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float*);
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float&);
+  JITIFY_TYPE_REFLECTION_TEST(Base * (const volatile float));
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float[4]);
+#undef JITIFY_TYPE_REFLECTION_TEST
+
+  typedef Derived<float> derived_type;
+  const Base& base = derived_type();
+  EXPECT_EQ(type_kernel.instantiate(instance_of(base)).mangled_name(),
+            type_kernel.instantiate<derived_type>().mangled_name());
+
+  auto nontype_kernel = program.kernel("nontype_kernel");
+#define JITIFY_NONTYPE_REFLECTION_TEST(N)                 \
+  EXPECT_EQ(nontype_kernel.instantiate(N).mangled_name(), \
+            nontype_kernel.instantiate({#N}).mangled_name())
+  JITIFY_NONTYPE_REFLECTION_TEST(7);
+  JITIFY_NONTYPE_REFLECTION_TEST('J');
+#undef JITIFY_NONTYPE_REFLECTION_TEST
+}
+
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
