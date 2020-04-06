@@ -671,7 +671,8 @@ static const char* const unused_globals_source =
     "  used_struct.b = 3.f;\n"
     "  __syncthreads();\n"
     "  *data += Foo::value + used_scalar + used_array[1] + used_struct.b;\n"
-  "  printf(\"*data = %i\\n\", *data);\n"  // Produces global symbols named $str
+    "  printf(\"*data = %i\\n\", *data);\n"  // Produces global symbols named
+                                             // $str
     "}\n";
 
 TEST(JitifyTest, RemoveUnusedGlobals) {
@@ -744,7 +745,7 @@ static const char* const linktest_program2_source =
 TEST(JitifyTest, LinkExternalFiles) {
   cudaFree(0);
   // Ensure temporary file is deleted at the end.
-  std::unique_ptr<const char, int(*)(const char*)> ptx_filename(
+  std::unique_ptr<const char, int (*)(const char*)> ptx_filename(
       "example_headers/linktest.ptx", std::remove);
   {
     std::ofstream ptx_file(ptx_filename.get());
@@ -773,7 +774,7 @@ TEST(JitifyTest, LinkExternalFiles) {
 
 namespace a {
 __host__ __device__ int external_device_func(int i) { return i + 1; }
-}
+}  // namespace a
 
 static const char* const selflink_program_source =
     "selflink_program\n"
@@ -800,6 +801,54 @@ TEST(JitifyTest, LinkCurrentExecutable) {
       cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
   EXPECT_EQ(h_data, 4);
   CHECK_CUDART(cudaFree(d_data));
+}
+
+static const char* const reflection_program_source =
+    "reflection_program\n"
+    "struct Base { virtual ~Base() {} };\n"
+    "template <typename T>\n"
+    "struct Derived : public Base {};\n"
+    "template<typename T>\n"
+    "__global__ void type_kernel() {}\n"
+    "template<unsigned short N>\n"
+    "__global__ void nontype_kernel() {}\n"
+    "\n";
+
+struct Base {
+  virtual ~Base() {}
+};
+template <typename T>
+struct Derived : public Base {};
+
+TEST(JitifyTest, Reflection) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  using jitify::reflection::instance_of;
+  Program program(reflection_program_source);
+  auto type_kernel = program.kernel("type_kernel");
+
+#define JITIFY_TYPE_REFLECTION_TEST(T)                   \
+  EXPECT_EQ(type_kernel.instantiate<T>().mangled_name(), \
+            type_kernel.instantiate({#T}).mangled_name())
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float);
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float*);
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float&);
+  JITIFY_TYPE_REFLECTION_TEST(Base * (const volatile float));
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float[4]);
+#undef JITIFY_TYPE_REFLECTION_TEST
+
+  typedef Derived<float> derived_type;
+  const Base& base = derived_type();
+  EXPECT_EQ(type_kernel.instantiate(instance_of(base)).mangled_name(),
+            type_kernel.instantiate<derived_type>().mangled_name());
+
+  auto nontype_kernel = program.kernel("nontype_kernel");
+#define JITIFY_NONTYPE_REFLECTION_TEST(N)                 \
+  EXPECT_EQ(nontype_kernel.instantiate(N).mangled_name(), \
+            nontype_kernel.instantiate({#N}).mangled_name())
+  JITIFY_NONTYPE_REFLECTION_TEST(7);
+  JITIFY_NONTYPE_REFLECTION_TEST('J');
+#undef JITIFY_NONTYPE_REFLECTION_TEST
 }
 
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.

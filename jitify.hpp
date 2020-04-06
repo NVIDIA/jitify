@@ -129,6 +129,12 @@
 #error "Unsupported platform"
 #endif
 
+#ifdef _MSC_VER       // MSVC compiler
+#include <dbghelp.h>  // For UnDecorateSymbolName
+#else
+#include <cxxabi.h>  // For abi::__cxa_demangle
+#endif
+
 #if defined(_WIN32) || defined(_WIN64)
 // WAR for strtok_r being called strtok_s on Windows
 #pragma push_macro("strtok_r")
@@ -764,20 +770,42 @@ inline std::string value_string<bool>(const bool& x) {
   return x ? "true" : "false";
 }
 
+// Removes all tokens that start with double underscores.
+inline void strip_double_underscore_tokens(char* s) {
+  using jitify::detail::is_tokenchar;
+  char* w = s;
+  do {
+    if (*s == '_' && *(s + 1) == '_') {
+      while (is_tokenchar(*++s))
+        ;
+    }
+  } while ((*w++ = *s++));
+}
+
 //#if CUDA_VERSION < 8000
 #ifdef _MSC_VER  // MSVC compiler
-inline std::string demangle(const char* verbose_name) {
-  // Strips annotations from the verbose name returned by typeid(X).name()
-  std::string result = verbose_name;
-  result = jitify::detail::replace_token(result, "__ptr64", "");
-  result = jitify::detail::replace_token(result, "__cdecl", "");
-  result = jitify::detail::replace_token(result, "class", "");
-  result = jitify::detail::replace_token(result, "struct", "");
-  return result;
+inline std::string demangle_cuda_symbol(const char* mangled_name) {
+  // We don't have a way to demangle CUDA symbol names under MSVC.
+  return mangled_name;
 }
-#else  // not MSVC
-#include <cxxabi.h>
-inline std::string demangle(const char* mangled_name) {
+inline std::string demangle_native_type(const std::type_info& typeinfo) {
+  // Get the decorated name and skip over the leading '.'.
+  const char* decorated_name = typeinfo.raw_name() + 1;
+  char undecorated_name[4096];
+  if (UnDecorateSymbolName(
+          decorated_name, undecorated_name,
+          sizeof(undecorated_name) / sizeof(*undecorated_name),
+          UNDNAME_NO_ARGUMENTS |          // Treat input as a type name
+              UNDNAME_NAME_ONLY           // No "class" and "struct" prefixes
+          /*UNDNAME_NO_MS_KEYWORDS*/)) {  // No "__cdecl", "__ptr64" etc.
+    // WAR for UNDNAME_NO_MS_KEYWORDS messing up function types.
+    strip_double_underscore_tokens(undecorated_name);
+    return undecorated_name;
+  }
+  throw std::runtime_error("UnDecorateSymbolName failed");
+}
+#else   // not MSVC
+inline std::string demangle_cuda_symbol(const char* mangled_name) {
   size_t bufsize = 0;
   char* buf = nullptr;
   std::string demangled_name;
@@ -796,29 +824,34 @@ inline std::string demangle(const char* mangled_name) {
   }
   return demangled_name;
 }
+inline std::string demangle_native_type(const std::type_info& typeinfo) {
+  return demangle_cuda_symbol(typeinfo.name());
+}
 #endif  // not MSVC
 //#endif // CUDA_VERSION < 8000
+
+template <typename>
+class JitifyTypeNameWrapper_ {};
 
 template <typename T>
 struct type_reflection {
   inline static std::string name() {
     //#if CUDA_VERSION < 8000
+    // TODO: Use nvrtcGetTypeName once it has the same behavior as this.
     // WAR for typeid discarding cv qualifiers on value-types
-    // We use a pointer type to maintain cv qualifiers, then strip out the '*'
-    std::string no_cv_name = demangle(typeid(T).name());
-    std::string ptr_name = demangle(typeid(T*).name());
-    // Find the right '*' by diffing the type name and ptr name
-    // Note that the '*' will also be prefixed with the cv qualifiers
-    size_t diff_begin =
-        std::mismatch(no_cv_name.begin(), no_cv_name.end(), ptr_name.begin())
-            .first -
-        no_cv_name.begin();
-    size_t star_begin = ptr_name.find("*", diff_begin);
-    if (star_begin == std::string::npos) {
-      throw std::runtime_error("Type reflection failed: " + ptr_name);
+    // Wrap type in dummy template class to preserve cv-qualifiers, then strip
+    // off the wrapper from the resulting string.
+    std::string wrapped_name =
+        demangle_native_type(typeid(JitifyTypeNameWrapper_<T>));
+    // Note: The reflected name of this class also has namespace prefixes.
+    const std::string wrapper_class_name = "JitifyTypeNameWrapper_<";
+    size_t start = wrapped_name.find(wrapper_class_name);
+    if (start == std::string::npos) {
+      throw std::runtime_error("Type reflection failed: " + wrapped_name);
     }
+    start += wrapper_class_name.size();
     std::string name =
-        ptr_name.substr(0, star_begin) + ptr_name.substr(star_begin + 1);
+        wrapped_name.substr(start, wrapped_name.size() - (start + 1));
     return name;
     //#else
     //         std::string ret;
@@ -925,7 +958,7 @@ inline std::string reflect(jitify::reflection::Type<T>) {
  */
 template <typename T>
 inline std::string reflect(jitify::reflection::Instance<T>& value) {
-  return detail::demangle(typeid(value.value).name());
+  return detail::demangle_native_type(typeid(value.value));
 }
 
 // Type from value
@@ -1148,8 +1181,8 @@ class CUDAKernel {
 #ifdef JITIFY_PRINT_LINKER_LOG
     std::cout << "---------------------------------------" << std::endl;
     std::cout << "--- Linker for "
-              << reflection::detail::demangle(_func_name.c_str()) << " ---"
-              << std::endl;
+              << reflection::detail::demangle_cuda_symbol(_func_name.c_str())
+              << " ---" << std::endl;
     std::cout << "---------------------------------------" << std::endl;
     std::cout << _info_log << std::endl;
     std::cout << std::endl;
