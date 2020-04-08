@@ -1433,10 +1433,6 @@ static const char* jitsafe_header_limits_h =
     "#define INT_MIN     (-INT_MAX - 1)\n"
     "#define INT_MAX     2147483647\n"
     "#define UINT_MAX    4294967295U\n"
-    "#define FLT_MAX     3.40282e+38\n"
-    "#define FLT_MIN     1.40134e-45\n"
-    "#define DBL_MAX     8.79769e+307\n"
-    "#define DBL_MIN     4.94066e-324\n"
     "#if __WORDSIZE == 64\n"
     " # define LONG_MAX  9223372036854775807L\n"
     "#else\n"
@@ -1495,6 +1491,7 @@ static const char* jitsafe_header_iterator =
 static const char* jitsafe_header_limits =
     "#pragma once\n"
     "#include <climits>\n"
+    "#include <cfloat>\n"
     "\n"
     "// TODO: Floating-point limits beyond float32 and double64\n"
     "namespace __jitify_detail {\n"
