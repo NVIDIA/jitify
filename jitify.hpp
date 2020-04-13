@@ -1492,8 +1492,7 @@ static const char* jitsafe_header_limits =
     "#pragma once\n"
     "#include <climits>\n"
     "#include <cfloat>\n"
-    "\n"
-    "// TODO: lowest(), epsilon(), infinity(), etc
+    "// TODO: lowest(), epsilon(), infinity(), etc\n"
     "namespace __jitify_detail {\n"
     "#if __cplusplus == 201103L\n"
     "#define JITIFY_CXX14_CONSTEXPR\n"
