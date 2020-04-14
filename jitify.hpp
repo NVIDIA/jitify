@@ -1373,17 +1373,6 @@ static const char* jitsafe_header_preinclude_h = R"(
 static const char* jitsafe_header_float_h = R"(
 #pragma once
 
-#if __cplusplus >= 201103L
-#define JITIFY_CXX11_CONSTEXPR constexpr
-#else
-#define JITIFY_CXX11_CONSTEXP
-#endif
-JITIFY_CXX11_CONSTEXPR inline __host__ __device__
-   float jitify_int_as_float(int i) {
-         union FloatInt { float f; int i; } fi; fi.i = i; return fi.f; }
-JITIFY_CXX11_CONSTEXPR inline __host__ __device__
-   double jitify_longlong_as_double(long long i) {
-         union DoubleLongLong { double f; long long i; } fi; fi.i = i; return fi.f; }
 #define FLT_RADIX       2
 #define FLT_MANT_DIG    24
 #define DBL_MANT_DIG    53
@@ -1397,12 +1386,12 @@ JITIFY_CXX11_CONSTEXPR inline __host__ __device__
 #define DBL_MAX_EXP     1024
 #define FLT_MAX_10_EXP  38
 #define DBL_MAX_10_EXP  308
-#define FLT_MAX         jitify_int_as_float(2139095039)
-#define DBL_MAX         jitify_longlong_as_double(9218868437227405311)
-#define FLT_EPSILON     jitify_int_as_float(872415232)
-#define DBL_EPSILON     jitify_longlong_as_double(4372995238176751616)
-#define FLT_MIN         jitify_int_as_float(8388608)
-#define DBL_MIN         jitify_longlong_as_double(4503599627370496)
+#define FLT_MAX         3.4028234e38f 
+#define DBL_MAX         1.7976931348623157e308 
+#define FLT_EPSILON     1.19209289e-7f 
+#define DBL_EPSILON     2.220440492503130e-16 
+#define FLT_MIN         1.1754943e-38f; 
+#define DBL_MIN         2.2250738585072013e-308 
 #define FLT_ROUNDS      1
 #if defined __cplusplus && __cplusplus >= 201103L
 #define FLT_EVAL_METHOD 0
