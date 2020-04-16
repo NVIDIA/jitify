@@ -1416,13 +1416,11 @@ static const char* jitsafe_header_limits_h = R"(
 #define SCHAR_MIN   (-128)
 #define SCHAR_MAX   127
 #define UCHAR_MAX   255
-#ifdef __CHAR_UNSIGNED__
- #define CHAR_MIN   0
- #define CHAR_MAX   UCHAR_MAX
-#else
- #define CHAR_MIN   SCHAR_MIN
- #define CHAR_MAX   SCHAR_MAX
-#endif
+enum {
+  _JITIFY_CHAR_IS_UNSIGNED = (char)-1 >= 0,
+  CHAR_MIN = _JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN,
+  CHAR_MAX = _JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX,
+};
 #define SHRT_MIN    (-32768)
 #define SHRT_MAX    32767
 #define USHRT_MAX   65535
@@ -1490,7 +1488,7 @@ static const char* jitsafe_header_limits = R"(
 #pragma once
 #include <climits>
 #include <cfloat>
-// TODO: lowest(), epsilon(), infinity(), etc
+// TODO: epsilon(), infinity(), etc
 namespace __jitify_detail {
 #if __cplusplus >= 201103L
 #define JITIFY_CXX11_CONSTEXPR constexpr
@@ -1503,7 +1501,7 @@ namespace __jitify_detail {
 struct FloatLimits {
 #if __cplusplus >= 201103L
    static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
-          float lowest() JITIFY_CXX11_NOEXCEPT {   return FLT_MIN;}
+          float lowest() JITIFY_CXX11_NOEXCEPT {   return -FLT_MAX;}
    static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
           float min() JITIFY_CXX11_NOEXCEPT {      return FLT_MIN; }
    static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
@@ -1538,7 +1536,7 @@ struct FloatLimits {
 struct DoubleLimits {
 #if __cplusplus >= 201103L
    static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
-          double lowest() noexcept { return DBL_MIN; }
+          double lowest() noexcept { return -DBL_MAX; }
    static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
           double min() noexcept { return DBL_MIN; }
    static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
