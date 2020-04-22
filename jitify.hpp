@@ -1370,192 +1370,280 @@ static const char* jitsafe_header_preinclude_h = R"(
 #define catch(...)
 )";
 
-static const char* jitsafe_header_float_h =
-    "#pragma once\n"
-    "\n"
-    "inline __host__ __device__ float  jitify_int_as_float(int i)             "
-    "{ union FloatInt { float f; int i; } fi; fi.i = i; return fi.f; }\n"
-    "inline __host__ __device__ double jitify_longlong_as_double(long long i) "
-    "{ union DoubleLongLong { double f; long long i; } fi; fi.i = i; return "
-    "fi.f; }\n"
-    "#define FLT_RADIX       2\n"
-    "#define FLT_MANT_DIG    24\n"
-    "#define DBL_MANT_DIG    53\n"
-    "#define FLT_DIG         6\n"
-    "#define DBL_DIG         15\n"
-    "#define FLT_MIN_EXP     -125\n"
-    "#define DBL_MIN_EXP     -1021\n"
-    "#define FLT_MIN_10_EXP  -37\n"
-    "#define DBL_MIN_10_EXP  -307\n"
-    "#define FLT_MAX_EXP     128\n"
-    "#define DBL_MAX_EXP     1024\n"
-    "#define FLT_MAX_10_EXP  38\n"
-    "#define DBL_MAX_10_EXP  308\n"
-    "#define FLT_MAX         jitify_int_as_float(2139095039)\n"
-    "#define DBL_MAX         jitify_longlong_as_double(9218868437227405311)\n"
-    "#define FLT_EPSILON     jitify_int_as_float(872415232)\n"
-    "#define DBL_EPSILON     jitify_longlong_as_double(4372995238176751616)\n"
-    "#define FLT_MIN         jitify_int_as_float(8388608)\n"
-    "#define DBL_MIN         jitify_longlong_as_double(4503599627370496)\n"
-    "#define FLT_ROUNDS      1\n"
-    "#if defined __cplusplus && __cplusplus >= 201103L\n"
-    "#define FLT_EVAL_METHOD 0\n"
-    "#define DECIMAL_DIG     21\n"
-    "#endif\n";
 
-static const char* jitsafe_header_limits_h =
-    "#pragma once\n"
-    "\n"
-    "#if defined _WIN32 || defined _WIN64\n"
-    " #define __WORDSIZE 32\n"
-    "#else\n"
-    " #if defined __x86_64__ && !defined __ILP32__\n"
-    "  #define __WORDSIZE 64\n"
-    " #else\n"
-    "  #define __WORDSIZE 32\n"
-    " #endif\n"
-    "#endif\n"
-    "#define MB_LEN_MAX  16\n"
-    "#define CHAR_BIT    8\n"
-    "#define SCHAR_MIN   (-128)\n"
-    "#define SCHAR_MAX   127\n"
-    "#define UCHAR_MAX   255\n"
-    "enum {\n"
-    " _JITIFY_CHAR_IS_UNSIGNED = (char)-1 >= 0,\n"
-    " CHAR_MIN = _JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN,\n"
-    " CHAR_MAX = _JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX,\n"
-    " };\n"
-    "#define SHRT_MIN    (-32768)\n"
-    "#define SHRT_MAX    32767\n"
-    "#define USHRT_MAX   65535\n"
-    "#define INT_MIN     (-INT_MAX - 1)\n"
-    "#define INT_MAX     2147483647\n"
-    "#define UINT_MAX    4294967295U\n"
-    "#if __WORDSIZE == 64\n"
-    " # define LONG_MAX  9223372036854775807L\n"
-    "#else\n"
-    " # define LONG_MAX  2147483647L\n"
-    "#endif\n"
-    "#define LONG_MIN    (-LONG_MAX - 1L)\n"
-    "#if __WORDSIZE == 64\n"
-    " #define ULONG_MAX  18446744073709551615UL\n"
-    "#else\n"
-    " #define ULONG_MAX  4294967295UL\n"
-    "#endif\n"
-    "#define LLONG_MAX  9223372036854775807LL\n"
-    "#define LLONG_MIN  (-LLONG_MAX - 1LL)\n"
-    "#define ULLONG_MAX 18446744073709551615ULL\n";
+static const char* jitsafe_header_float_h = R"(
+#pragma once
 
-static const char* jitsafe_header_iterator =
-    "#pragma once\n"
-    "\n"
-    "namespace __jitify_iterator_ns {\n"
-    "struct output_iterator_tag {};\n"
-    "struct input_iterator_tag {};\n"
-    "struct forward_iterator_tag {};\n"
-    "struct bidirectional_iterator_tag {};\n"
-    "struct random_access_iterator_tag {};\n"
-    "template<class Iterator>\n"
-    "struct iterator_traits {\n"
-    "  typedef typename Iterator::iterator_category iterator_category;\n"
-    "  typedef typename Iterator::value_type        value_type;\n"
-    "  typedef typename Iterator::difference_type   difference_type;\n"
-    "  typedef typename Iterator::pointer           pointer;\n"
-    "  typedef typename Iterator::reference         reference;\n"
-    "};\n"
-    "template<class T>\n"
-    "struct iterator_traits<T*> {\n"
-    "  typedef random_access_iterator_tag iterator_category;\n"
-    "  typedef T                          value_type;\n"
-    "  typedef ptrdiff_t                  difference_type;\n"
-    "  typedef T*                         pointer;\n"
-    "  typedef T&                         reference;\n"
-    "};\n"
-    "template<class T>\n"
-    "struct iterator_traits<T const*> {\n"
-    "  typedef random_access_iterator_tag iterator_category;\n"
-    "  typedef T                          value_type;\n"
-    "  typedef ptrdiff_t                  difference_type;\n"
-    "  typedef T const*                   pointer;\n"
-    "  typedef T const&                   reference;\n"
-    "};\n"
-    "} // namespace __jitify_iterator_ns\n"
-    "namespace std { using namespace __jitify_iterator_ns; }\n"
-    "using namespace __jitify_iterator_ns;\n";
+#define FLT_RADIX       2
+#define FLT_MANT_DIG    24
+#define DBL_MANT_DIG    53
+#define FLT_DIG         6
+#define DBL_DIG         15
+#define FLT_MIN_EXP     -125
+#define DBL_MIN_EXP     -1021
+#define FLT_MIN_10_EXP  -37
+#define DBL_MIN_10_EXP  -307
+#define FLT_MAX_EXP     128
+#define DBL_MAX_EXP     1024
+#define FLT_MAX_10_EXP  38
+#define DBL_MAX_10_EXP  308
+#define FLT_MAX         3.4028234e38f 
+#define DBL_MAX         1.7976931348623157e308 
+#define FLT_EPSILON     1.19209289e-7f 
+#define DBL_EPSILON     2.220440492503130e-16 
+#define FLT_MIN         1.1754943e-38f; 
+#define DBL_MIN         2.2250738585072013e-308 
+#define FLT_ROUNDS      1
+#if defined __cplusplus && __cplusplus >= 201103L
+#define FLT_EVAL_METHOD 0
+#define DECIMAL_DIG     21
+#endif
+)";
+
+static const char* jitsafe_header_limits_h = R"(
+#pragma once
+
+#if defined _WIN32 || defined _WIN64
+ #define __WORDSIZE 32
+#else
+ #if defined __x86_64__ && !defined __ILP32__
+  #define __WORDSIZE 64
+ #else
+  #define __WORDSIZE 32
+ #endif
+#endif
+#define MB_LEN_MAX  16
+#define CHAR_BIT    8
+#define SCHAR_MIN   (-128)
+#define SCHAR_MAX   127
+#define UCHAR_MAX   255
+enum {
+  _JITIFY_CHAR_IS_UNSIGNED = (char)-1 >= 0,
+  CHAR_MIN = _JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN,
+  CHAR_MAX = _JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX,
+};
+#define SHRT_MIN    (-32768)
+#define SHRT_MAX    32767
+#define USHRT_MAX   65535
+#define INT_MIN     (-INT_MAX - 1)
+#define INT_MAX     2147483647
+#define UINT_MAX    4294967295U
+#if __WORDSIZE == 64
+ # define LONG_MAX  9223372036854775807L
+#else
+ # define LONG_MAX  2147483647L
+#endif
+#define LONG_MIN    (-LONG_MAX - 1L)
+#if __WORDSIZE == 64
+ #define ULONG_MAX  18446744073709551615UL
+#else
+ #define ULONG_MAX  4294967295UL
+#endif
+#define LLONG_MAX  9223372036854775807LL
+#define LLONG_MIN  (-LLONG_MAX - 1LL)
+#define ULLONG_MAX 18446744073709551615ULL
+)";
+
+static const char* jitsafe_header_iterator = R"(
+#pragma once
+
+namespace __jitify_iterator_ns {
+struct output_iterator_tag {};
+struct input_iterator_tag {};
+struct forward_iterator_tag {};
+struct bidirectional_iterator_tag {};
+struct random_access_iterator_tag {};
+template<class Iterator>
+struct iterator_traits {
+  typedef typename Iterator::iterator_category iterator_category;
+  typedef typename Iterator::value_type        value_type;
+  typedef typename Iterator::difference_type   difference_type;
+  typedef typename Iterator::pointer           pointer;
+  typedef typename Iterator::reference         reference;
+};
+template<class T>
+struct iterator_traits<T*> {
+  typedef random_access_iterator_tag iterator_category;
+  typedef T                          value_type;
+  typedef ptrdiff_t                  difference_type;
+  typedef T*                         pointer;
+  typedef T&                         reference;
+};
+template<class T>
+struct iterator_traits<T const*> {
+  typedef random_access_iterator_tag iterator_category;
+  typedef T                          value_type;
+  typedef ptrdiff_t                  difference_type;
+  typedef T const*                   pointer;
+  typedef T const&                   reference;
+};
+} // namespace __jitify_iterator_ns
+namespace std { using namespace __jitify_iterator_ns; }
+using namespace __jitify_iterator_ns;
+)";
 
 // TODO: This is incomplete; need floating point limits
-static const char* jitsafe_header_limits =
-    "#pragma once\n"
-    "#include <climits>\n"
-    "\n"
-    "namespace std {\n"
-    "// TODO: Floating-point limits\n"
-    "namespace __jitify_detail {\n"
-    "template<class T, T Min, T Max, int Digits=-1>\n"
-    "struct IntegerLimits {\n"
-    "	static inline __host__ __device__ T min() { return Min; }\n"
-    "	static inline __host__ __device__ T max() { return Max; }\n"
-    "#if __cplusplus >= 201103L\n"
-    "	static constexpr inline __host__ __device__ T lowest() noexcept {\n"
-    "		return Min;\n"
-    "	}\n"
-    "#endif  // __cplusplus >= 201103L\n"
-    "	enum {\n"
-    "       is_specialized = true,\n"
-    "		digits     = (Digits == -1) ? (int)(sizeof(T)*8 - (Min != 0)) "
-    ": Digits,\n"
-    "		digits10   = (digits * 30103) / 100000,\n"
-    "		is_signed  = ((T)(-1)<0),\n"
-    "		is_integer = true,\n"
-    "		is_exact   = true,\n"
-    "		radix      = 2,\n"
-    "		is_bounded = true,\n"
-    "		is_modulo  = false\n"
-    "	};\n"
-    "};\n"
-    "} // namespace detail\n"
-    "template<typename T> struct numeric_limits {\n"
-    "    enum { is_specialized = false };\n"
-    "};\n"
-    "template<> struct numeric_limits<bool>               : public "
-    "__jitify_detail::IntegerLimits<bool,              false,    true,1> {};\n"
-    "template<> struct numeric_limits<char>               : public "
-    "__jitify_detail::IntegerLimits<char,              CHAR_MIN, CHAR_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<signed char>        : public "
-    "__jitify_detail::IntegerLimits<signed char,       SCHAR_MIN,SCHAR_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<unsigned char>      : public "
-    "__jitify_detail::IntegerLimits<unsigned char,     0,        UCHAR_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<wchar_t>            : public "
-    "__jitify_detail::IntegerLimits<wchar_t,           INT_MIN,  INT_MAX> {};\n"
-    "template<> struct numeric_limits<short>              : public "
-    "__jitify_detail::IntegerLimits<short,             SHRT_MIN, SHRT_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<unsigned short>     : public "
-    "__jitify_detail::IntegerLimits<unsigned short,    0,        USHRT_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<int>                : public "
-    "__jitify_detail::IntegerLimits<int,               INT_MIN,  INT_MAX> {};\n"
-    "template<> struct numeric_limits<unsigned int>       : public "
-    "__jitify_detail::IntegerLimits<unsigned int,      0,        UINT_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<long>               : public "
-    "__jitify_detail::IntegerLimits<long,              LONG_MIN, LONG_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<unsigned long>      : public "
-    "__jitify_detail::IntegerLimits<unsigned long,     0,        ULONG_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<long long>          : public "
-    "__jitify_detail::IntegerLimits<long long,         LLONG_MIN,LLONG_MAX> "
-    "{};\n"
-    "template<> struct numeric_limits<unsigned long long> : public "
-    "__jitify_detail::IntegerLimits<unsigned long long,0,        ULLONG_MAX> "
-    "{};\n"
-    "//template<typename T> struct numeric_limits { static const bool "
-    "is_signed = ((T)(-1)<0); };\n"
-    "} // namespace std\n";
+//   Joe Eaton: added IEEE float and double types, none of the smaller types
+//              using type specific structs since we can't template on floats.
+static const char* jitsafe_header_limits = R"(
+#pragma once
+#include <climits>
+#include <cfloat>
+// TODO: epsilon(), infinity(), etc
+namespace __jitify_detail {
+#if __cplusplus >= 201103L
+#define JITIFY_CXX11_CONSTEXPR constexpr
+#define JITIFY_CXX11_NOEXCEPT noexcept
+#else
+#define JITIFY_CXX11_CONSTEXPR
+#define JITIFY_CXX11_NOEXCEPT
+#endif
+
+struct FloatLimits {
+#if __cplusplus >= 201103L
+   static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
+          float lowest() JITIFY_CXX11_NOEXCEPT {   return -FLT_MAX;}
+   static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
+          float min() JITIFY_CXX11_NOEXCEPT {      return FLT_MIN; }
+   static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
+          float max() JITIFY_CXX11_NOEXCEPT {      return FLT_MAX; }
+#endif  // __cplusplus >= 201103L
+   enum {
+   is_specialized    = true,
+   is_signed         = true,
+   is_integer        = false,
+   is_exact          = false,
+   has_infinity      = true,
+   has_quiet_NaN     = true,
+   has_signaling_NaN = true,
+   has_denorm        = 1,
+   has_denorm_loss   = true,
+   round_style       = 1,
+   is_iec559         = true,
+   is_bounded        = true,
+   is_modulo         = false,
+   digits            = 24,
+   digits10          = 6,
+   max_digits10      = 9,
+   radix             = 2,
+   min_exponent      = -125,
+   min_exponent10    = -37,
+   max_exponent      = 128,
+   max_exponent10    = 38,
+   tinyness_before   = false,
+   traps             = false
+   };
+};
+struct DoubleLimits {
+#if __cplusplus >= 201103L
+   static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
+          double lowest() noexcept { return -DBL_MAX; }
+   static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
+          double min() noexcept { return DBL_MIN; }
+   static JITIFY_CXX11_CONSTEXPR inline __host__ __device__ 
+          double max() noexcept { return DBL_MAX; }
+#endif  // __cplusplus >= 201103L
+   enum {
+   is_specialized    = true,
+   is_signed         = true,
+   is_integer        = false,
+   is_exact          = false,
+   has_infinity      = true,
+   has_quiet_NaN     = true,
+   has_signaling_NaN = true,
+   has_denorm        = 1,
+   has_denorm_loss   = true,
+   round_style       = 1,
+   is_iec559         = true,
+   is_bounded        = true,
+   is_modulo         = false,
+   digits            = 53,
+   digits10          = 15,
+   max_digits10      = 17,
+   radix             = 2,
+   min_exponent      = -1021,
+   min_exponent10    = -307,
+   max_exponent      = 1024,
+   max_exponent10    = 308,
+   tinyness_before   = false,
+   traps             = false
+   };
+};
+template<class T, T Min, T Max, int Digits=-1>
+struct IntegerLimits {
+	static inline __host__ __device__ T min() { return Min; }
+	static inline __host__ __device__ T max() { return Max; }
+#if __cplusplus >= 201103L
+	static constexpr inline __host__ __device__ T lowest() noexcept {
+		return Min;
+	}
+#endif  // __cplusplus >= 201103L
+	enum {
+       is_specialized = true,
+       digits = (Digits == -1) ? (int)(sizeof(T)*8 - (Min != 0)) : Digits,
+       digits10   = (digits * 30103) / 100000,
+       is_signed  = ((T)(-1)<0),
+       is_integer = true,
+       is_exact   = true,
+       radix      = 2,
+       is_bounded = true,
+       is_modulo  = false
+	};
+};
+} // namespace __jitify_detail
+namespace std { using namespace __jitify_detail; }
+namespace __jitify_limits_ns {
+template<typename T> struct numeric_limits {
+    enum { is_specialized = false };
+};
+template<> struct numeric_limits<bool>               : public 
+__jitify_detail::IntegerLimits<bool,              false,    true,1> {};
+template<> struct numeric_limits<char>               : public 
+__jitify_detail::IntegerLimits<char,              CHAR_MIN, CHAR_MAX> 
+{};
+template<> struct numeric_limits<signed char>        : public 
+__jitify_detail::IntegerLimits<signed char,       SCHAR_MIN,SCHAR_MAX> 
+{};
+template<> struct numeric_limits<unsigned char>      : public 
+__jitify_detail::IntegerLimits<unsigned char,     0,        UCHAR_MAX> 
+{};
+template<> struct numeric_limits<wchar_t>            : public 
+__jitify_detail::IntegerLimits<wchar_t,           INT_MIN,  INT_MAX> {};
+template<> struct numeric_limits<short>              : public 
+__jitify_detail::IntegerLimits<short,             SHRT_MIN, SHRT_MAX> 
+{};
+template<> struct numeric_limits<unsigned short>     : public 
+__jitify_detail::IntegerLimits<unsigned short,    0,        USHRT_MAX> 
+{};
+template<> struct numeric_limits<int>                : public 
+__jitify_detail::IntegerLimits<int,               INT_MIN,  INT_MAX> {};
+template<> struct numeric_limits<unsigned int>       : public 
+__jitify_detail::IntegerLimits<unsigned int,      0,        UINT_MAX> 
+{};
+template<> struct numeric_limits<long>               : public 
+__jitify_detail::IntegerLimits<long,              LONG_MIN, LONG_MAX> 
+{};
+template<> struct numeric_limits<unsigned long>      : public 
+__jitify_detail::IntegerLimits<unsigned long,     0,        ULONG_MAX> 
+{};
+template<> struct numeric_limits<long long>          : public 
+__jitify_detail::IntegerLimits<long long,         LLONG_MIN,LLONG_MAX> 
+{};
+template<> struct numeric_limits<unsigned long long> : public 
+__jitify_detail::IntegerLimits<unsigned long long,0,        ULLONG_MAX> 
+{};
+//template<typename T> struct numeric_limits { static const bool 
+//is_signed = ((T)(-1)<0); };
+template<> struct numeric_limits<float>              : public 
+__jitify_detail::FloatLimits 
+{};
+template<> struct numeric_limits<double>             : public 
+__jitify_detail::DoubleLimits 
+{};
+} // namespace __jitify_limits_ns
+namespace std { using namespace __jitify_limits_ns; }
+using namespace __jitify_limits_ns;
+)";
 
 // TODO: This is highly incomplete
 static const char* jitsafe_header_type_traits = R"(
