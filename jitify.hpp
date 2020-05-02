@@ -1447,7 +1447,7 @@ enum {
 static const char* jitsafe_header_iterator = R"(
 #pragma once
 
-namespace __jitify_iterator_ns {
+namespace std {
 struct output_iterator_tag {};
 struct input_iterator_tag {};
 struct forward_iterator_tag {};
@@ -1477,9 +1477,7 @@ struct iterator_traits<T const*> {
   typedef T const*                   pointer;
   typedef T const&                   reference;
 };
-} // namespace __jitify_iterator_ns
-namespace std { using namespace __jitify_iterator_ns; }
-using namespace __jitify_iterator_ns;
+}  // namespace std
 )";
 
 // TODO: This is incomplete; need floating point limits
@@ -1591,8 +1589,7 @@ struct IntegerLimits {
 	};
 };
 } // namespace __jitify_detail
-namespace std { using namespace __jitify_detail; }
-namespace __jitify_limits_ns {
+namespace std {
 template<typename T> struct numeric_limits {
     enum { is_specialized = false };
 };
@@ -1640,16 +1637,14 @@ __jitify_detail::FloatLimits
 template<> struct numeric_limits<double>             : public 
 __jitify_detail::DoubleLimits 
 {};
-} // namespace __jitify_limits_ns
-namespace std { using namespace __jitify_limits_ns; }
-using namespace __jitify_limits_ns;
+}  // namespace std
 )";
 
 // TODO: This is highly incomplete
 static const char* jitsafe_header_type_traits = R"(
     #pragma once
     #if __cplusplus >= 201103L
-    namespace __jitify_type_traits_ns {
+    namespace std {
 
     template<bool B, class T = void> struct enable_if {};
     template<class T>                struct enable_if<true, T> { typedef T type; };
@@ -1757,7 +1752,7 @@ static const char* jitsafe_header_type_traits = R"(
     template< class T > struct add_pointer<T, true> { using type = T; };
     template< class T, class... Args > struct add_pointer<T(Args...), true> { using type = T(*)(Args...); };
     template< class T, class... Args > struct add_pointer<T(Args..., ...), true> { using type = T(*)(Args..., ...); };
-    }
+    }  // namespace __jitify_detail
     template< class T > struct add_pointer : __jitify_detail::add_pointer<T, is_function<T>::value> {};
     #if __cplusplus >= 201402L
     template< class T > using add_pointer_t = typename add_pointer<T>::type;
@@ -1775,9 +1770,7 @@ static const char* jitsafe_header_type_traits = R"(
     template< class T > using decay_t = typename decay<T>::type;
     #endif
 
-    } // namespace __jtiify_type_traits_ns
-    namespace std { using namespace __jitify_type_traits_ns; }
-    using namespace __jitify_type_traits_ns;
+    }  // namespace std
     #endif // c++11
 )";
 
@@ -1908,7 +1901,7 @@ static const char* jitsafe_header_iostream =
 static const char* jitsafe_header_ostream =
     "#pragma once\n"
     "\n"
-    "namespace __jitify_ostream_ns {\n"
+    "namespace std {\n"
     "template<class CharT,class Traits=void>\n"  // = std::char_traits<CharT>
                                                  // >\n"
     "struct basic_ostream {\n"
@@ -1924,22 +1917,18 @@ static const char* jitsafe_header_ostream =
     "template< class CharT, class Traits, class T > basic_ostream<CharT, "
     "Traits>& operator<<( basic_ostream<CharT,Traits>&& os, const T& value );\n"
     "#endif  // __cplusplus >= 201103L\n"
-    "} // namespace __jitify_ostream_ns\n"
-    "namespace std { using namespace __jitify_ostream_ns; }\n"
-    "using namespace __jitify_ostream_ns;\n";
+    "}  // namespace std\n";
 
 static const char* jitsafe_header_istream =
     "#pragma once\n"
     "\n"
-    "namespace __jitify_istream_ns {\n"
+    "namespace std {\n"
     "template<class CharT,class Traits=void>\n"  // = std::char_traits<CharT>
                                                  // >\n"
     "struct basic_istream {\n"
     "};\n"
     "typedef basic_istream<char> istream;\n"
-    "} // namespace __jitify_istream_ns\n"
-    "namespace std { using namespace __jitify_istream_ns; }\n"
-    "using namespace __jitify_istream_ns;\n";
+    "}  // namespace std\n";
 
 static const char* jitsafe_header_sstream =
     "#pragma once\n"
@@ -1948,7 +1937,7 @@ static const char* jitsafe_header_sstream =
 
 static const char* jitsafe_header_utility =
     "#pragma once\n"
-    "namespace __jitify_utility_ns {\n"
+    "namespace std {\n"
     "template<class T1, class T2>\n"
     "struct pair {\n"
     "	T1 first;\n"
@@ -1963,25 +1952,21 @@ static const char* jitsafe_header_utility =
     "pair<T1,T2> make_pair(T1 const& first, T2 const& second) {\n"
     "	return pair<T1,T2>(first, second);\n"
     "}\n"
-    "} // namespace __jitify_utility_ns\n"
-    "namespace std { using namespace __jitify_utility_ns; }\n"
-    "using namespace __jitify_utility_ns;\n";
+    "}  // namespace std\n";
 
 // TODO: incomplete
 static const char* jitsafe_header_vector =
     "#pragma once\n"
-    "namespace __jitify_vector_ns {\n"
+    "namespace std {\n"
     "template<class T, class Allocator=void>\n"  // = std::allocator> \n"
     "struct vector {\n"
     "};\n"
-    "} // namespace __jitify_vector_ns\n"
-    "namespace std { using namespace __jitify_vector_ns; }\n"
-    "using namespace __jitify_vector_ns;\n";
+    "}  // namespace std\n";
 
 // TODO: incomplete
 static const char* jitsafe_header_string =
     "#pragma once\n"
-    "namespace __jitify_string_ns {\n"
+    "namespace std {\n"
     "template<class CharT,class Traits=void,class Allocator=void>\n"
     "struct basic_string {\n"
     "basic_string();\n"
@@ -1993,27 +1978,23 @@ static const char* jitsafe_header_string =
     "void operator+=(const basic_string &);\n"
     "};\n"
     "typedef basic_string<char> string;\n"
-    "} // namespace __jitify_string_ns\n"
-    "namespace std { using namespace __jitify_string_ns; }\n"
-    "using namespace __jitify_string_ns;\n";
+    "}  // namespace std\n";
 
 // TODO: incomplete
 static const char* jitsafe_header_stdexcept =
     "#pragma once\n"
-    "namespace __jitify_stdexcept_ns {\n"
+    "namespace std {\n"
     "struct runtime_error {\n"
     "explicit runtime_error( const std::string& what_arg );"
     "explicit runtime_error( const char* what_arg );"
     "virtual const char* what() const;\n"
     "};\n"
-    "} // namespace __jitify_stdexcept_ns\n"
-    "namespace std { using namespace __jitify_stdexcept_ns; }\n"
-    "using namespace __jitify_stdexcept_ns;\n";
+    "}  // namespace std\n";
 
 // TODO: incomplete
 static const char* jitsafe_header_complex =
     "#pragma once\n"
-    "namespace __jitify_complex_ns {\n"
+    "namespace std {\n"
     "template<typename T>\n"
     "class complex {\n"
     "	T _real;\n"
@@ -2043,13 +2024,11 @@ static const char* jitsafe_header_complex =
     "template<typename T>\n"
     "complex<T> operator*(const T& lhs, const complex<T>& rhs)\n"
     "  { return complexs<T>(rhs.real()*lhs,rhs.imag()*lhs); }\n"
-    "} // namespace __jitify_complex_ns\n"
-    "namespace std { using namespace __jitify_complex_ns; }\n"
-    "using namespace __jitify_complex_ns;\n";
+    "}  // namespace std\n";
 
 // TODO: This is incomplete (missing binary and integer funcs, macros,
 // constants, types)
-static const char* jitsafe_header_math =
+static const char* jitsafe_header_math_h =
     "#pragma once\n"
     "namespace __jitify_math_ns {\n"
     "#if __cplusplus >= 201103L\n"
@@ -2140,23 +2119,21 @@ static const char* jitsafe_header_memory_h = R"(
 static const char* jitsafe_header_mutex = R"(
     #pragma once
     #if __cplusplus >= 201103L
-    namespace __jitify_mutex_ns {
+    namespace std {
     class mutex {
     public:
     void lock();
     bool try_lock();
     void unlock();
     };
-    } // namespace __jitify_mutex_ns
-    namespace std { using namespace __jitify_mutex_ns; }
-    using namespace __jitify_mutex_ns;
+    }  // namespace std
     #endif
  )";
 
 static const char* jitsafe_header_algorithm = R"(
     #pragma once
     #if __cplusplus >= 201103L
-    namespace __jitify_algorithm_ns {
+    namespace std {
 
     #if __cplusplus == 201103L
     #define JITIFY_CXX14_CONSTEXPR
@@ -2173,9 +2150,7 @@ static const char* jitsafe_header_algorithm = R"(
       return (b < a) ? b : a;
     }
 
-    } // namespace __jitify_algorithm_ns
-    namespace std { using namespace __jitify_algorithm_ns; }
-    using namespace __jitify_algorithm_ns;
+    }  // namespace std
     #endif
  )";
 
@@ -2255,8 +2230,8 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"limits", jitsafe_header_limits},
       {"type_traits", jitsafe_header_type_traits},
       {"utility", jitsafe_header_utility},
-      {"math.h", jitsafe_header_math},
-      {"cmath", jitsafe_header_math},
+      {"math.h", jitsafe_header_math_h},
+      {"cmath", jitsafe_header_math_h},
       {"memory.h", jitsafe_header_memory_h},
       {"complex", jitsafe_header_complex},
       {"iostream", jitsafe_header_iostream},
