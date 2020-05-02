@@ -851,6 +851,35 @@ TEST(JitifyTest, Reflection) {
 #undef JITIFY_NONTYPE_REFLECTION_TEST
 }
 
+static const char* const builtin_numeric_limits_program_source =
+    "builtin_numeric_limits_program\n"
+    "#include <limits>\n"
+    "struct MyType {};\n"
+    "namespace std {\n"
+    "template<> class numeric_limits<MyType> {\n"
+    " public:\n"
+    "  static MyType min() { return {}; }\n"
+    "  static MyType max() { return {}; }\n"
+    "};\n"
+    "}  // namespace std\n"
+    "template <typename T>\n"
+    "__global__ void my_kernel(T* data) {\n"
+    "  data[0] = std::numeric_limits<T>::min();\n"
+    "  data[1] = std::numeric_limits<T>::max();\n"
+    "}\n";
+
+TEST(JitifyTest, BuiltinNumericLimitsHeader) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  auto program = Program(builtin_numeric_limits_program_source);
+  for (const auto& type :
+       {"float", "double", "char", "signed char", "unsigned char", "short",
+        "unsigned short", "int", "unsigned int", "long", "unsigned long",
+           "long long", "unsigned long long", "MyType"}) {
+    program.kernel("my_kernel").instantiate({type});
+  }
+}
+
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
