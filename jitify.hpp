@@ -3285,10 +3285,13 @@ inline KernelInstantiation_impl::KernelInstantiation_impl(
   _template_inst =
       (template_args.empty() ? ""
                              : reflection::reflect_template(template_args));
+  CUcontext c;
+  cuCtxGetCurrent(&c);
   using detail::hash_combine;
   using detail::hash_larson64;
   _hash = _kernel._hash;
   _hash = hash_combine(_hash, hash_larson64(_template_inst.c_str()));
+  _hash = hash_combine(_hash, std::hash<CUcontext>()(c));
   JitCache_impl& cache = _kernel._program._cache;
   uint64_t cache_key = _hash;
 #if JITIFY_THREAD_SAFE
