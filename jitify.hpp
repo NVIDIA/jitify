@@ -1493,6 +1493,7 @@ static const char* jitsafe_header_limits = R"(
 #pragma once
 #include <cfloat>
 #include <climits>
+#include <cstdint>
 // TODO: epsilon(), infinity(), etc
 namespace __jitify_detail {
 #if __cplusplus >= 201103L
@@ -1611,7 +1612,7 @@ template<> struct numeric_limits<unsigned char>      : public
 __jitify_detail::IntegerLimits<unsigned char,     0,        UCHAR_MAX> 
 {};
 template<> struct numeric_limits<wchar_t>            : public 
-__jitify_detail::IntegerLimits<wchar_t,           INT_MIN,  INT_MAX> {};
+__jitify_detail::IntegerLimits<wchar_t,           WCHAR_MIN, WCHAR_MAX> {};
 template<> struct numeric_limits<short>              : public 
 __jitify_detail::IntegerLimits<short,             SHRT_MIN, SHRT_MAX> 
 {};
@@ -1812,9 +1813,17 @@ static const char* jitsafe_header_stdint_h =
     "typedef unsigned int       uint_least32_t;\n"
     "typedef unsigned long long uint_least64_t;\n"
     "typedef unsigned long long uintmax_t;\n"
-    "typedef unsigned long      uintptr_t; //optional\n"
     "#define INT8_MIN    SCHAR_MIN\n"
     "#define INT16_MIN   SHRT_MIN\n"
+    "#if defined _WIN32 || defined _WIN64\n"
+    "#define WCHAR_MIN   SHRT_MIN\n"
+    "#define WCHAR_MAX   SHRT_MAX\n"
+    "typedef unsigned long long uintptr_t; //optional\n"
+    "#else\n"
+    "#define WCHAR_MIN   INT_MIN\n"
+    "#define WCHAR_MAX   INT_MAX\n"
+    "typedef unsigned long      uintptr_t; //optional\n"
+    "#endif\n"
     "#define INT32_MIN   INT_MIN\n"
     "#define INT64_MIN   LLONG_MIN\n"
     "#define INT8_MAX    SCHAR_MAX\n"
