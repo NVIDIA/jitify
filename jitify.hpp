@@ -885,7 +885,7 @@ struct type_reflection<NonType<T, VALUE> > {
 template <typename T>
 struct Instance {
   const T& value;
-  Instance(const T& value) : value(value) {}
+  Instance(const T& value_arg) : value(value_arg) {}
 };
 
 /*! Create an Instance object from which we can extract the value's run-time
@@ -967,7 +967,7 @@ inline std::string reflect(jitify::reflection::Instance<T>& value) {
  *  \param value The value whose type is to be captured.
  */
 template <typename T>
-inline Type<T> type_of(T& value) {
+inline Type<T> type_of(T&) {
   return Type<T>();
 }
 /*! Create a Type object representing a value's type.
@@ -1150,7 +1150,7 @@ class CUDAKernel {
           // Infer based on filename.
           jit_input_type = get_cuda_jit_input_type(&link_file);
         }
-        CUresult result = cuLinkAddFile(_link_state, jit_input_type,
+        result = cuLinkAddFile(_link_state, jit_input_type,
                                         link_file.c_str(), 0, 0, 0);
         int path_num = 0;
         while (result == CUDA_ERROR_FILE_NOT_FOUND &&
@@ -2504,12 +2504,12 @@ inline nvrtcResult compile_kernel(std::string program_name,
   }
 #endif
 
-#define CHECK_NVRTC(call)       \
-  do {                          \
-    nvrtcResult ret = call;     \
-    if (ret != NVRTC_SUCCESS) { \
-      return ret;               \
-    }                           \
+#define CHECK_NVRTC(call)                         \
+  do {                                            \
+    nvrtcResult check_nvrtc_macro_ret = call;     \
+    if (check_nvrtc_macro_ret != NVRTC_SUCCESS) { \
+      return check_nvrtc_macro_ret;               \
+    }                                             \
   } while (0)
 
   nvrtcProgram nvrtc_program;
