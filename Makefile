@@ -1,6 +1,6 @@
 
 DOXYGEN ?= doxygen
-CXXFLAGS ?= -O3 -Wall -Wconversion -g -fmessage-length=80
+CXXFLAGS ?= -O3 -Wall -Wconversion -Wextra -Wshadow -g -fmessage-length=80
 
 CXX11 ?= 1
 

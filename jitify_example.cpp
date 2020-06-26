@@ -324,6 +324,8 @@ bool test_parallel_for() {
 }
 
 int main(int argc, char* argv[]) {
+  (void)argc;
+  (void)argv;
 #define TEST_RESULT(result) (result ? "PASSED" : "FAILED")
 
   // Uncached

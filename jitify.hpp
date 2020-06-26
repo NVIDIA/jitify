@@ -885,7 +885,7 @@ struct type_reflection<NonType<T, VALUE> > {
 template <typename T>
 struct Instance {
   const T& value;
-  Instance(const T& value) : value(value) {}
+  Instance(const T& value_arg) : value(value_arg) {}
 };
 
 /*! Create an Instance object from which we can extract the value's run-time
@@ -967,7 +967,7 @@ inline std::string reflect(jitify::reflection::Instance<T>& value) {
  *  \param value The value whose type is to be captured.
  */
 template <typename T>
-inline Type<T> type_of(T& value) {
+inline Type<T> type_of(T&) {
   return Type<T>();
 }
 /*! Create a Type object representing a value's type.
@@ -1150,7 +1150,7 @@ class CUDAKernel {
           // Infer based on filename.
           jit_input_type = get_cuda_jit_input_type(&link_file);
         }
-        CUresult result = cuLinkAddFile(_link_state, jit_input_type,
+        result = cuLinkAddFile(_link_state, jit_input_type,
                                         link_file.c_str(), 0, 0, 0);
         int path_num = 0;
         while (result == CUDA_ERROR_FILE_NOT_FOUND &&
@@ -1493,6 +1493,7 @@ static const char* jitsafe_header_limits = R"(
 #pragma once
 #include <cfloat>
 #include <climits>
+#include <cstdint>
 // TODO: epsilon(), infinity(), etc
 namespace __jitify_detail {
 #if __cplusplus >= 201103L
@@ -1611,7 +1612,7 @@ template<> struct numeric_limits<unsigned char>      : public
 __jitify_detail::IntegerLimits<unsigned char,     0,        UCHAR_MAX> 
 {};
 template<> struct numeric_limits<wchar_t>            : public 
-__jitify_detail::IntegerLimits<wchar_t,           INT_MIN,  INT_MAX> {};
+__jitify_detail::IntegerLimits<wchar_t,           WCHAR_MIN, WCHAR_MAX> {};
 template<> struct numeric_limits<short>              : public 
 __jitify_detail::IntegerLimits<short,             SHRT_MIN, SHRT_MAX> 
 {};
@@ -1812,9 +1813,17 @@ static const char* jitsafe_header_stdint_h =
     "typedef unsigned int       uint_least32_t;\n"
     "typedef unsigned long long uint_least64_t;\n"
     "typedef unsigned long long uintmax_t;\n"
-    "typedef unsigned long      uintptr_t; //optional\n"
     "#define INT8_MIN    SCHAR_MIN\n"
     "#define INT16_MIN   SHRT_MIN\n"
+    "#if defined _WIN32 || defined _WIN64\n"
+    "#define WCHAR_MIN   SHRT_MIN\n"
+    "#define WCHAR_MAX   SHRT_MAX\n"
+    "typedef unsigned long long uintptr_t; //optional\n"
+    "#else\n"
+    "#define WCHAR_MIN   INT_MIN\n"
+    "#define WCHAR_MAX   INT_MAX\n"
+    "typedef unsigned long      uintptr_t; //optional\n"
+    "#endif\n"
     "#define INT32_MIN   INT_MIN\n"
     "#define INT64_MIN   LLONG_MIN\n"
     "#define INT8_MAX    SCHAR_MAX\n"
@@ -2504,12 +2513,12 @@ inline nvrtcResult compile_kernel(std::string program_name,
   }
 #endif
 
-#define CHECK_NVRTC(call)       \
-  do {                          \
-    nvrtcResult ret = call;     \
-    if (ret != NVRTC_SUCCESS) { \
-      return ret;               \
-    }                           \
+#define CHECK_NVRTC(call)                         \
+  do {                                            \
+    nvrtcResult check_nvrtc_macro_ret = call;     \
+    if (check_nvrtc_macro_ret != NVRTC_SUCCESS) { \
+      return check_nvrtc_macro_ret;               \
+    }                                             \
   } while (0)
 
   nvrtcProgram nvrtc_program;
