@@ -39,8 +39,8 @@
 #define JITIFY_PRINT_HEADER_PATHS 1
 #include "jitify.hpp"
 
-#include "example_headers/my_header1.cuh.jit"
 #include "example_headers/class_arg_kernel.cuh"
+#include "example_headers/my_header1.cuh.jit"
 
 #ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
 JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
@@ -350,9 +350,8 @@ TEST(JitifyTest, ConstantMemory) {
   dim3 grid(1);
   dim3 block(1);
   {  // test __constant__ look up in kernel string using diffrent namespaces
-    jitify::Program program =
-        kernel_cache.program(constmem_program_source, 0,
-                             {"--use_fast_math", "-I" CUDA_INC_DIR});
+    jitify::Program program = kernel_cache.program(
+        constmem_program_source, 0, {"--use_fast_math", "-I" CUDA_INC_DIR});
     auto instance = program.kernel("constant_test").instantiate();
     int inval[] = {2, 4, 8, 12, 14, 18, 22, 26, 30, 34, 38, 42};
     int dval;
@@ -428,8 +427,7 @@ TEST(JitifyTest, ConstantMemory_experimental) {
   dim3 block(1);
   {  // test __constant__ look up in kernel string using different namespaces
     jitify::experimental::Program program_orig(
-        constmem_program_source, {},
-        {"--use_fast_math", "-I" CUDA_INC_DIR});
+        constmem_program_source, {}, {"--use_fast_math", "-I" CUDA_INC_DIR});
     auto program =
         jitify::experimental::Program::deserialize(program_orig.serialize());
     auto instance = jitify::experimental::KernelInstantiation::deserialize(
@@ -723,7 +721,7 @@ TEST(JitifyTest, CuRandKernel) {
       curand_program_source, {},
       // Note: --remove-unused-globals is added to remove huge precomputed
       // arrays that come from CURAND.
-      { "-I" CUDA_INC_DIR, "--remove-unused-globals"});
+      {"-I" CUDA_INC_DIR, "--remove-unused-globals"});
   auto kernel_inst_v2 = program_v2.kernel("my_kernel").instantiate();
   // TODO: Expand this test to actually call curand kernels and check outputs.
 }
@@ -878,7 +876,7 @@ TEST(JitifyTest, BuiltinNumericLimitsHeader) {
   for (const auto& type :
        {"float", "double", "char", "signed char", "unsigned char", "short",
         "unsigned short", "int", "unsigned int", "long", "unsigned long",
-           "long long", "unsigned long long", "MyType"}) {
+        "long long", "unsigned long long", "MyType"}) {
     program.kernel("my_kernel").instantiate({type});
   }
 }
@@ -888,39 +886,52 @@ TEST(JitifyTest, ClassKernelArg) {
   thread_local static jitify::JitCache kernel_cache;
 
   int h_data;
-  int *d_data;
+  int* d_data;
   CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
 
   dim3 grid(1);
   dim3 block(1);
 
   jitify::Program program =
-    kernel_cache.program("example_headers/class_arg_kernel.cuh", 0,
-                         {"--use_fast_math", "-I" CUDA_INC_DIR});
+      kernel_cache.program("example_headers/class_arg_kernel.cuh", 0,
+                           {"--use_fast_math", "-I" CUDA_INC_DIR});
 
-  { // test that we can pass an arg object to a kernel
+  {  // test that we can pass an arg object to a kernel
     Arg arg(-1);
-    CHECK_CUDA(program.kernel("class_arg_kernel").instantiate(Type<Arg>()).configure(grid, block).launch(d_data, arg));
+    CHECK_CUDA(program.kernel("class_arg_kernel")
+                   .instantiate(Type<Arg>())
+                   .configure(grid, block)
+                   .launch(d_data, arg));
     CHECK_CUDART(cudaDeviceSynchronize());
-    CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
     EXPECT_EQ(arg.x, h_data);
   }
 
-  { // test that we can pass an arg object reference to a kernel
-    Arg *arg = new Arg(-1);
-    // references are passed as pointers since refernces are just pointers from an ABI point of view
-    CHECK_CUDA(program.kernel("class_arg_ref_kernel").instantiate(Type<Arg>()).configure(grid, block).launch(d_data, arg));
-    CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  {  // test that we can pass an arg object reference to a kernel
+    Arg* arg = new Arg(-1);
+    // references are passed as pointers since refernces are just pointers from
+    // an ABI point of view
+    CHECK_CUDA(program.kernel("class_arg_ref_kernel")
+                   .instantiate(Type<Arg>())
+                   .configure(grid, block)
+                   .launch(d_data, arg));
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
     EXPECT_EQ(arg->x, h_data);
-    delete(arg);
+    delete (arg);
   }
 
-  { // test that we can pass an arg object reference to a kernel
-    Arg *arg = new Arg(-1);
-    CHECK_CUDA(program.kernel("class_arg_ptr_kernel").instantiate(Type<Arg>()).configure(grid, block).launch(d_data, arg));
-    CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  {  // test that we can pass an arg object reference to a kernel
+    Arg* arg = new Arg(-1);
+    CHECK_CUDA(program.kernel("class_arg_ptr_kernel")
+                   .instantiate(Type<Arg>())
+                   .configure(grid, block)
+                   .launch(d_data, arg));
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
     EXPECT_EQ(arg->x, h_data);
-    delete(arg);
+    delete (arg);
   }
 
   CHECK_CUDART(cudaFree(d_data));

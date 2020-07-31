@@ -1150,8 +1150,8 @@ class CUDAKernel {
           // Infer based on filename.
           jit_input_type = get_cuda_jit_input_type(&link_file);
         }
-        result = cuLinkAddFile(_link_state, jit_input_type,
-                                        link_file.c_str(), 0, 0, 0);
+        result = cuLinkAddFile(_link_state, jit_input_type, link_file.c_str(),
+                               0, 0, 0);
         int path_num = 0;
         while (result == CUDA_ERROR_FILE_NOT_FOUND &&
                path_num < (int)link_paths.size()) {
@@ -2966,8 +2966,9 @@ class KernelLauncher {
    */
   template <typename... ArgTypes>
   inline CUresult launch(ArgTypes&&... args) const {
-    return this->launch(std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-                        {reflection::reflect<ArgTypes>()...});
+    return this->launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
   /*! Launch the kernel and check for cuda errors.
    *
@@ -2975,8 +2976,9 @@ class KernelLauncher {
    */
   template <typename... ArgTypes>
   inline void safe_launch(ArgTypes&&... args) const {
-    this->safe_launch(std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-                      {reflection::reflect<ArgTypes>()...});
+    this->safe_launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
 };
 
@@ -4173,8 +4175,9 @@ class KernelLauncher {
    */
   template <typename... ArgTypes>
   CUresult launch(ArgTypes&&... args) const {
-    return this->launch(std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-                        {reflection::reflect<ArgTypes>()...});
+    return this->launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
 
   /*! Launch the kernel and check for cuda errors.
@@ -4183,8 +4186,9 @@ class KernelLauncher {
    */
   template <typename... ArgTypes>
   void safe_launch(ArgTypes&&... args) const {
-    return this->safe_launch(std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-                             {reflection::reflect<ArgTypes>()...});
+    return this->safe_launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
 };
 
