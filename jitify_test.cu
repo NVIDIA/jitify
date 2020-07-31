@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
  *
@@ -39,6 +40,8 @@
 #include "jitify.hpp"
 
 #include "example_headers/my_header1.cuh.jit"
+#include "example_headers/class_arg_kernel.cuh"
+
 #ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
 JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 #endif
@@ -522,16 +525,16 @@ TEST(JitifyTest, ParallelFor) {
 TEST(JitifyTest, InvalidPrograms) {
   jitify::JitCache kernel_cache;
   auto program_v1 = kernel_cache.program("empty_program\n");  // OK
-  EXPECT_THROW(auto program_v1 = kernel_cache.program("missing_filename"),
+  EXPECT_THROW(auto program_v2 = kernel_cache.program("missing_filename"),
                std::runtime_error);
   EXPECT_THROW(
-      auto program_v1 = kernel_cache.program("bad_program\nNOT CUDA C!"),
+      auto program_v3 = kernel_cache.program("bad_program\nNOT CUDA C!"),
       std::runtime_error);
-  jitify::experimental::Program program_v2("empty_program\n");  // OK
-  EXPECT_THROW(jitify::experimental::Program program_v2("missing_filename"),
+  jitify::experimental::Program program_v4("empty_program\n");  // OK
+  EXPECT_THROW(jitify::experimental::Program program_v5("missing_filename"),
                std::runtime_error);
   EXPECT_THROW(
-      jitify::experimental::Program program_v2("bad_program\nNOT CUDA C!"),
+      jitify::experimental::Program program_v6("bad_program\nNOT CUDA C!"),
       std::runtime_error);
 }
 
@@ -878,6 +881,49 @@ TEST(JitifyTest, BuiltinNumericLimitsHeader) {
            "long long", "unsigned long long", "MyType"}) {
     program.kernel("my_kernel").instantiate({type});
   }
+}
+
+TEST(JitifyTest, ClassKernelArg) {
+  using jitify::reflection::Type;
+  thread_local static jitify::JitCache kernel_cache;
+
+  int h_data;
+  int *d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+
+  dim3 grid(1);
+  dim3 block(1);
+
+  jitify::Program program =
+    kernel_cache.program("example_headers/class_arg_kernel.cuh", 0,
+                         {"--use_fast_math", "-I/usr/local/cuda/include"});
+
+  { // test that we can pass an arg object to a kernel
+    Arg arg(-1);
+    CHECK_CUDA(program.kernel("class_arg_kernel").instantiate(Type<Arg>()).configure(grid, block).launch(d_data, arg));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(arg.x, h_data);
+  }
+
+  { // test that we can pass an arg object reference to a kernel
+    Arg *arg = new Arg(-1);
+    // references are passed as pointers since refernces are just pointers from an ABI point of view
+    CHECK_CUDA(program.kernel("class_arg_ref_kernel").instantiate(Type<Arg>()).configure(grid, block).launch(d_data, arg));
+    CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(arg->x, h_data);
+    delete(arg);
+  }
+
+  { // test that we can pass an arg object reference to a kernel
+    Arg *arg = new Arg(-1);
+    CHECK_CUDA(program.kernel("class_arg_ptr_kernel").instantiate(Type<Arg>()).configure(grid, block).launch(d_data, arg));
+    CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(arg->x, h_data);
+    delete(arg);
+  }
+
+  CHECK_CUDART(cudaFree(d_data));
 }
 
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
