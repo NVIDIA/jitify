@@ -60,12 +60,10 @@ __global__ void class_arg_kernel(int *x, T arg) {
 
 template <typename T>
 __global__ void class_arg_ref_kernel(int *x, T &arg) {
-  printf("ref device arg = %p\n", &arg);
   *x = arg.x;
 }
 
 template <typename T>
 __global__ void class_arg_ptr_kernel(int *x, T *arg) {
-  printf("ptr device arg = %p\n", arg);
   *x = arg->x;
 }
