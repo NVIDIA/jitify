@@ -37,7 +37,7 @@ __device__ int d[3];
 
 }  // namespace
 
-__global__ void constant_test2(int *x) {
+__global__ void constant_test2(int* x) {
   for (int i = 0; i < 3; i++) x[i] = (b::a[i]);
   for (int i = 0; i < 3; i++) x[i + 3] = (b::d[i]);
 }

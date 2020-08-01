@@ -804,7 +804,7 @@ inline std::string demangle_native_type(const std::type_info& typeinfo) {
   }
   throw std::runtime_error("UnDecorateSymbolName failed");
 }
-#else   // not MSVC
+#else  // not MSVC
 inline std::string demangle_cuda_symbol(const char* mangled_name) {
   size_t bufsize = 0;
   char* buf = nullptr;
