@@ -3660,16 +3660,26 @@ namespace detail {
 
 // This should be incremented whenever the serialization format changes in any
 // incompatible way.
-static constexpr const size_t kSerializationVersion = 1;
+static constexpr const size_t kSerializationVersion = 2;
 
 inline void serialize(std::ostream& stream, size_t u) {
   uint64_t u64 = u;
-  stream.write(reinterpret_cast<char*>(&u64), sizeof(u64));
+  char bytes[8];
+  for (int i = 0; i < (int)sizeof(bytes); ++i) {
+    // Convert to little-endian bytes.
+    bytes[i] = (unsigned char)(u64 >> (i * CHAR_BIT));
+  }
+  stream.write(bytes, sizeof(bytes));
 }
 
 inline bool deserialize(std::istream& stream, size_t* size) {
-  uint64_t u64;
-  stream.read(reinterpret_cast<char*>(&u64), sizeof(u64));
+  char bytes[8];
+  stream.read(bytes, sizeof(bytes));
+  uint64_t u64 = 0;
+  for (int i = 0; i < (int)sizeof(bytes); ++i) {
+    // Convert from little-endian bytes.
+    u64 |= uint64_t((unsigned char)(bytes[i])) << (i * CHAR_BIT);
+  }
   *size = u64;
   return stream.good();
 }
