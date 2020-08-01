@@ -1329,7 +1329,7 @@ class CUDAKernel {
           " has wrong size: got " + std::to_string(given_size_bytes) +
           " bytes, expected " + std::to_string(size_bytes));
     }
-    return cuMemcpyDtoH(data, ptr, size_bytes);
+    return cuMemcpyDtoHAsync(data, ptr, size_bytes, stream);
   }
 
   template <typename T>
@@ -1344,7 +1344,7 @@ class CUDAKernel {
           " has wrong size: got " + std::to_string(given_size_bytes) +
           " bytes, expected " + std::to_string(size_bytes));
     }
-    return cuMemcpyHtoD(ptr, data, size_bytes);
+    return cuMemcpyHtoDAsync(ptr, data, size_bytes, stream);
   }
 
   const std::string& function_name() const { return _func_name; }
@@ -3305,6 +3305,7 @@ inline std::ostream& operator<<(std::ostream& stream, dim3 d) {
 
 inline void KernelLauncher_impl::pre_launch(
     jitify::detail::vector<std::string> arg_types) const {
+  (void)arg_types;
 #if JITIFY_PRINT_LAUNCH
   Kernel_impl const& kernel = _kernel_inst._kernel;
   std::string arg_types_string =
@@ -4125,6 +4126,7 @@ class KernelLauncher {
 
  private:
   void pre_launch(std::vector<std::string> arg_types = {}) const {
+    (void)arg_types;
 #if JITIFY_PRINT_LAUNCH
     std::string arg_types_string =
         (arg_types.empty() ? "..." : reflection::reflect_list(arg_types));
