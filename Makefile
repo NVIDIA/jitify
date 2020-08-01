@@ -101,4 +101,5 @@ clean:
 	rm -f jitify_test
 	rm -rf $(GTEST_DIR)
 	rm -rf $(CUB_DIR)
+	rm -f *.o
 .PHONY: clean
