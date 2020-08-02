@@ -28,7 +28,42 @@
 
 #pragma once
 
+class Managed {
+ public:
+  void* operator new(size_t len) {
+    void* ptr = nullptr;
+#ifndef __CUDACC_RTC__
+    cudaMallocManaged(&ptr, len);
+#endif
+    cudaDeviceSynchronize();
+    return ptr;
+  }
+
+  void operator delete(void* ptr) {
+    cudaDeviceSynchronize();
+    cudaFree(ptr);
+  }
+};
+
+struct Arg : public Managed {
+  const int x;
+  Arg(int x_) : x(x_) {}
+
+  // there can be no call to the copy constructor
+  Arg(const Arg& arg) = delete;
+};
+
 template <typename T>
-T identity(T x) {
-  return x;
+__global__ void class_arg_kernel(int* x, T arg) {
+  *x = arg.x;
+}
+
+template <typename T>
+__global__ void class_arg_ref_kernel(int* x, T& arg) {
+  *x = arg.x;
+}
+
+template <typename T>
+__global__ void class_arg_ptr_kernel(int* x, T* arg) {
+  *x = arg->x;
 }

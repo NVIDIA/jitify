@@ -41,8 +41,10 @@ HEADERS = jitify.hpp \
 
 all: jitify_example
 
+JITIFY_EXAMPLE_DEFINES = -DCUDA_INC_DIR="\"$(CUDA_INC_DIR)\""
+
 jitify_example: jitify_example.cpp $(HEADERS)
-	$(CXX) -o $@ $< $(CXXFLAGS) $(INC) $(LIB) $(EMBED)
+	$(CXX) -o $@ $< $(CXXFLAGS) $(INC) $(LIB) $(EMBED) $(JITIFY_EXAMPLE_DEFINES)
 
 %.jit: % stringify
 	./stringify $< > $@
@@ -99,4 +101,5 @@ clean:
 	rm -f jitify_test
 	rm -rf $(GTEST_DIR)
 	rm -rf $(CUB_DIR)
+	rm -f *.o
 .PHONY: clean

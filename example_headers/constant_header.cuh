@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,11 +30,14 @@
 
 namespace {
 
-  namespace b { __constant__ int a[3]; __device__ int d[3]; }
+namespace b {
+__constant__ int a[3];
+__device__ int d[3];
+}  // namespace b
 
-}
+}  // namespace
 
-__global__ void constant_test2(int *x) {
-  for (int i=0; i<3; i++) x[i] = (b::a[i]);
-  for (int i=0; i<3; i++) x[i + 3] = (b::d[i]);
+__global__ void constant_test2(int* x) {
+  for (int i = 0; i < 3; i++) x[i] = (b::a[i]);
+  for (int i = 0; i < 3; i++) x[i + 3] = (b::d[i]);
 }

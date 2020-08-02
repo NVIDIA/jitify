@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -804,7 +804,7 @@ inline std::string demangle_native_type(const std::type_info& typeinfo) {
   }
   throw std::runtime_error("UnDecorateSymbolName failed");
 }
-#else   // not MSVC
+#else  // not MSVC
 inline std::string demangle_cuda_symbol(const char* mangled_name) {
   size_t bufsize = 0;
   char* buf = nullptr;
@@ -1150,8 +1150,8 @@ class CUDAKernel {
           // Infer based on filename.
           jit_input_type = get_cuda_jit_input_type(&link_file);
         }
-        result = cuLinkAddFile(_link_state, jit_input_type,
-                                        link_file.c_str(), 0, 0, 0);
+        result = cuLinkAddFile(_link_state, jit_input_type, link_file.c_str(),
+                               0, 0, 0);
         int path_num = 0;
         while (result == CUDA_ERROR_FILE_NOT_FOUND &&
                path_num < (int)link_paths.size()) {
@@ -1329,7 +1329,7 @@ class CUDAKernel {
           " has wrong size: got " + std::to_string(given_size_bytes) +
           " bytes, expected " + std::to_string(size_bytes));
     }
-    return cuMemcpyDtoH(data, ptr, size_bytes);
+    return cuMemcpyDtoHAsync(data, ptr, size_bytes, stream);
   }
 
   template <typename T>
@@ -1344,7 +1344,7 @@ class CUDAKernel {
           " has wrong size: got " + std::to_string(given_size_bytes) +
           " bytes, expected " + std::to_string(size_bytes));
     }
-    return cuMemcpyHtoD(ptr, data, size_bytes);
+    return cuMemcpyHtoDAsync(ptr, data, size_bytes, stream);
   }
 
   const std::string& function_name() const { return _func_name; }
@@ -2957,26 +2957,28 @@ class KernelLauncher {
    *  \see launch
    */
   template <typename... ArgTypes>
-  inline CUresult operator()(ArgTypes... args) const {
-    return this->launch(args...);
+  inline CUresult operator()(ArgTypes&&... args) const {
+    return this->launch(std::forward<ArgTypes>(args)...);
   }
   /*! Launch the kernel.
    *
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  inline CUresult launch(ArgTypes... args) const {
-    return this->launch(std::vector<void*>({(void*)&args...}),
-                        {reflection::reflect<ArgTypes>()...});
+  inline CUresult launch(ArgTypes&&... args) const {
+    return this->launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
   /*! Launch the kernel and check for cuda errors.
    *
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  inline void safe_launch(ArgTypes... args) const {
-    this->safe_launch(std::vector<void*>({(void*)&args...}),
-                      {reflection::reflect<ArgTypes>()...});
+  inline void safe_launch(ArgTypes&&... args) const {
+    this->safe_launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
 };
 
@@ -3303,6 +3305,7 @@ inline std::ostream& operator<<(std::ostream& stream, dim3 d) {
 
 inline void KernelLauncher_impl::pre_launch(
     jitify::detail::vector<std::string> arg_types) const {
+  (void)arg_types;
 #if JITIFY_PRINT_LAUNCH
   Kernel_impl const& kernel = _kernel_inst._kernel;
   std::string arg_types_string =
@@ -4133,6 +4136,7 @@ class KernelLauncher {
 
  private:
   void pre_launch(std::vector<std::string> arg_types = {}) const {
+    (void)arg_types;
 #if JITIFY_PRINT_LAUNCH
     std::string arg_types_string =
         (arg_types.empty() ? "..." : reflection::reflect_list(arg_types));
@@ -4182,9 +4186,10 @@ class KernelLauncher {
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  CUresult launch(ArgTypes... args) const {
-    return this->launch(std::vector<void*>({(void*)&args...}),
-                        {reflection::reflect<ArgTypes>()...});
+  CUresult launch(ArgTypes&&... args) const {
+    return this->launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
 
   /*! Launch the kernel and check for cuda errors.
@@ -4192,9 +4197,10 @@ class KernelLauncher {
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  void safe_launch(ArgTypes... args) const {
-    return this->safe_launch(std::vector<void*>({(void*)&args...}),
-                             {reflection::reflect<ArgTypes>()...});
+  void safe_launch(ArgTypes&&... args) const {
+    return this->safe_launch(
+        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
+        {reflection::reflect<ArgTypes>()...});
   }
 };
 
