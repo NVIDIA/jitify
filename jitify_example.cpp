@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,6 +31,9 @@
     and call kernels.
  */
 
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
+#define JITIFY_ENABLE_EMBEDDED_FILES 1
+#endif
 #define JITIFY_PRINT_INSTANTIATION 1
 #define JITIFY_PRINT_SOURCE 1
 #define JITIFY_PRINT_LOG 1
@@ -40,7 +43,7 @@
 #include "jitify.hpp"
 
 #include "example_headers/my_header1.cuh.jit"
-#ifdef LINUX  // Only supported by gcc on Linux
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
 JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 #endif
 
@@ -80,8 +83,6 @@ std::istream* file_callback(std::string filename, std::iostream& tmp_stream) {
     return 0;
   }
 }
-
-#if __cplusplus >= 201103L
 
 template <typename T>
 bool test_simple() {
@@ -305,7 +306,8 @@ bool test_parallel_for() {
   T val = 3.14159f;
 
   jitify::ExecutionPolicy policy(jitify::DEVICE);
-  auto lambda = JITIFY_LAMBDA((d_out, val), d_out[i] = i * val);
+  auto lambda = JITIFY_LAMBDA((d_out, val),
+                              d_out[i] = static_cast<decltype(val)>(i) * val);
   CHECK_CUDA(jitify::parallel_for(policy, 0, n, lambda));
 
   std::vector<T> h_out(n);
@@ -314,18 +316,17 @@ bool test_parallel_for() {
   cudaFree(d_out);
 
   for (int i = 0; i < n; ++i) {
-    if (!are_close(h_out[i], i * val)) {
-      std::cout << h_out[i] << " != " << i * val << std::endl;
+    if (!are_close(h_out[i], (T)i * val)) {
+      std::cout << h_out[i] << " != " << (T)i * val << std::endl;
       return false;
     }
   }
   return true;
 }
 
-#endif  // C++11
-
 int main(int argc, char* argv[]) {
-#if __cplusplus >= 201103L
+  (void)argc;
+  (void)argv;
 #define TEST_RESULT(result) (result ? "PASSED" : "FAILED")
 
   // Uncached
@@ -355,9 +356,4 @@ int main(int argc, char* argv[]) {
   return (!test_simple_result + !test_simple_experimental_result +
           !test_kernels_result + !test_parallel_for_result +
           !test_constant_result);
-#else
-  std::cout << "Tests require building with C++11 support (make CXX11=1)"
-            << std::endl;
-  return 0;
-#endif
 }

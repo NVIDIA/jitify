@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,6 +26,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
+#define JITIFY_ENABLE_EMBEDDED_FILES 1
+#endif
 #define JITIFY_PRINT_INSTANTIATION 1
 #define JITIFY_PRINT_SOURCE 1
 #define JITIFY_PRINT_LOG 1
@@ -35,14 +38,19 @@
 #define JITIFY_PRINT_HEADER_PATHS 1
 #include "jitify.hpp"
 
+#include "example_headers/class_arg_kernel.cuh"
 #include "example_headers/my_header1.cuh.jit"
-#ifdef LINUX  // Only supported by gcc on Linux
+
+#ifdef LINUX  // Only supported by gcc on Linux (defined in Makefile)
 JITIFY_INCLUDE_EMBEDDED_FILE(example_headers_my_header2_cuh);
 #endif
 
 #include "gtest/gtest.h"
 
+#include <cstdio>
+#include <fstream>
 #include <iostream>
+#include <memory>
 
 #define CHECK_CUDA(call)                                                  \
   do {                                                                    \
@@ -308,20 +316,33 @@ static const char* const constmem_program_source =
     "#pragma once\n"
     "\n"
     "__constant__ int a;\n"
-    "namespace b { __constant__ int a; }\n"
-    "namespace c { namespace b { __constant__ int a; } }\n"
+    "__device__ int d;\n"
+    "namespace b { __constant__ int a; __device__ int d; }\n"
+    "namespace c { namespace b { __constant__ int a; __device__ int d; } }\n"
+    "namespace x { __constant__ int a = 3; __device__ int d = 7; }\n"
+    "namespace y { __constant__ int a[] = {4, 5}; __device__ int d[] = {8, 9}; "
+    "}\n"
     "\n"
     "__global__ void constant_test(int *x) {\n"
     "  x[0] = a;\n"
     "  x[1] = b::a;\n"
     "  x[2] = c::b::a;\n"
+    "  x[3] = d;\n"
+    "  x[4] = b::d;\n"
+    "  x[5] = c::b::d;\n"
+    "  x[6] = x::a;\n"
+    "  x[7] = x::d;\n"
+    "  x[8] = y::a[0];\n"
+    "  x[9] = y::a[1];\n"
+    "  x[10] = y::d[0];\n"
+    "  x[11] = y::d[1];\n"
     "}\n";
 
 TEST(JitifyTest, ConstantMemory) {
   using jitify::reflection::Type;
   thread_local static jitify::JitCache kernel_cache;
 
-  constexpr int n_const = 3;
+  constexpr int n_const = 12;
   int* outdata;
   CHECK_CUDART(cudaMalloc((void**)&outdata, n_const * sizeof(int)));
 
@@ -331,13 +352,34 @@ TEST(JitifyTest, ConstantMemory) {
     jitify::Program program = kernel_cache.program(
         constmem_program_source, 0, {"--use_fast_math", "-I" CUDA_INC_DIR});
     auto instance = program.kernel("constant_test").instantiate();
-    int inval[] = {2, 4, 8};
-    CHECK_CUDA(
-        cuMemcpyHtoD(instance.get_constant_ptr("a"), &inval[0], sizeof(int)));
-    CHECK_CUDA(cuMemcpyHtoD(instance.get_constant_ptr("b::a"), &inval[1],
-                            sizeof(int)));
-    CHECK_CUDA(cuMemcpyHtoD(instance.get_constant_ptr("c::b::a"), &inval[2],
-                            sizeof(int)));
+    int inval[] = {2, 4, 8, 12, 14, 18, 22, 26, 30, 34, 38, 42};
+    int dval;
+    CHECK_CUDA(instance.get_global_value("x::a", &dval));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(dval, 3);
+    CHECK_CUDA(instance.get_global_value("x::d", &dval));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(dval, 7);
+    int darr[2];
+    CHECK_CUDA(instance.get_global_array("y::a", &darr[0], 2));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(darr[0], 4);
+    EXPECT_EQ(darr[1], 5);
+    CHECK_CUDA(instance.get_global_value("y::d", &darr));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(darr[0], 8);
+    EXPECT_EQ(darr[1], 9);
+    CHECK_CUDA(instance.set_global_value("a", inval[0]));
+    CHECK_CUDA(instance.set_global_value("b::a", inval[1]));
+    CHECK_CUDA(instance.set_global_value("c::b::a", inval[2]));
+    CHECK_CUDA(instance.set_global_value("d", inval[3]));
+    CHECK_CUDA(instance.set_global_value("b::d", inval[4]));
+    CHECK_CUDA(instance.set_global_value("c::b::d", inval[5]));
+    CHECK_CUDA(instance.set_global_value("x::a", inval[6]));
+    CHECK_CUDA(instance.set_global_value("x::d", inval[7]));
+    CHECK_CUDA(instance.set_global_array("y::a", &inval[8], 2));
+    int inarr[] = {inval[10], inval[11]};
+    CHECK_CUDA(instance.set_global_value("y::d", inarr));
     CHECK_CUDA(instance.configure(grid, block).launch(outdata));
     CHECK_CUDART(cudaDeviceSynchronize());
     int outval[n_const];
@@ -355,17 +397,21 @@ TEST(JitifyTest, ConstantMemory) {
         kernel_cache.program("example_headers/constant_header.cuh", 0,
                              {"--use_fast_math", "-I" CUDA_INC_DIR});
     auto instance = program.kernel("constant_test2").instantiate();
-    int inval[] = {3, 5, 9};
+    constexpr int n_anon_const = 6;
+    int inval[] = {3, 5, 9, 13, 15, 19};
     CHECK_CUDA(
         cuMemcpyHtoD(instance.get_constant_ptr("(anonymous namespace)::b::a"),
-                     inval, sizeof(inval)));
+                     inval, sizeof(inval) / 2));
+    CHECK_CUDA(
+        cuMemcpyHtoD(instance.get_global_ptr("(anonymous namespace)::b::d"),
+                     inval + 3, sizeof(inval) / 2));
     CHECK_CUDA(instance.configure(grid, block).launch(outdata));
 
-    int outval[n_const];
+    int outval[n_anon_const];
     CHECK_CUDART(
         cudaMemcpy(outval, outdata, sizeof(outval), cudaMemcpyDeviceToHost));
 
-    for (int i = 0; i < n_const; i++) {
+    for (int i = 0; i < n_anon_const; i++) {
       EXPECT_EQ(inval[i], outval[i]);
     }
   }
@@ -376,7 +422,7 @@ TEST(JitifyTest, ConstantMemory) {
 TEST(JitifyTest, ConstantMemory_experimental) {
   using jitify::reflection::Type;
 
-  constexpr int n_const = 3;
+  constexpr int n_const = 12;
   int* outdata;
   CHECK_CUDART(cudaMalloc((void**)&outdata, n_const * sizeof(int)));
 
@@ -389,13 +435,34 @@ TEST(JitifyTest, ConstantMemory_experimental) {
         jitify::experimental::Program::deserialize(program_orig.serialize());
     auto instance = jitify::experimental::KernelInstantiation::deserialize(
         program.kernel("constant_test").instantiate().serialize());
-    int inval[] = {2, 4, 8};
-    CHECK_CUDA(
-        cuMemcpyHtoD(instance.get_constant_ptr("a"), &inval[0], sizeof(int)));
-    CHECK_CUDA(cuMemcpyHtoD(instance.get_constant_ptr("b::a"), &inval[1],
-                            sizeof(int)));
-    CHECK_CUDA(cuMemcpyHtoD(instance.get_constant_ptr("c::b::a"), &inval[2],
-                            sizeof(int)));
+    int inval[] = {2, 4, 8, 12, 14, 18, 22, 26, 30, 34, 38, 42};
+    int dval;
+    CHECK_CUDA(instance.get_global_value("x::a", &dval));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(dval, 3);
+    CHECK_CUDA(instance.get_global_value("x::d", &dval));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(dval, 7);
+    int darr[2];
+    CHECK_CUDA(instance.get_global_array("y::a", &darr[0], 2));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(darr[0], 4);
+    EXPECT_EQ(darr[1], 5);
+    CHECK_CUDA(instance.get_global_value("y::d", &darr));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    EXPECT_EQ(darr[0], 8);
+    EXPECT_EQ(darr[1], 9);
+    CHECK_CUDA(instance.set_global_value("a", inval[0]));
+    CHECK_CUDA(instance.set_global_value("b::a", inval[1]));
+    CHECK_CUDA(instance.set_global_value("c::b::a", inval[2]));
+    CHECK_CUDA(instance.set_global_value("d", inval[3]));
+    CHECK_CUDA(instance.set_global_value("b::d", inval[4]));
+    CHECK_CUDA(instance.set_global_value("c::b::d", inval[5]));
+    CHECK_CUDA(instance.set_global_value("x::a", inval[6]));
+    CHECK_CUDA(instance.set_global_value("x::d", inval[7]));
+    CHECK_CUDA(instance.set_global_array("y::a", &inval[8], 2));
+    int inarr[] = {inval[10], inval[11]};
+    CHECK_CUDA(instance.set_global_value("y::d", inarr));
     CHECK_CUDA(instance.configure(grid, block).launch(outdata));
     CHECK_CUDART(cudaDeviceSynchronize());
     int outval[n_const];
@@ -416,17 +483,21 @@ TEST(JitifyTest, ConstantMemory_experimental) {
         jitify::experimental::Program::deserialize(program_orig.serialize());
     auto instance = jitify::experimental::KernelInstantiation::deserialize(
         program.kernel("constant_test2").instantiate().serialize());
-    int inval[] = {3, 5, 9};
+    constexpr int n_anon_const = 6;
+    int inval[] = {3, 5, 9, 13, 15, 19};
     CHECK_CUDA(
         cuMemcpyHtoD(instance.get_constant_ptr("(anonymous namespace)::b::a"),
-                     inval, sizeof(inval)));
+                     inval, sizeof(inval) / 2));
+    CHECK_CUDA(
+        cuMemcpyHtoD(instance.get_global_ptr("(anonymous namespace)::b::d"),
+                     inval + 3, sizeof(inval) / 2));
     CHECK_CUDA(instance.configure(grid, block).launch(outdata));
 
-    int outval[n_const];
+    int outval[n_anon_const];
     CHECK_CUDART(
         cudaMemcpy(outval, outdata, sizeof(outval), cudaMemcpyDeviceToHost));
 
-    for (int i = 0; i < n_const; i++) {
+    for (int i = 0; i < n_anon_const; i++) {
       EXPECT_EQ(inval[i], outval[i]);
     }
   }
@@ -442,7 +513,7 @@ TEST(JitifyTest, ParallelFor) {
   T val = 3.14159f;
 
   jitify::ExecutionPolicy policy(jitify::DEVICE);
-  auto lambda = JITIFY_LAMBDA((d_out, val), d_out[i] = i * val);
+  auto lambda = JITIFY_LAMBDA((d_out, val), d_out[i] = (float)i * val);
   CHECK_CUDA(jitify::parallel_for(policy, 0, n, lambda));
 
   std::vector<T> h_out(n);
@@ -452,23 +523,23 @@ TEST(JitifyTest, ParallelFor) {
   CHECK_CUDART(cudaFree(d_out));
 
   for (int i = 0; i < n; ++i) {
-    EXPECT_FLOAT_EQ(h_out[i], i * val);
+    EXPECT_FLOAT_EQ(h_out[i], (T)i * val);
   }
 }
 
 TEST(JitifyTest, InvalidPrograms) {
   jitify::JitCache kernel_cache;
   auto program_v1 = kernel_cache.program("empty_program\n");  // OK
-  EXPECT_THROW(auto program_v1 = kernel_cache.program("missing_filename"),
+  EXPECT_THROW(auto program_v2 = kernel_cache.program("missing_filename"),
                std::runtime_error);
   EXPECT_THROW(
-      auto program_v1 = kernel_cache.program("bad_program\nNOT CUDA C!"),
+      auto program_v3 = kernel_cache.program("bad_program\nNOT CUDA C!"),
       std::runtime_error);
-  jitify::experimental::Program program_v2("empty_program\n");  // OK
-  EXPECT_THROW(jitify::experimental::Program program_v2("missing_filename"),
+  jitify::experimental::Program program_v4("empty_program\n");  // OK
+  EXPECT_THROW(jitify::experimental::Program program_v5("missing_filename"),
                std::runtime_error);
   EXPECT_THROW(
-      jitify::experimental::Program program_v2("bad_program\nNOT CUDA C!"),
+      jitify::experimental::Program program_v6("bad_program\nNOT CUDA C!"),
       std::runtime_error);
 }
 
@@ -545,7 +616,7 @@ TEST(JitifyTest, CubBlockPrimitives) {
   float sum = 0;
   for (int i = 0; i < n; ++i) {
     // Start with values sorted in reverse.
-    h_data[i] = n - 1 - i;
+    h_data[i] = (float)(n - 1 - i);
     sum += h_data[i];
   }
   // Shuffle the values a bit.
@@ -554,7 +625,7 @@ TEST(JitifyTest, CubBlockPrimitives) {
   std::vector<float> h_expected(n);
   for (int i = 0; i < n; ++i) {
     // Expected sorted and normalized.
-    h_expected[i] = i / sum;
+    h_expected[i] = (float)i / sum;
   }
   std::vector<float> h_result(n);
   float* d_data;
@@ -613,6 +684,8 @@ static const char* const unused_globals_source =
     "  used_struct.b = 3.f;\n"
     "  __syncthreads();\n"
     "  *data += Foo::value + used_scalar + used_array[1] + used_struct.b;\n"
+    "  printf(\"*data = %i\\n\", *data);\n"  // Produces global symbols named
+                                             // $str
     "}\n";
 
 TEST(JitifyTest, RemoveUnusedGlobals) {
@@ -646,6 +719,233 @@ TEST(JitifyTest, RemoveUnusedGlobals) {
   CHECK_CUDART(
       cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
   EXPECT_EQ(h_data, 16);
+  CHECK_CUDART(cudaFree(d_data));
+}
+
+static const char* const curand_program_source =
+    "curand_program\n"
+    "#include <curand_kernel.h>\n"
+    "__global__ void my_kernel() {}\n"
+    "\n";
+
+TEST(JitifyTest, CuRandKernel) {
+  auto program_v2 = jitify::experimental::Program(
+      curand_program_source, {},
+      // Note: --remove-unused-globals is added to remove huge precomputed
+      // arrays that come from CURAND.
+      {"-I" CUDA_INC_DIR, "--remove-unused-globals"});
+  auto kernel_inst_v2 = program_v2.kernel("my_kernel").instantiate();
+  // TODO: Expand this test to actually call curand kernels and check outputs.
+}
+
+static const char* const linktest_program1_source =
+    "linktest_program1\n"
+    "__constant__ int c = 5;\n"
+    "__device__ int d = 7;\n"
+    "__device__ int f(int i) { return i + 11; }\n"
+    "\n";
+
+static const char* const linktest_program2_source =
+    "linktest_program2\n"
+    "extern __constant__ int c;\n"
+    "extern __device__ int d;\n"
+    "extern __device__ int f(int);\n"
+    "__global__ void my_kernel(int* data) {\n"
+    "  *data = f(*data + c + d);\n"
+    "}\n"
+    "\n";
+
+TEST(JitifyTest, LinkExternalFiles) {
+  cudaFree(0);
+  // Ensure temporary file is deleted at the end.
+  std::unique_ptr<const char, int (*)(const char*)> ptx_filename(
+      "example_headers/linktest.ptx", std::remove);
+  {
+    std::ofstream ptx_file(ptx_filename.get());
+    ptx_file.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+    ptx_file << jitify::experimental::Program(linktest_program1_source, {},
+                                              {"-rdc=true"})
+                    .kernel("")
+                    .instantiate()
+                    .ptx();
+  }
+  auto program_v2 = jitify::experimental::Program(
+      linktest_program2_source, {},
+      {"-rdc=true", "-Lexample_headers", "-llinktest.ptx"});
+  auto kernel_inst_v2 = program_v2.kernel("my_kernel").instantiate();
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+  int h_data = 3;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+  CHECK_CUDA(kernel_inst_v2.configure(1, 1).launch(d_data));
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 26);
+  CHECK_CUDART(cudaFree(d_data));
+}
+
+namespace a {
+__host__ __device__ int external_device_func(int i) { return i + 1; }
+}  // namespace a
+
+static const char* const selflink_program_source =
+    "selflink_program\n"
+    "namespace a {\n"
+    "extern __device__ int external_device_func(int);\n"
+    "}\n"
+    "__global__ void my_kernel(int* data) {\n"
+    "  *data = a::external_device_func(*data);\n"
+    "}\n"
+    "\n";
+
+TEST(JitifyTest, LinkCurrentExecutable) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  auto program = Program(selflink_program_source, {}, {"-l."});
+  auto kernel_inst = program.kernel("my_kernel").instantiate();
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+  int h_data = 3;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+  CHECK_CUDA(kernel_inst.configure(1, 1).launch(d_data));
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 4);
+  CHECK_CUDART(cudaFree(d_data));
+}
+
+static const char* const reflection_program_source =
+    "reflection_program\n"
+    "struct Base { virtual ~Base() {} };\n"
+    "template <typename T>\n"
+    "struct Derived : public Base {};\n"
+    "template<typename T>\n"
+    "__global__ void type_kernel() {}\n"
+    "template<unsigned short N>\n"
+    "__global__ void nontype_kernel() {}\n"
+    "\n";
+
+struct Base {
+  virtual ~Base() {}
+};
+template <typename T>
+struct Derived : public Base {};
+
+TEST(JitifyTest, Reflection) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  using jitify::reflection::instance_of;
+  Program program(reflection_program_source);
+  auto type_kernel = program.kernel("type_kernel");
+
+#define JITIFY_TYPE_REFLECTION_TEST(T)                   \
+  EXPECT_EQ(type_kernel.instantiate<T>().mangled_name(), \
+            type_kernel.instantiate({#T}).mangled_name())
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float);
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float*);
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float&);
+  JITIFY_TYPE_REFLECTION_TEST(Base * (const volatile float));
+  JITIFY_TYPE_REFLECTION_TEST(const volatile float[4]);
+#undef JITIFY_TYPE_REFLECTION_TEST
+
+  typedef Derived<float> derived_type;
+  const Base& base = derived_type();
+  EXPECT_EQ(type_kernel.instantiate(instance_of(base)).mangled_name(),
+            type_kernel.instantiate<derived_type>().mangled_name());
+
+  auto nontype_kernel = program.kernel("nontype_kernel");
+#define JITIFY_NONTYPE_REFLECTION_TEST(N)                 \
+  EXPECT_EQ(nontype_kernel.instantiate(N).mangled_name(), \
+            nontype_kernel.instantiate({#N}).mangled_name())
+  JITIFY_NONTYPE_REFLECTION_TEST(7);
+  JITIFY_NONTYPE_REFLECTION_TEST('J');
+#undef JITIFY_NONTYPE_REFLECTION_TEST
+}
+
+static const char* const builtin_numeric_limits_program_source =
+    "builtin_numeric_limits_program\n"
+    "#include <limits>\n"
+    "struct MyType {};\n"
+    "namespace std {\n"
+    "template<> class numeric_limits<MyType> {\n"
+    " public:\n"
+    "  static MyType min() { return {}; }\n"
+    "  static MyType max() { return {}; }\n"
+    "};\n"
+    "}  // namespace std\n"
+    "template <typename T>\n"
+    "__global__ void my_kernel(T* data) {\n"
+    "  data[0] = std::numeric_limits<T>::min();\n"
+    "  data[1] = std::numeric_limits<T>::max();\n"
+    "}\n";
+
+TEST(JitifyTest, BuiltinNumericLimitsHeader) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  auto program = Program(builtin_numeric_limits_program_source);
+  for (const auto& type :
+       {"float", "double", "char", "signed char", "unsigned char", "short",
+        "unsigned short", "int", "unsigned int", "long", "unsigned long",
+        "long long", "unsigned long long", "MyType"}) {
+    program.kernel("my_kernel").instantiate({type});
+  }
+}
+
+TEST(JitifyTest, ClassKernelArg) {
+  using jitify::reflection::Type;
+  thread_local static jitify::JitCache kernel_cache;
+
+  int h_data;
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+
+  dim3 grid(1);
+  dim3 block(1);
+
+  jitify::Program program =
+      kernel_cache.program("example_headers/class_arg_kernel.cuh", 0,
+                           {"--use_fast_math", "-I" CUDA_INC_DIR});
+
+  {  // test that we can pass an arg object to a kernel
+    Arg arg(-1);
+    CHECK_CUDA(program.kernel("class_arg_kernel")
+                   .instantiate(Type<Arg>())
+                   .configure(grid, block)
+                   .launch(d_data, arg));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(arg.x, h_data);
+  }
+
+  {  // test that we can pass an arg object reference to a kernel
+    Arg* arg = new Arg(-1);
+    // references are passed as pointers since refernces are just pointers from
+    // an ABI point of view
+    CHECK_CUDA(program.kernel("class_arg_ref_kernel")
+                   .instantiate(Type<Arg>())
+                   .configure(grid, block)
+                   .launch(d_data, arg));
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(arg->x, h_data);
+    delete (arg);
+  }
+
+  {  // test that we can pass an arg object reference to a kernel
+    Arg* arg = new Arg(-1);
+    CHECK_CUDA(program.kernel("class_arg_ptr_kernel")
+                   .instantiate(Type<Arg>())
+                   .configure(grid, block)
+                   .launch(d_data, arg));
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(arg->x, h_data);
+    delete (arg);
+  }
+
   CHECK_CUDART(cudaFree(d_data));
 }
 

@@ -2,5 +2,9 @@
 jitify_example
 stringify
 *.jit
+*.o
+jitify_2nd_compilation_unit.cpp
+jitify_test
+googletest/
 # Backup files
 *~

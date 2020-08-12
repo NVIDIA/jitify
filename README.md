@@ -47,9 +47,10 @@ Jitify provides/takes care of the following things:
  * Dealing with kernel name mangling
  * Reflecting kernel template parameters into strings
  * Compiling specifically for the current device's compute capability
- * Support for CUDA versions 7.0, 7.5, 8.0, 9.x, 10.x
+ * Linking to pre-compiled PTX/CUBIN/FATBIN/object/library files
+ * Support for CUDA versions 7.0, 7.5, 8.0, 9.x, 10.x, on both Linux and Windows
  * Convenient parallel_for function and lambda support
- * \*New\* jitify::experimental API provides serialization capabilities to enable [user-managed hashing and caching](https://github.com/rapidsai/cudf/blob/v0.9.0/cpp/src/jit/cache.h)
+ * \*New\* jitify::experimental API provides serialization capabilities to enable [user-managed hashing and caching](https://github.com/rapidsai/cudf/blob/v0.12.0/cpp/src/jit/cache.h)
 
 Things you can do with Jitify and NVRTC:
 
@@ -67,7 +68,7 @@ Jitify is just a single header file:
 
 Compile with: `-pthread` (not needed if JITIFY_THREAD_SAFE is defined to 0)
 
-Link with: `-ldl -lcuda -lnvrtc`
+Link with: `-lcuda -lcudart -lnvrtc`
 
 A small utility called stringify is included for converting text files into
 C string literals, which provides a convenient way to integrate JIT-compiled
