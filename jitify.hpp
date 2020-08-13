@@ -804,7 +804,7 @@ inline std::string demangle_native_type(const std::type_info& typeinfo) {
   }
   throw std::runtime_error("UnDecorateSymbolName failed");
 }
-#else  // not MSVC
+#else   // not MSVC
 inline std::string demangle_cuda_symbol(const char* mangled_name) {
   size_t bufsize = 0;
   char* buf = nullptr;
@@ -1495,6 +1495,7 @@ static const char* jitsafe_header_limits = R"(
 #include <climits>
 #include <cstdint>
 // TODO: epsilon(), infinity(), etc
+namespace std {
 namespace __jitify_detail {
 #if __cplusplus >= 201103L
 #define JITIFY_CXX11_CONSTEXPR constexpr
@@ -1596,7 +1597,6 @@ struct IntegerLimits {
 	};
 };
 } // namespace __jitify_detail
-namespace std {
 template<typename T> struct numeric_limits {
     enum { is_specialized = false };
 };
@@ -1776,6 +1776,98 @@ static const char* jitsafe_header_type_traits = R"(
     #if __cplusplus >= 201402L
     template< class T > using decay_t = typename decay<T>::type;
     #endif
+
+    template<class T, T v>
+    struct integral_constant {
+    static constexpr T value = v;
+    typedef T value_type;
+    typedef integral_constant type; // using injected-class-name
+    constexpr operator value_type() const noexcept { return value; }
+    #if __cplusplus >= 201402L
+    constexpr value_type operator()() const noexcept { return value; }
+    #endif
+    };
+
+    template<class T> struct is_lvalue_reference : false_type {};
+    template<class T> struct is_lvalue_reference<T&> : true_type {};
+
+    template<class T> struct is_rvalue_reference : false_type {};
+    template<class T> struct is_rvalue_reference<T&&> : true_type {};
+
+    namespace __jitify_detail {
+    template <class T> struct type_identity { using type = T; };
+    template <class T> auto add_lvalue_reference(int) -> type_identity<T&>;
+    template <class T> auto add_lvalue_reference(...) -> type_identity<T>;
+    template <class T> auto add_rvalue_reference(int) -> type_identity<T&&>;
+    template <class T> auto add_rvalue_reference(...) -> type_identity<T>;
+    } // namespace _jitify_detail
+
+    template <class T> struct add_lvalue_reference : decltype(__jitify_detail::add_lvalue_reference<T>(0)) {};
+    template <class T> struct add_rvalue_reference : decltype(__jitify_detail::add_rvalue_reference<T>(0)) {};
+    #if __cplusplus >= 201402L
+    template <class T> using add_lvalue_reference_t = typename add_lvalue_reference<T>::type;
+    template <class T> using add_rvalue_reference_t = typename add_rvalue_reference<T>::type;
+    #endif
+
+    template<typename T> struct is_const          : public false_type {};
+    template<typename T> struct is_const<const T> : public true_type {};
+
+    template<typename T> struct is_volatile             : public false_type {};
+    template<typename T> struct is_volatile<volatile T> : public true_type {};
+
+    template<typename T> struct is_void             : public false_type {};
+    template<>           struct is_void<void>       : public true_type {};
+    template<>           struct is_void<const void> : public true_type {};
+
+    template<typename T> struct is_reference     : public false_type {};
+    template<typename T> struct is_reference<T&> : public true_type {};
+
+    template<typename _Tp, bool = (is_void<_Tp>::value || is_reference<_Tp>::value)>
+    struct __add_reference_helper { typedef _Tp&    type; };
+
+    template<typename _Tp> struct __add_reference_helper<_Tp, true> { typedef _Tp     type; };
+    template<typename _Tp> struct add_reference : public __add_reference_helper<_Tp>{};
+
+    namespace __jitify_detail {
+    template<typename T> struct is_int_or_cref {
+    typedef typename remove_reference<T>::type type_sans_ref;
+    static const bool value = (is_integral<T>::value || (is_integral<type_sans_ref>::value
+      && is_const<type_sans_ref>::value && !is_volatile<type_sans_ref>::value));
+    }; // end is_int_or_cref
+    template<typename From, typename To> struct is_convertible_sfinae {
+    private:
+    typedef char                          yes;
+    typedef struct { char two_chars[2]; } no;
+    static inline yes   test(To) { return yes(); }
+    static inline no    test(...) { return no(); }
+    static inline typename remove_reference<From>::type& from() { typename remove_reference<From>::type* ptr = 0; return *ptr; }
+    public:
+    static const bool value = sizeof(test(from())) == sizeof(yes);
+    }; // end is_convertible_sfinae
+    template<typename From, typename To> struct is_convertible_needs_simple_test {
+    static const bool from_is_void      = is_void<From>::value;
+    static const bool to_is_void        = is_void<To>::value;
+    static const bool from_is_float     = is_floating_point<typename remove_reference<From>::type>::value;
+    static const bool to_is_int_or_cref = is_int_or_cref<To>::value;
+    static const bool value = (from_is_void || to_is_void || (from_is_float && to_is_int_or_cref));
+    }; // end is_convertible_needs_simple_test
+    template<typename From, typename To, bool = is_convertible_needs_simple_test<From,To>::value>
+    struct is_convertible {
+    static const bool value = (is_void<To>::value || (is_int_or_cref<To>::value && !is_void<From>::value));
+    }; // end is_convertible
+    template<typename From, typename To> struct is_convertible<From, To, false> {
+    static const bool value = (is_convertible_sfinae<typename add_reference<From>::type, To>::value);
+    }; // end is_convertible
+    } // end __jitify_detail
+    // implementation of is_convertible taken from thrust's pre C++11 path
+    template<typename From, typename To> struct is_convertible
+    : public integral_constant<bool, __jitify_detail::is_convertible<From, To>::value>
+    { }; // end is_convertible
+
+    template<class A, class B> struct is_base_of { };
+
+    template<size_t len, size_t alignment> struct aligned_storage { struct type { alignas(alignment) char data[len]; }; };
+    template <class T> struct alignment_of : std::integral_constant<size_t,alignof(T)> {};
 
     }  // namespace std
     #endif // c++11
@@ -2202,20 +2294,32 @@ static const char* jitsafe_header_time_h = R"(
     using namespace __jitify_time_ns;
  )";
 
+static const char* jitsafe_header_tuple = R"(
+    #pragma once
+    #if __cplusplus >= 201103L
+    namespace std {
+    template<class... Types > class tuple;
+    } // namespace std
+    #endif
+ )";
+
+static const char* jitsafe_header_assert = R"(
+    #pragma once
+ )";
+
 // WAR: These need to be pre-included as a workaround for NVRTC implicitly using
 // /usr/include as an include path. The other built-in headers will be included
 // lazily as needed.
-static const char* preinclude_jitsafe_header_names[] = {
-    "jitify_preinclude.h",
-    "limits.h",
-    "math.h",
-    "memory.h",
-    "stdint.h",
-    "stdlib.h",
-    "stdio.h",
-    "string.h",
-    "time.h",
-};
+static const char* preinclude_jitsafe_header_names[] = {"jitify_preinclude.h",
+                                                        "limits.h",
+                                                        "math.h",
+                                                        "memory.h",
+                                                        "stdint.h",
+                                                        "stdlib.h",
+                                                        "stdio.h",
+                                                        "string.h",
+                                                        "time.h",
+                                                        "assert.h"};
 
 template <class T, int N>
 int array_size(T (&)[N]) {
@@ -2260,7 +2364,9 @@ static const std::map<std::string, std::string>& get_jitsafe_headers_map() {
       {"algorithm", jitsafe_header_algorithm},
       {"time.h", jitsafe_header_time_h},
       {"ctime", jitsafe_header_time_h},
-  };
+      {"tuple", jitsafe_header_tuple},
+      {"assert.h", jitsafe_header_assert},
+      {"cassert", jitsafe_header_assert}};
   return jitsafe_headers_map;
 }
 

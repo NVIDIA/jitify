@@ -554,10 +554,15 @@ static const char* const thrust_program_source =
 TEST(JitifyTest, ThrustHeaders) {
   // Checks that basic Thrust headers can be compiled.
   jitify::JitCache kernel_cache;
+#if CUDA_VERSION < 11000
+  const char* cppstd = "-std=c++98";
+#else
+  const char* cppstd = "-std=c++11";
+#endif
   auto program_v1 = kernel_cache.program(thrust_program_source, {},
-                                         {"-I" CUDA_INC_DIR, "-std=c++98"});
-  auto program_v2 = jitify::experimental::Program(
-      thrust_program_source, {}, {"-I" CUDA_INC_DIR, "-std=c++98"});
+                                         {"-I" CUDA_INC_DIR, cppstd});
+  auto program_v2 = jitify::experimental::Program(thrust_program_source, {},
+                                                  {"-I" CUDA_INC_DIR, cppstd});
 }
 
 static const char* const cub_program_source =
@@ -942,6 +947,26 @@ TEST(JitifyTest, ClassKernelArg) {
   }
 
   CHECK_CUDART(cudaFree(d_data));
+}
+
+static const char* const assert_program_source = R"(
+  #include <cassert>
+  __global__ void my_assert_kernel() {
+  assert(0 == 1);
+  }
+  )";
+
+TEST(JitifyTest, AssertHeader) {
+  // Checks that cassert works as expected
+  jitify::JitCache kernel_cache;
+  auto program =
+      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
+  dim3 grid(1);
+  dim3 block(1);
+  CHECK_CUDA((program.kernel("my_assert_kernel")
+                  .instantiate<>()
+                  .configure(grid, block)
+                  .launch()));
 }
 
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
