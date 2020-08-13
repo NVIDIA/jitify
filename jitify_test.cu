@@ -920,8 +920,20 @@ TEST(JitifyTest, ClassKernelArg) {
     EXPECT_EQ(arg.x, h_data);
   }
 
+  {  // test that we can pass an arg object rvalue to a kernel
+    int value = -2;
+    CHECK_CUDA(program.kernel("class_arg_kernel")
+                   .instantiate(Type<Arg>())
+                   .configure(grid, block)
+                   .launch(d_data, Arg(value)));
+    CHECK_CUDART(cudaDeviceSynchronize());
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(value, h_data);
+  }
+
   {  // test that we can pass an arg object reference to a kernel
-    Arg* arg = new Arg(-1);
+    Arg* arg = new Arg(-3);
     // references are passed as pointers since refernces are just pointers from
     // an ABI point of view
     CHECK_CUDA(program.kernel("class_arg_ref_kernel")
@@ -935,7 +947,7 @@ TEST(JitifyTest, ClassKernelArg) {
   }
 
   {  // test that we can pass an arg object reference to a kernel
-    Arg* arg = new Arg(-1);
+    Arg* arg = new Arg(-4);
     CHECK_CUDA(program.kernel("class_arg_ptr_kernel")
                    .instantiate(Type<Arg>())
                    .configure(grid, block)
