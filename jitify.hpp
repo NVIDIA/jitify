@@ -1304,6 +1304,17 @@ class CUDAKernel {
                                          stream, arg_ptrs.data(), NULL));
   }
 
+  inline int get_func_attribute(CUfunction_attribute attribute) const {
+    int value;
+    cuda_safe_call(cuFuncGetAttribute(&value, attribute, _kernel));
+    return value;
+  }
+
+  inline void set_func_attribute(CUfunction_attribute attribute,
+                                 int value) const {
+    cuda_safe_call(cuFuncSetAttribute(_kernel, attribute, value));
+  }
+
   inline CUdeviceptr get_global_ptr(const char* name,
                                     size_t* size = nullptr) const {
     CUdeviceptr global_ptr = 0;
@@ -3147,6 +3158,21 @@ class KernelInstantiation {
   }
 
   /*
+   * Returns the function attribute requested from the kernel
+   */
+  inline int get_func_attribute(CUfunction_attribute attribute) const {
+    return _impl->cuda_kernel().get_func_attribute(attribute);
+  }
+
+  /*
+   * Set the function attribute requested for the kernel
+   */
+  inline void set_func_attribute(CUfunction_attribute attribute,
+                                 int value) const {
+    _impl->cuda_kernel().set_func_attribute(attribute, value);
+  }
+
+  /*
    * \deprecated Use \p get_global_ptr instead.
    */
   inline CUdeviceptr get_constant_ptr(const char* name,
@@ -4159,6 +4185,21 @@ class KernelInstantiation {
       int max_block_size = 0, unsigned int smem = 0,
       CUoccupancyB2DSize smem_callback = 0, cudaStream_t stream = 0,
       unsigned int flags = 0) const;
+
+  /*
+   * Returns the function attribute requested from the kernel
+   */
+  inline int get_func_attribute(CUfunction_attribute attribute) const {
+    return _cuda_kernel->get_func_attribute(attribute);
+  }
+
+  /*
+   * Set the function attribute requested for the kernel
+   */
+  inline void set_func_attribute(CUfunction_attribute attribute,
+                                 int value) const {
+    _cuda_kernel->set_func_attribute(attribute, value);
+  }
 
   /*
    * \deprecated Use \p get_global_ptr instead.
