@@ -804,7 +804,7 @@ inline std::string demangle_native_type(const std::type_info& typeinfo) {
   }
   throw std::runtime_error("UnDecorateSymbolName failed");
 }
-#else   // not MSVC
+#else  // not MSVC
 inline std::string demangle_cuda_symbol(const char* mangled_name) {
   size_t bufsize = 0;
   char* buf = nullptr;
@@ -3063,28 +3063,26 @@ class KernelLauncher {
    *  \see launch
    */
   template <typename... ArgTypes>
-  inline CUresult operator()(ArgTypes&&... args) const {
-    return this->launch(std::forward<ArgTypes>(args)...);
+  inline CUresult operator()(const ArgTypes&... args) const {
+    return this->launch(args...);
   }
   /*! Launch the kernel.
    *
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  inline CUresult launch(ArgTypes&&... args) const {
-    return this->launch(
-        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-        {reflection::reflect<ArgTypes>()...});
+  inline CUresult launch(const ArgTypes&... args) const {
+    return this->launch(std::vector<void*>({(void*)&args...}),
+                        {reflection::reflect<ArgTypes>()...});
   }
   /*! Launch the kernel and check for cuda errors.
    *
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  inline void safe_launch(ArgTypes&&... args) const {
-    this->safe_launch(
-        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-        {reflection::reflect<ArgTypes>()...});
+  inline void safe_launch(const ArgTypes&... args) const {
+    this->safe_launch(std::vector<void*>({(void*)&args...}),
+                      {reflection::reflect<ArgTypes>()...});
   }
 };
 
@@ -4292,10 +4290,9 @@ class KernelLauncher {
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  CUresult launch(ArgTypes&&... args) const {
-    return this->launch(
-        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-        {reflection::reflect<ArgTypes>()...});
+  CUresult launch(const ArgTypes&... args) const {
+    return this->launch(std::vector<void*>({(void*)&args...}),
+                        {reflection::reflect<ArgTypes>()...});
   }
 
   /*! Launch the kernel and check for cuda errors.
@@ -4303,10 +4300,9 @@ class KernelLauncher {
    *  \param args Function arguments for the kernel.
    */
   template <typename... ArgTypes>
-  void safe_launch(ArgTypes&&... args) const {
-    return this->safe_launch(
-        std::vector<void*>({(void*)&std::forward<ArgTypes>(args)...}),
-        {reflection::reflect<ArgTypes>()...});
+  void safe_launch(const ArgTypes&... args) const {
+    return this->safe_launch(std::vector<void*>({(void*)&args...}),
+                             {reflection::reflect<ArgTypes>()...});
   }
 };
 
