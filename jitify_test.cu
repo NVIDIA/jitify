@@ -949,17 +949,6 @@ TEST(JitifyTest, ClassKernelArg) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
-// NOTE: Keep this as the last test in the file, in case the env var is sticky.
-TEST(JitifyTest, EnvVarOptions) {
-  setenv("JITIFY_OPTIONS", "-bad_option", true);
-  EXPECT_THROW(jitify::JitCache kernel_cache;
-               auto program = kernel_cache.program(simple_program_source),
-               std::runtime_error);
-  EXPECT_THROW(jitify::experimental::Program program(simple_program_source),
-               std::runtime_error);
-  setenv("JITIFY_OPTIONS", "", true);
-}
-
 static const char* const assert_program_source = R"(
   #include <cassert>
   __global__ void my_assert_kernel() {
@@ -978,4 +967,15 @@ TEST(JitifyTest, AssertHeader) {
                   .instantiate<>()
                   .configure(grid, block)
                   .launch()));
+}
+
+// NOTE: Keep this as the last test in the file, in case the env var is sticky.
+TEST(JitifyTest, EnvVarOptions) {
+  setenv("JITIFY_OPTIONS", "-bad_option", true);
+  EXPECT_THROW(jitify::JitCache kernel_cache;
+               auto program = kernel_cache.program(simple_program_source),
+               std::runtime_error);
+  EXPECT_THROW(jitify::experimental::Program program(simple_program_source),
+               std::runtime_error);
+  setenv("JITIFY_OPTIONS", "", true);
 }
