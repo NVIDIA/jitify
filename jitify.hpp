@@ -804,7 +804,7 @@ inline std::string demangle_native_type(const std::type_info& typeinfo) {
   }
   throw std::runtime_error("UnDecorateSymbolName failed");
 }
-#else  // not MSVC
+#else   // not MSVC
 inline std::string demangle_cuda_symbol(const char* mangled_name) {
   size_t bufsize = 0;
   char* buf = nullptr;
@@ -2297,11 +2297,9 @@ static const char* jitsafe_header_time_h = R"(
 static const char* jitsafe_header_tuple = R"(
     #pragma once
     #if __cplusplus >= 201103L
-    namespace __jitify_tuple_ns {
+    namespace std {
     template<class... Types > class tuple;
-    } // namespace __jitify_tuple_ns
-    namespace std { using namespace __jitify_tuple_ns; }
-    using namespace __jitify_tuple_ns;
+    } // namespace std
     #endif
  )";
 
@@ -2312,18 +2310,16 @@ static const char* jitsafe_header_assert = R"(
 // WAR: These need to be pre-included as a workaround for NVRTC implicitly using
 // /usr/include as an include path. The other built-in headers will be included
 // lazily as needed.
-static const char* preinclude_jitsafe_header_names[] = {
-    "jitify_preinclude.h",
-    "limits.h",
-    "math.h",
-    "memory.h",
-    "stdint.h",
-    "stdlib.h",
-    "stdio.h",
-    "string.h",
-    "time.h",
-    "assert.h"
-};
+static const char* preinclude_jitsafe_header_names[] = {"jitify_preinclude.h",
+                                                        "limits.h",
+                                                        "math.h",
+                                                        "memory.h",
+                                                        "stdint.h",
+                                                        "stdlib.h",
+                                                        "stdio.h",
+                                                        "string.h",
+                                                        "time.h",
+                                                        "assert.h"};
 
 template <class T, int N>
 int array_size(T (&)[N]) {
