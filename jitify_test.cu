@@ -981,6 +981,67 @@ TEST(JitifyTest, AssertHeader) {
                   .launch()));
 }
 
+static const char* const get_attribute_program_source = R"(
+  __global__ void get_attribute_kernel(int *out, int *in) {
+  __shared__ int buffer[4096];
+  buffer[threadIdx.x] = in[threadIdx.x];
+  __syncthreads();
+  out[threadIdx.y] = buffer[threadIdx.x];
+  }
+  )";
+
+TEST(JitifyTest, GetAttribute) {
+  // Checks that we can get function attributes
+  jitify::JitCache kernel_cache;
+  auto program = kernel_cache.program(get_attribute_program_source, {},
+                                      {"-I" CUDA_INC_DIR});
+  auto instance = program.kernel("get_attribute_kernel").instantiate();
+
+  EXPECT_EQ(4096 * sizeof(int),
+            instance.get_func_attribute(CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES));
+}
+
+static const char* const set_attribute_program_source = R"(
+  __global__ void set_attribute_kernel(int *out, int *in) {
+  extern __shared__ int buffer[];
+  buffer[threadIdx.x] = in[threadIdx.x];
+  __syncthreads();
+  out[threadIdx.y] = buffer[threadIdx.x];
+  }
+  )";
+
+TEST(JitifyTest, SetAttribute) {
+  // Checks that we can set function attributes
+  jitify::JitCache kernel_cache;
+
+  int* in;
+  CHECK_CUDART(cudaMalloc((void**)&in, sizeof(int)));
+  int* out;
+  CHECK_CUDART(cudaMalloc((void**)&out, sizeof(int)));
+
+  // query the maximum supported shared bytes per block
+  CUdevice device;
+  CHECK_CUDA(cuDeviceGet(&device, 0));
+  int shared_bytes;
+  CHECK_CUDA(cuDeviceGetAttribute(
+      &shared_bytes, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+      device));
+
+  auto program = kernel_cache.program(set_attribute_program_source, {},
+                                      {"-I" CUDA_INC_DIR});
+  auto instance = program.kernel("set_attribute_kernel").instantiate();
+  instance.set_func_attribute(CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                              shared_bytes);
+
+  dim3 grid(1);
+  dim3 block(1);
+  // this kernel will fail on Volta+ unless the set attribute succeeded
+  CHECK_CUDA(instance.configure(grid, block, shared_bytes).launch(out, in));
+
+  CHECK_CUDART(cudaFree(out));
+  CHECK_CUDART(cudaFree(in));
+}
+
 // NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
