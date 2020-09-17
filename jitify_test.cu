@@ -543,6 +543,33 @@ TEST(JitifyTest, InvalidPrograms) {
       std::runtime_error);
 }
 
+static const char* const pragma_repl_program_source = R"(my_program
+template <int N, typename T>
+__global__ void my_kernel(T* data) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  T data0 = data[0];
+  #pragma unroll
+  for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+  #pragma unroll 1
+  for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+  #pragma unroll 1  // Make sure parsing works with comments
+  for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+  // TODO: Add support for block comments.
+  //#pragma unroll 1  /* Make sure parsing works with comments */
+  //for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+}
+)";
+
+TEST(JitifyTest, PragmaReplacement) {
+  static jitify::JitCache kernel_cache;
+  jitify::Program program = kernel_cache.program(pragma_repl_program_source);
+  typedef float T;
+  T* d_data = nullptr;
+  using jitify::reflection::type_of;
+  auto kernel_inst =
+      program.kernel("my_kernel").instantiate(3, type_of(*d_data));
+}
+
 // TODO: Expand this to include more Thrust code.
 static const char* const thrust_program_source =
     "thrust_program\n"
