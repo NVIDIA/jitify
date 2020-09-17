@@ -974,7 +974,7 @@ inline Type<T> type_of(T&) {
  *  \param value The const value whose type is to be captured.
  */
 template <typename T>
-inline Type<T const> type_of(T const& value) {
+inline Type<T const> type_of(T const&) {
   return Type<T const>();
 }
 

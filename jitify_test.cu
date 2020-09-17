@@ -997,7 +997,7 @@ TEST(JitifyTest, GetAttribute) {
                                       {"-I" CUDA_INC_DIR});
   auto instance = program.kernel("get_attribute_kernel").instantiate();
 
-  EXPECT_EQ(4096 * sizeof(int),
+  EXPECT_EQ(4096 * (int)sizeof(int),
             instance.get_func_attribute(CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES));
 }
 
