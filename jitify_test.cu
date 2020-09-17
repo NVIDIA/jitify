@@ -968,19 +968,6 @@ static const char* const assert_program_source = R"(
   }
   )";
 
-TEST(JitifyTest, AssertHeader) {
-  // Checks that cassert works as expected
-  jitify::JitCache kernel_cache;
-  auto program =
-      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
-  dim3 grid(1);
-  dim3 block(1);
-  CHECK_CUDA((program.kernel("my_assert_kernel")
-                  .instantiate<>()
-                  .configure(grid, block)
-                  .launch()));
-}
-
 static const char* const get_attribute_program_source = R"(
   __global__ void get_attribute_kernel(int *out, int *in) {
   __shared__ int buffer[4096];
@@ -1042,7 +1029,6 @@ TEST(JitifyTest, SetAttribute) {
   CHECK_CUDART(cudaFree(in));
 }
 
-// NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
   EXPECT_THROW(jitify::JitCache kernel_cache;
@@ -1051,4 +1037,18 @@ TEST(JitifyTest, EnvVarOptions) {
   EXPECT_THROW(jitify::experimental::Program program(simple_program_source),
                std::runtime_error);
   setenv("JITIFY_OPTIONS", "", true);
+}
+
+// NOTE: This MUST be the last test in the file, due to sticky CUDA error.
+TEST(JitifyTest, AssertHeader) {
+  // Checks that cassert works as expected
+  jitify::JitCache kernel_cache;
+  auto program =
+      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
+  dim3 grid(1);
+  dim3 block(1);
+  CHECK_CUDA((program.kernel("my_assert_kernel")
+                  .instantiate<>()
+                  .configure(grid, block)
+                  .launch()));
 }
