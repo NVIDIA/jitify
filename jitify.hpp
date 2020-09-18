@@ -665,16 +665,18 @@ inline bool load_source(
     }
 
     // HACK WAR for Thrust using "#define FOO #pragma bar"
+    // TODO: This is not robust to block comments, line continuations, or tabs.
     size_t pragma_beg = cleanline.find("#pragma ");
     if (pragma_beg != std::string::npos) {
-      std::string line_after_pragma = line.substr(pragma_beg);
-      std::vector<std::string> pragma_split =
-          split_string(line_after_pragma, 2);
-      line =
-          (line.substr(0, pragma_beg) + "_Pragma(\"" + pragma_split[1] + "\")");
-      if (pragma_split.size() == 3) {
-        line += " " + pragma_split[2];
-      }
+      std::string line_after_pragma = line.substr(pragma_beg + 8);
+      // TODO: Handle block comments (currently they cause a compilation error).
+      size_t comment_start = line_after_pragma.find("//");
+      std::string pragma_args = line_after_pragma.substr(0, comment_start);
+      std::string comment = comment_start != std::string::npos
+                                ? line_after_pragma.substr(comment_start)
+                                : "";
+      line = line.substr(0, pragma_beg) + "_Pragma(\"" + pragma_args + "\")" +
+             comment;
     }
 
     source += line + "\n";
@@ -974,7 +976,7 @@ inline Type<T> type_of(T&) {
  *  \param value The const value whose type is to be captured.
  */
 template <typename T>
-inline Type<T const> type_of(T const& value) {
+inline Type<T const> type_of(T const&) {
   return Type<T const>();
 }
 

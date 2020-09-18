@@ -543,6 +543,33 @@ TEST(JitifyTest, InvalidPrograms) {
       std::runtime_error);
 }
 
+static const char* const pragma_repl_program_source = R"(my_program
+template <int N, typename T>
+__global__ void my_kernel(T* data) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  T data0 = data[0];
+  #pragma unroll
+  for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+  #pragma unroll 1
+  for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+  #pragma unroll 1  // Make sure parsing works with comments
+  for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+  // TODO: Add support for block comments.
+  //#pragma unroll 1  /* Make sure parsing works with comments */
+  //for (int i = 0; i < N - 1; ++i) data[0] *= data0;
+}
+)";
+
+TEST(JitifyTest, PragmaReplacement) {
+  static jitify::JitCache kernel_cache;
+  jitify::Program program = kernel_cache.program(pragma_repl_program_source);
+  typedef float T;
+  T* d_data = nullptr;
+  using jitify::reflection::type_of;
+  auto kernel_inst =
+      program.kernel("my_kernel").instantiate(3, type_of(*d_data));
+}
+
 // TODO: Expand this to include more Thrust code.
 static const char* const thrust_program_source =
     "thrust_program\n"
@@ -968,19 +995,6 @@ static const char* const assert_program_source = R"(
   }
   )";
 
-TEST(JitifyTest, AssertHeader) {
-  // Checks that cassert works as expected
-  jitify::JitCache kernel_cache;
-  auto program =
-      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
-  dim3 grid(1);
-  dim3 block(1);
-  CHECK_CUDA((program.kernel("my_assert_kernel")
-                  .instantiate<>()
-                  .configure(grid, block)
-                  .launch()));
-}
-
 static const char* const get_attribute_program_source = R"(
   __global__ void get_attribute_kernel(int *out, int *in) {
   __shared__ int buffer[4096];
@@ -997,7 +1011,7 @@ TEST(JitifyTest, GetAttribute) {
                                       {"-I" CUDA_INC_DIR});
   auto instance = program.kernel("get_attribute_kernel").instantiate();
 
-  EXPECT_EQ(4096 * sizeof(int),
+  EXPECT_EQ(4096 * (int)sizeof(int),
             instance.get_func_attribute(CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES));
 }
 
@@ -1042,7 +1056,6 @@ TEST(JitifyTest, SetAttribute) {
   CHECK_CUDART(cudaFree(in));
 }
 
-// NOTE: Keep this as the last test in the file, in case the env var is sticky.
 TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "-bad_option", true);
   EXPECT_THROW(jitify::JitCache kernel_cache;
@@ -1051,4 +1064,18 @@ TEST(JitifyTest, EnvVarOptions) {
   EXPECT_THROW(jitify::experimental::Program program(simple_program_source),
                std::runtime_error);
   setenv("JITIFY_OPTIONS", "", true);
+}
+
+// NOTE: This MUST be the last test in the file, due to sticky CUDA error.
+TEST(JitifyTest, AssertHeader) {
+  // Checks that cassert works as expected
+  jitify::JitCache kernel_cache;
+  auto program =
+      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
+  dim3 grid(1);
+  dim3 block(1);
+  CHECK_CUDA((program.kernel("my_assert_kernel")
+                  .instantiate<>()
+                  .configure(grid, block)
+                  .launch()));
 }
