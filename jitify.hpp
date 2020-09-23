@@ -1373,9 +1373,6 @@ static const char* jitsafe_header_preinclude_h = R"(
 //// WAR for Thrust (which appear to have forgotten to include this in error_code.h)
 //#include <string>
 
-// WAR for Thrust (which only supports gnuc, clang or msvc)
-#define __GNUC__ 4
-
 // WAR for generics/shfl.h
 #define THRUST_STATIC_ASSERT(x)
 
