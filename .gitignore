@@ -6,5 +6,8 @@ stringify
 jitify_2nd_compilation_unit.cpp
 jitify_test
 googletest/
+build/
+doc/
 # Backup files
 *~
+*.bak*

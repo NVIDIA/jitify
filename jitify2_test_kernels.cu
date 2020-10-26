@@ -26,46 +26,20 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
+// This file is preprocessed offline and then used in the test suite.
 
-class Managed {
- public:
-  void* operator new(size_t len) {
-    void* ptr = nullptr;
-#ifndef __CUDACC_RTC__
-    cudaMallocManaged(&ptr, len);
-    cudaDeviceSynchronize();
-#endif
-    return ptr;
-  }
+#include "example_headers/my_header1.cuh"
+#include "example_headers/my_header2.cuh"
+#include "example_headers/my_header3.cuh"
 
-  void operator delete(void* ptr) {
-#ifndef __CUDACC_RTC__
-    cudaDeviceSynchronize();
-    cudaFree(ptr);
-#endif
-  }
-};
-
-struct Arg : public Managed {
-  const int x;
-  Arg(int x_) : x(x_) {}
-
-  // there can be no call to the copy constructor
-  Arg(const Arg& arg) = delete;
-};
-
-template <typename T>
-__global__ void class_arg_kernel(int* x, T arg) {
-  *x = arg.x;
+__global__ void my_kernel1(const float* indata, float* outdata) {
+  outdata[0] = indata[0] + 1;
+  outdata[0] -= 1;
 }
 
-template <typename T>
-__global__ void class_arg_ref_kernel(int* x, T& arg) {
-  *x = arg.x;
-}
-
-template <typename T>
-__global__ void class_arg_ptr_kernel(int* x, T* arg) {
-  *x = arg->x;
+template <int C, typename T>
+__global__ void my_kernel2(const float* indata, float* outdata) {
+  for (int i = 0; i < C; ++i) {
+    outdata[0] = pointless_func(identity(sqrt(square(negate(indata[0])))));
+  }
 }
