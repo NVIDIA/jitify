@@ -2723,7 +2723,6 @@ inline void load_program(std::string const& cuda_source,
                            file_callback, program_name)) {
     throw std::runtime_error("Source not found: " + cuda_source);
   }
-  //*program_name = program_sources->begin()->first;
 
   // Maps header include names to their full file paths.
   std::map<std::string, std::string> header_fullpaths;
