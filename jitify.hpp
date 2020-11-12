@@ -551,12 +551,10 @@ inline std::vector<std::string> split_string(std::string str,
 static const std::map<std::string, std::string>& get_jitsafe_headers_map();
 
 inline bool load_source(
-    std::string filename,
-    std::map<std::string, std::string>& sources,
+    std::string filename, std::map<std::string, std::string>& sources,
     std::string current_dir = "",
     std::vector<std::string> include_paths = std::vector<std::string>(),
-    file_callback_type file_callback = 0,
-    std::string* program_name = nullptr,
+    file_callback_type file_callback = 0, std::string* program_name = nullptr,
     std::map<std::string, std::string>* fullpaths = nullptr,
     bool search_current_dir = true) {
   std::istream* source_stream = 0;
