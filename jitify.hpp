@@ -551,10 +551,12 @@ inline std::vector<std::string> split_string(std::string str,
 static const std::map<std::string, std::string>& get_jitsafe_headers_map();
 
 inline bool load_source(
-    std::string filename, std::map<std::string, std::string>& sources,
+    std::string filename,
+    std::map<std::string, std::string>& sources,
     std::string current_dir = "",
     std::vector<std::string> include_paths = std::vector<std::string>(),
     file_callback_type file_callback = 0,
+    std::string* program_name = nullptr,
     std::map<std::string, std::string>* fullpaths = nullptr,
     bool search_current_dir = true) {
   std::istream* source_stream = 0;
@@ -565,6 +567,9 @@ inline bool load_source(
   if (newline_pos != std::string::npos) {
     std::string source = filename.substr(newline_pos + 1);
     filename = filename.substr(0, newline_pos);
+    if (program_name) {
+      *program_name = filename;
+    }
     string_stream << source;
     source_stream = &string_stream;
   }
@@ -2715,10 +2720,10 @@ inline void load_program(std::string const& cuda_source,
 
   // Load program source
   if (!detail::load_source(cuda_source, *program_sources, "", *include_paths,
-                           file_callback)) {
+                           file_callback, program_name)) {
     throw std::runtime_error("Source not found: " + cuda_source);
   }
-  *program_name = program_sources->begin()->first;
+  //*program_name = program_sources->begin()->first;
 
   // Maps header include names to their full file paths.
   std::map<std::string, std::string> header_fullpaths;
@@ -2726,7 +2731,7 @@ inline void load_program(std::string const& cuda_source,
   // Load header sources
   for (std::string const& header : headers) {
     if (!detail::load_source(header, *program_sources, "", *include_paths,
-                             file_callback, &header_fullpaths)) {
+                             file_callback, nullptr, &header_fullpaths)) {
       // **TODO: Deal with source not found
       throw std::runtime_error("Source not found: " + header);
     }
@@ -2785,8 +2790,8 @@ inline void load_program(std::string const& cuda_source,
     std::string include_parent_fullpath = header_fullpaths[include_parent];
     std::string include_path = detail::path_base(include_parent_fullpath);
     if (detail::load_source(include_name, *program_sources, include_path,
-                            *include_paths, file_callback, &header_fullpaths,
-                            is_included_with_quotes)) {
+                            *include_paths, file_callback, nullptr,
+                            &header_fullpaths, is_included_with_quotes)) {
 #if JITIFY_PRINT_HEADER_PATHS
       std::cout << "Found #include " << include_name << " from "
                 << include_parent << ":" << line_num << " ["
