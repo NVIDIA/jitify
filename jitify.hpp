@@ -565,11 +565,11 @@ inline bool load_source(
   if (newline_pos != std::string::npos) {
     std::string source = filename.substr(newline_pos + 1);
     filename = filename.substr(0, newline_pos);
-    if (program_name) {
-      *program_name = filename;
-    }
     string_stream << source;
     source_stream = &string_stream;
+  }
+  if (program_name) {
+    *program_name = filename;
   }
   if (sources.count(filename)) {
     // Already got this one
