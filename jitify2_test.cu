@@ -1031,7 +1031,7 @@ const int arch = __CUDA_ARCH__ / 10;
   ASSERT_EQ(program->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, 35);
 
-  // Test explicit real architecture.
+  // Test explicit real architecture (may compile directly to CUBIN).
   program = preprocessed->load({}, {},
                                {"-arch", "sm_" + std::to_string(current_arch)});
   ASSERT_EQ(get_error(program), "");
@@ -1044,7 +1044,7 @@ const int arch = __CUDA_ARCH__ / 10;
   ASSERT_EQ(program->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
-  // Test automatic real architecture.
+  // Test automatic real architecture (may compile directly to CUBIN).
   program = preprocessed->load({}, {}, {"-arch=sm_."});
   ASSERT_EQ(get_error(program), "");
   ASSERT_EQ(program->get_global_value("arch", &arch), "");

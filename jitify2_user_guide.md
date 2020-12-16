@@ -272,9 +272,11 @@ some trigger special behavior in Jitify as detailed below:
   architecture corresponding to the current CUDA context (i.e., the
   device returned by `cuCtxGetDevice`). The user may specify this flag
   with either a virtual ("compute_XX") or real ("sm_XX") architecture:
-  a real architecture will be automatically converted to a supported
-  virtual architecture and the real architecture will be passed to the
-  CUDA driver for PTX to CUBIN compilation.
+  a virtual architecture will trigger compilation to PTX, while a real
+  architecture will trigger direct-to-CUBIN compilation (if it is
+  supported; otherwise it will fall back to PTX compilation and the
+  real architecture will be passed to the CUDA driver for PTX to CUBIN
+  compilation).
 
   For preprocessing (but not compilation), multiple architecture
   values may be specified by repeating the flag. The source will be
@@ -286,7 +288,9 @@ some trigger special behavior in Jitify as detailed below:
 
   For compilation (but not preprocessing), the architecture value may
   be specified using the special syntax "compute_."  or "sm_." to
-  explicitly enable automatic detection of the architecture.
+  explicitly select the preferred type of compilation (PTX or
+  direct-to-CUBIN respectively) while still relying on automatic
+  detection of the architecture.
 
 - `-std=<std>`
 

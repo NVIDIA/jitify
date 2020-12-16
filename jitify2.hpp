@@ -1818,13 +1818,13 @@ inline LinkedProgram LinkedProgram::link(StringRef ptx, StringRef cubin,
                        std::move(log), std::move(options));
 }
 
-/*! An object containing a PTX source string and associated
+/*! An object containing a PTX (and maybe CUBIN) source string and associated
  *  metadata.
  */
 class CompiledProgramData
     : public serialization::Serializable<CompiledProgramData> {
   std::string ptx_;
-  std::string cubin_;
+  std::string cubin_;  // Only available with NVRTC version >= 11.2
   // Maps name expressions to lowered symbol names (aka. unmangled to mangled).
   StringMap lowered_name_map_;
   StringVec remaining_linker_options_;  // Passed on to LinkedProgram::link.
@@ -1850,6 +1850,12 @@ class CompiledProgramData
 
   /*! Get the PTX source of the compiled program. */
   const std::string& ptx() const { return ptx_; }
+  /*! Get the CUBIN binary of the compiled program.
+   * \note The CUBIN is only available here with NVRTC version >= 11.2; older
+   * versions will return an empty string. The CUBIN is always available from
+   * LinkedProgramData::cubin.
+   */
+  const std::string& cubin() const { return cubin_; }
   /*! Get the map of name expressions to lowered (mangled) symbol names. */
   const StringMap& lowered_name_map() const { return lowered_name_map_; }
   /*! Get the remaining options that will be passed on to the compiler. */
@@ -2045,6 +2051,26 @@ class LibNvrtc
   JITIFY_DEFINE_NVRTC_WRAPPER(DestroyProgram, nvrtcResult, nvrtcProgram*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetLoweredName, nvrtcResult, nvrtcProgram,
                               const char* const, const char**)
+#if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11020
+  detail::function_type<nvrtcResult, nvrtcProgram, char*>* GetCUBIN() {
+    return nullptr;
+  }
+  detail::function_type<nvrtcResult, nvrtcProgram, size_t*>* GetCUBINSize() {
+    return nullptr;
+  }
+  detail::function_type<nvrtcResult, nvrtcProgram, int*>*
+  GetNumSupportedArchs() {
+    return nullptr;
+  }
+  detail::function_type<nvrtcResult, nvrtcProgram, int*>* GetSupportedArchs() {
+    return nullptr;
+  }
+#else
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBIN, nvrtcResult, nvrtcProgram, char*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBINSize, nvrtcResult, nvrtcProgram, size_t*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetNumSupportedArchs, nvrtcResult, int*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetSupportedArchs, nvrtcResult, int*)
+#endif
   JITIFY_DEFINE_NVRTC_WRAPPER(GetErrorString, const char*, nvrtcResult)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetPTX, nvrtcResult, nvrtcProgram, char*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetPTXSize, nvrtcResult, nvrtcProgram, size_t*)
@@ -2177,7 +2203,19 @@ inline int limit_to_supported_compute_capability(int cc,
                    cc == 72);   // Xavier
   if (is_tegra) return cc;
 
-  if (true) {
+  if (nvrtc() && nvrtc().GetSupportedArchs()) {
+    static const int max_supported_arch = [] {
+      int num_supported_archs;
+      nvrtcResult nvrtc_ret =
+          nvrtc().GetNumSupportedArchs()(&num_supported_archs);
+      if (nvrtc_ret != NVRTC_SUCCESS) return 0;
+      std::vector<int> supported_archs(num_supported_archs);
+      nvrtc_ret = nvrtc().GetSupportedArchs()(supported_archs.data());
+      if (nvrtc_ret != NVRTC_SUCCESS) return 0;
+      return supported_archs.back();
+    }();
+    cc = std::min(cc, max_supported_arch);
+  } else {
     // Ensure that future CUDA versions just work (even if suboptimal).
     const int cuda_major = std::min(11, CUDA_VERSION / 1000);
     // clang-format off
@@ -2269,8 +2307,14 @@ inline bool process_architecture_flags(StringVec* compiler_options,
       if (error_ptr) *error_ptr = nvrtc().error();
       return false;
     }
-    virt_cc = limit_to_supported_compute_capability(real_cc, &error);
-    if (!check_error()) return false;
+    if (!nvrtc().GetCUBIN()) {
+      // This NVRTC version does not support compiling to a real arch.
+      virt_cc = limit_to_supported_compute_capability(real_cc, &error);
+      if (!check_error()) return false;
+    } else {
+      // Pass the real arch to NVRTC.
+      virt_cc = 0;
+    }
   }
   // Add the computed arch flag back to the compiler options and to the linker
   // options.
@@ -2463,7 +2507,16 @@ inline bool compile_program(const std::string& name, const std::string& source,
     ptx->resize(ptx_size - 1);
     JITIFY_CHECK_NVRTC(nvrtc().GetPTX()(nvrtc_program, &(*ptx)[0]));
   }
-  (void)cubin;
+
+  // Note that direct-to-CUBIN compilation is only supported with NVRTC >= 11.2.
+  if (cubin && nvrtc().GetCUBIN()) {
+    size_t cubin_size;
+    JITIFY_CHECK_NVRTC(nvrtc().GetCUBINSize()(nvrtc_program, &cubin_size));
+    if (cubin_size) {
+      cubin->resize(cubin_size, 'x');
+      JITIFY_CHECK_NVRTC(nvrtc().GetCUBIN()(nvrtc_program, &(*cubin)[0]));
+    }
+  }
 
   for (const auto& name_expression : name_expressions) {
     const char* lowered_name_c;
@@ -2788,7 +2841,7 @@ class PreprocessedProgramData
   /*! Get the log from the compiler invocation made during preprocessing. */
   const std::string& compile_log() const { return compile_log_; }
 
-  /*! Compile the program to PTX.
+  /*! Compile the program to PTX (and maybe CUBIN).
    *  \param name_expressions List of name expressions to include during
    *    compilation (e.g.,
    *    `{&quot;my_namespace::my_kernel<123, float>&quot;, &quot;v<7>&quot;}`).
@@ -2818,7 +2871,7 @@ class PreprocessedProgramData
         std::move(extra_compiler_options), std::move(extra_linker_options));
   }
 
-  /*! Compile the program to PTX.
+  /*! Compile the program to PTX (and maybe CUBIN).
    *  \param name_expression Name expression to include during compilation
    *    (e.g.,`&quot;my_namespace::my_kernel<123, float>&quot;`).
    *  \param extra_header_sources List of additional header names and sources to
@@ -4770,7 +4823,8 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
           "Architecture flags passed to preprocess() must be explicit.");
     }
     if (!given_cc) break;
-    if (!is_virtual) {
+    if (!nvrtc().GetCUBIN() && !is_virtual) {
+      // This version of NVRTC does not support direct-to-CUBIN compilation.
       // Convert real arch flags to virtual arch to avoid error from NVRTC.
       given_cc =
           detail::limit_to_supported_compute_capability(given_cc, &error);
