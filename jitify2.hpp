@@ -2051,13 +2051,18 @@ class LibNvrtc
   JITIFY_DEFINE_NVRTC_WRAPPER(DestroyProgram, nvrtcResult, nvrtcProgram*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetLoweredName, nvrtcResult, nvrtcProgram,
                               const char* const, const char**)
-#if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11020
+#if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11010
   detail::function_type<nvrtcResult, nvrtcProgram, char*>* GetCUBIN() {
     return nullptr;
   }
   detail::function_type<nvrtcResult, nvrtcProgram, size_t*>* GetCUBINSize() {
     return nullptr;
   }
+#else
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBIN, nvrtcResult, nvrtcProgram, char*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBINSize, nvrtcResult, nvrtcProgram, size_t*)
+#endif
+#if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11020
   detail::function_type<nvrtcResult, nvrtcProgram, int*>*
   GetNumSupportedArchs() {
     return nullptr;
@@ -2066,8 +2071,6 @@ class LibNvrtc
     return nullptr;
   }
 #else
-  JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBIN, nvrtcResult, nvrtcProgram, char*)
-  JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBINSize, nvrtcResult, nvrtcProgram, size_t*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetNumSupportedArchs, nvrtcResult, int*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetSupportedArchs, nvrtcResult, int*)
 #endif
