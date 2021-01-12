@@ -2310,10 +2310,12 @@ inline bool process_architecture_flags(StringVec* compiler_options,
       if (error_ptr) *error_ptr = nvrtc().error();
       return false;
     }
-    if (!nvrtc().GetCUBIN()) {
-      // This NVRTC version does not support compiling to a real arch.
-      virt_cc = limit_to_supported_compute_capability(real_cc, &error);
-      if (!check_error()) return false;
+    int supported_real_cc =
+        limit_to_supported_compute_capability(real_cc, &error);
+    if (!check_error()) return false;
+    if (!nvrtc().GetCUBIN() || supported_real_cc != real_cc) {
+      // This NVRTC version does not support compiling to a/the real arch.
+      virt_cc = supported_real_cc;
     } else {
       // Pass the real arch to NVRTC.
       virt_cc = 0;
