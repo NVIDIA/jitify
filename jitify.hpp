@@ -1406,12 +1406,12 @@ static const char* jitsafe_header_float_h = R"(
 #define DBL_MAX_EXP     1024
 #define FLT_MAX_10_EXP  38
 #define DBL_MAX_10_EXP  308
-#define FLT_MAX         3.4028234e38f 
-#define DBL_MAX         1.7976931348623157e308 
-#define FLT_EPSILON     1.19209289e-7f 
-#define DBL_EPSILON     2.220440492503130e-16 
-#define FLT_MIN         1.1754943e-38f; 
-#define DBL_MIN         2.2250738585072013e-308 
+#define FLT_MAX         3.4028234e38f
+#define DBL_MAX         1.7976931348623157e308
+#define FLT_EPSILON     1.19209289e-7f
+#define DBL_EPSILON     2.220440492503130e-16
+#define FLT_MIN         1.1754943e-38f
+#define DBL_MIN         2.2250738585072013e-308
 #define FLT_ROUNDS      1
 #if defined __cplusplus && __cplusplus >= 201103L
 #define FLT_EVAL_METHOD 0
