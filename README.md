@@ -111,6 +111,6 @@ BSD-3-Clause
 
 ## Authors
 
-Ben Barsdell (NVIDIA)
+Ben Barsdell (NVIDIA, bbarsdell at nvidia dot com)
 
-Kate Clark (NVIDIA)
+Kate Clark (NVIDIA, mclark at nvidia dot com)
