@@ -2686,7 +2686,7 @@ inline bool copy_compiler_option_for_driver_ptxas(
   if (has_value) {
     linker_options->push_back(string_concat(key, "=", val));
   } else {
-    linker_options->push_back(key);
+    linker_options->push_back(static_cast<std::string>(key));
   }
   return true;
 }
