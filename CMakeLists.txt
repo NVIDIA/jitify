@@ -26,6 +26,8 @@ else()
   set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g")
 endif()
 
+find_package(CUDA REQUIRED) # Required for CUDA_INCLUDE_DIRS
+
 # Add macro definitions used in tests.
 add_compile_definitions(
     CUDA_INC_DIR="${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}"
@@ -76,13 +78,10 @@ function(add_stringify_command arg)
       DEPENDS stringify)
 endfunction()
 add_executable(jitify2_preprocess jitify2_preprocess.cpp)
+target_include_directories(jitify2_preprocess PRIVATE ${CUDA_INCLUDE_DIRS})
 if (NOT WIN32)
-  target_link_libraries(jitify2_preprocess ${CMAKE_DL_LIBS})
+  target_link_libraries(jitify2_preprocess PRIVATE ${CMAKE_DL_LIBS})
 endif()
-
-# HACK: Use NVCC to avoid include/library path issues.
-# For future reference: https://gitlab.kitware.com/cmake/cmake/-/issues/17816
-set_source_files_properties(jitify2_preprocess.cpp PROPERTIES LANGUAGE CUDA)
 
 # ----
 # Generate files for use in tests
