@@ -64,7 +64,7 @@ void write_serialized_program_as_cpp_header(
   std::string include_guard_name =
       "JITIFY_INCLUDE_GUARD_PROGRAM_" + source_varname;
   ostream << "#ifndef " << include_guard_name << "\n#define "
-       << include_guard_name << "\n";
+          << include_guard_name << "\n";
   ostream << "#include <jitify2.hpp>\n";
   if (!shared_headers_varname.empty()) {
     ostream << "extern const jitify2::StringMap* " << shared_headers_varname
@@ -125,23 +125,15 @@ bool read_file(const std::string& fullpath, std::string* content) {
   return true;
 }
 
-std::string path_join(const std::string& p1, const std::string& p2) {
-#if defined(_WIN32) || defined(_WIN64)
-  char sep = '\\';
-#else
-  char sep = '/';
-#endif
-  if (p1.size() && p2.size() && p2[0] == sep) {
-    return {};  // Error, cannot join to absolute path
+bool make_directories_for(const std::string& filename) {
+  using jitify2::detail::make_directories;
+  using jitify2::detail::path_base;
+  if (!make_directories(path_base(filename))) {
+    std::cerr << "Error creating directories for output file " << filename
+              << std::endl;
+    return false;
   }
-  std::string result;
-  result.reserve(p1.size() + 1 + p2.size());
-  result += p1;
-  if (p1.size() && p1[p1.size() - 1] != sep) {
-    result += sep;
-  }
-  result += p2;
-  return result;
+  return true;
 }
 
 void print_usage() {
@@ -190,6 +182,7 @@ will be null if deserialization fails).)"
 int main(int argc, char* argv[]) {
   (void)argc;
   using namespace jitify2;
+  using jitify2::detail::path_join;
   std::string shared_headers_filename;
   std::string output_dir;
   std::string varname_prefix;
@@ -285,14 +278,24 @@ int main(int argc, char* argv[]) {
           sanitize_varname(varname_prefix + source_filename + ".jit");
       std::string output_filename =
           path_join(output_dir, source_filename + ".jit.hpp");
+      if (!make_directories_for(output_filename)) return EXIT_FAILURE;
       std::ofstream file(output_filename, std::ios::binary);
       write_serialized_program_as_cpp_header(ss, file, source_varname,
                                              shared_headers_varname);
+      if (!file) {
+        std::cerr << "Error writing output to " << output_filename << std::endl;
+        return EXIT_FAILURE;
+      }
     } else {
       std::string output_filename =
           path_join(output_dir, source_filename + ".jit");
+      if (!make_directories_for(output_filename)) return EXIT_FAILURE;
       std::ofstream file(output_filename, std::ios::binary);
       preprocessed->serialize(file, /*include_headers = */ !share_headers);
+      if (!file) {
+        std::cerr << "Error writing output to " << output_filename << std::endl;
+        return EXIT_FAILURE;
+      }
     }
   }
   if (share_headers) {
@@ -302,12 +305,22 @@ int main(int argc, char* argv[]) {
       serialization::serialize(ss, all_header_sources);
       std::string output_filename =
           path_join(output_dir, shared_headers_filename + ".jit.cpp");
+      if (!make_directories_for(output_filename)) return EXIT_FAILURE;
       std::ofstream file(output_filename, std::ios::binary);
       write_serialized_headers_as_cpp_source(ss, file, shared_headers_varname);
+      if (!file) {
+        std::cerr << "Error writing output to " << output_filename << std::endl;
+        return EXIT_FAILURE;
+      }
     } else {
-      std::ofstream stream(shared_headers_filename + ".jit",
-                           std::ios::binary);
-      serialization::serialize(stream, all_header_sources);
+      std::string output_filename = shared_headers_filename + ".jit";
+      if (!make_directories_for(output_filename)) return EXIT_FAILURE;
+      std::ofstream file(output_filename, std::ios::binary);
+      serialization::serialize(file, all_header_sources);
+      if (!file) {
+        std::cerr << "Error writing output to " << output_filename << std::endl;
+        return EXIT_FAILURE;
+      }
     }
   }
   return EXIT_SUCCESS;
