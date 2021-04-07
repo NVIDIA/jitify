@@ -502,6 +502,22 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   EXPECT_EQ(cache.max_files(), max_size + 2);
 }
 
+TEST(Jitify2Test, ProgramCacheFilenameSanitization) {
+  static const char* const source = R"(__global__ void my_kernel() {})";
+  const size_t max_size = 1;
+  static const char* const cache_path = "jitify2_test_cache";
+  // The filename is derived from the program name, so this checks that invalid
+  // filename characters are automatically sanitized.
+  ProgramCache<> cache(
+      max_size, *Program("foo/bar/cat/dog\\:*?|<>", source)->preprocess(),
+      nullptr, cache_path);
+  ScopeGuard scoped_cleanup_files([&] {
+    cache.clear();
+    remove_empty_dir(cache_path);
+  });
+  *cache.get_kernel("my_kernel");
+}
+
 TEST(Jitify2Test, OfflinePreprocessing) {
   static const char* const extra_header_source = R"(
 #pragma once

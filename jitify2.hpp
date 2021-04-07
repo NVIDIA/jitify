@@ -5236,6 +5236,22 @@ inline bool for_each_file_in(const std::string& path, Func func) {
   return true;
 }
 
+inline std::string sanitize_filename(const std::string& filename) {
+  static const std::string bad_filename_chars = R"(\/:*?|"<>)";
+  std::stringstream result;
+  size_t beg = 0;
+  while (true) {
+    size_t end = filename.find_first_of(bad_filename_chars, beg);
+    result << filename.substr(beg, end - beg);
+    if (end == std::string::npos) break;
+    // Use HTML URL encoding scheme for unsupported filename characters.
+    result << "%" << std::hex << std::uppercase << (int)filename[end]
+           << std::nouppercase << std::dec;
+    beg = end + 1;
+  }
+  return result.str();
+}
+
 class LRUFileCache {
   std::string path_;
   size_t max_size_;
@@ -5296,19 +5312,19 @@ class LRUFileCache {
 
  public:
   // Empty path disables file caching.
-  LRUFileCache(std::string path, size_t max_size, std::string file_prefix,
-               std::string file_suffix)
+  LRUFileCache(std::string path, size_t max_size,
+               const std::string& file_prefix, const std::string& file_suffix)
       : path_(std::move(path)),
         max_size_(max_size),
-        file_prefix_(std::move(file_prefix)),
-        file_suffix_(std::move(file_suffix)),
+        file_prefix_(sanitize_filename(file_prefix)),
+        file_suffix_(sanitize_filename(file_suffix)),
         lock_file_name_(path_join(path_, file_prefix_ + "lock")) {
     FileLock file_lock(lock_file_name_.c_str());
     delete_lru_files_if_full();
   }
 
   template <class Construct, class Serialize, class Deserialize>
-  std::string get(std::string name,
+  std::string get(const std::string& name,
                   typename std::result_of<Construct()>::type* result,
                   Construct construct, Serialize serialize,
                   Deserialize deserialize) const {
@@ -5324,8 +5340,8 @@ class LRUFileCache {
         return "Failed to access file cache: cache path is a file: \"" + path_ +
                "\"";
       }
-      std::string filename =
-          path_join(path_, file_prefix_ + name + file_suffix_);
+      std::string filename = path_join(
+          path_, file_prefix_ + sanitize_filename(name) + file_suffix_);
       // Try to open the cache file for reading.
       std::ifstream istream(filename.c_str(), std::ios::binary);
       if (istream) {
@@ -5758,7 +5774,7 @@ class ProgramCache {
         mem_cache_(max_in_mem),
         file_cache_(std::move(file_cache_path),
                     max_files ? max_files : max_in_mem,
-                    /* prefix = */ preprog_.name() + ".", file_suffix),
+                    /*file_prefix=*/preprog_.name() + ".", file_suffix),
         hash_(hash),
         equal_(equal),
         to_filename_(to_filename) {}
