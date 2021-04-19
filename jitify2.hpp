@@ -72,6 +72,11 @@
 #define JITIFY_LINK_NVRTC_STATIC 0
 #endif
 
+// Users can enable this for easier debugging.
+#ifndef JITIFY_FAIL_IMMEDIATELY
+#define JITIFY_FAIL_IMMEDIATELY 0
+#endif
+
 #include <algorithm>
 #include <climits>
 #include <cstring>
@@ -805,7 +810,14 @@ class FallibleValue {
       : value_(std::forward<Args>(args)...) {}
 
   // Construct in error state.
-  FallibleValue(Error error) : error_(new error_type(error.value())) {}
+  FallibleValue(Error error) : error_(new error_type(error.value())) {
+#if JITIFY_FAIL_IMMEDIATELY
+    // Fail now for easier debugging via backtrace.
+    if (error.value() != "Uninitialized") {
+      JITIFY_THROW_OR_TERMINATE(error.value());
+    }
+#endif
+  }
 
   // Support copy and assign.
   FallibleValue(const FallibleValue& rhs)

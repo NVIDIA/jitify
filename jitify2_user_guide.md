@@ -233,6 +233,14 @@ $ make check
   dynamic loading of the NVRTC dynamic library and allows the
   library to be linked statically.
 
+- `JITIFY_FAIL_IMMEDIATELY=0`
+
+  Defining this macro to 1 before including the jitify header causes
+  errors to trigger exceptions/termination immediately instead of
+  only when a jitify object is dereferenced. This is useful for
+  debugging, as it allows the origin of an error to be found via a
+  backtrace.
+
 <a name="compiler_options"/>
 
 ## Compiler options
