@@ -5138,7 +5138,9 @@ class NewFile {
     flock fl = {};
     fl.l_type = F_WRLCK;     // Exclusive lock for writing
     fl.l_whence = SEEK_SET;  // Start at beginning of file
-    bool success = ::fcntl(fd_, F_SETLKW, &fl) == 0;
+    // Note: The Open File Descriptor (OFD) version of this call ensures that
+    // the lock is per-descriptor not per-process (and so is thread-safe).
+    bool success = ::fcntl(fd_, F_OFD_SETLKW, &fl) == 0;
 #endif
     error_ = get_error_msg(success, "lock");
     return success;
