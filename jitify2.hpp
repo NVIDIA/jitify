@@ -5070,6 +5070,14 @@ inline bool path_exists(const char* filename, bool* is_dir = nullptr) {
 class NewFile {
  private:
   int fd_ = -1;
+  std::string filename_;
+  std::string error_ = "Success";
+
+  std::string get_error_msg(bool success, const std::string& operation) const {
+    return success ? "Success"
+                   : "Failed to " + operation + " " + filename_ + ": (" +
+                         std::to_string(errno) + ") " + ::strerror(errno);
+  }
 
  public:
   NewFile() = default;
@@ -5077,32 +5085,44 @@ class NewFile {
   ~NewFile() { close(); }
   NewFile(const NewFile&) = delete;
   NewFile& operator=(const NewFile&) = delete;
-  NewFile(NewFile&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+  NewFile(NewFile&& other) noexcept
+      : fd_(other.fd_),
+        filename_(std::move(other.filename_)),
+        error_(std::move(other.error_)) {
+    other.fd_ = -1;
+  }
   NewFile& operator=(NewFile&& other) noexcept {
     fd_ = other.fd_;
     other.fd_ = -1;
+    filename_ = std::move(other.filename_);
+    error_ = std::move(other.error_);
     return *this;
   }
 
   bool open(const char* filename) {
+    filename_ = filename;
     close();
+    // Note that opening the file works even if it is locked.
 #if defined _WIN32 || defined _WIN64
     ::_sopen_s(&fd_, filename, _O_RDWR | _O_CREAT | _O_BINARY, _SH_DENYNO,
                _S_IREAD | _S_IWRITE);
 #else
     fd_ = ::open(filename, O_RDWR | O_CREAT, kDefaultFileMode);
 #endif
+    error_ = get_error_msg(static_cast<bool>(*this), "open");
     return static_cast<bool>(*this);
   }
 
   void close() {
     if (fd_ != -1) {
 #if defined _WIN32 || defined _WIN64
-      ::_close(fd_);
+      bool success = ::_close(fd_) == 0;
 #else
-      ::close(fd_);
+      // Note: Closing the file releases any lock on it held by this process.
+      bool success = ::close(fd_) == 0;
 #endif
       fd_ = -1;
+      error_ = get_error_msg(success, "close");
     }
   }
 
@@ -5113,14 +5133,18 @@ class NewFile {
   // Blocks until lock on file is acquired. Returns false on error.
   bool lock() {
 #if defined _WIN32 || defined _WIN64
-    return ::_locking(fd_, _LK_LOCK, 1) == 0;
+    bool success = ::_locking(fd_, _LK_LOCK, 1) == 0;
 #else
     flock fl = {};
     fl.l_type = F_WRLCK;     // Exclusive lock for writing
     fl.l_whence = SEEK_SET;  // Start at beginning of file
-    return ::fcntl(fd_, F_SETLKW, &fl) == 0;
+    bool success = ::fcntl(fd_, F_SETLKW, &fl) == 0;
 #endif
+    error_ = get_error_msg(success, "lock");
+    return success;
   }
+
+  const std::string& error() const { return error_; }
 };
 
 // Opens or creates a file and locks it for exclusive write access. The file is
@@ -5130,12 +5154,14 @@ class NewFile {
 class FileLock {
   NewFile file_;
   std::string filename_;
+  std::string error_;
 
   bool acquire_lock() {
+    // Note: Local instance to ensure file is not held open if locking fails.
     NewFile file;
 #if defined _WIN32 || defined _WIN64
-    if (!file.open(filename_.c_str())) return false;  // Error
-    if (!file.lock()) return false;                   // Error
+    if (!file.open(filename_.c_str())) return error_ = file.error(), false;
+    if (!file.lock()) return error_ = file.error(), false;
 #else
     // Despite file.lock() blocking until the lock is acquired, a loop is still
     // required here due to the possibility of the file being deleted by the
@@ -5143,8 +5169,8 @@ class FileLock {
     // calls to open() and lock() (an unlikely race condition).
     struct stat fd_stats, file_stats;
     do {
-      if (!file.open(filename_.c_str())) return false;  // Error
-      if (!file.lock()) return false;                   // Error
+      if (!file.open(filename_.c_str())) return error_ = file.error(), false;
+      if (!file.lock()) return error_ = file.error(), false;
     } while (
         ::fstat(file.fd(), &fd_stats) != 0 ||
         ::stat(filename_.c_str(), &file_stats) != 0 ||  // File must still exist
@@ -5167,6 +5193,8 @@ class FileLock {
 
   // Returns true if the file is open and ready for writing.
   explicit operator bool() const noexcept { return static_cast<bool>(file_); }
+
+  const std::string& error() const { return error_; }
 
   int fd() const noexcept { return file_.fd(); }
   const std::string& filename() const { return filename_; }
@@ -5344,6 +5372,7 @@ class LRUFileCache {
       *result = construct();
     } else {
       bool is_dir;
+      // Create the cache directory if necessary.
       if (!path_exists(path_.c_str(), &is_dir)) {
         if (!make_directories(path_)) {
           return "Failed to create cache directory \"" + path_ + "\"";
@@ -5362,7 +5391,7 @@ class LRUFileCache {
       } else {
         // Not found in cache, acquire a file lock for exclusive access.
         FileLock file_lock(lock_file_name_.c_str());
-        if (!file_lock) return "Failed to acquire file lock";
+        if (!file_lock) return file_lock.error();
         // Check for the file again in case it was created while waiting on the
         // lock.
         istream.open(filename.c_str(), std::ios::binary);
