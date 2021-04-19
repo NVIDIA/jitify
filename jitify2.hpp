@@ -5358,10 +5358,7 @@ class LRUFileCache {
         max_size_(max_size),
         file_prefix_(sanitize_filename(file_prefix)),
         file_suffix_(sanitize_filename(file_suffix)),
-        lock_file_name_(path_join(path_, file_prefix_ + "lock")) {
-    FileLock file_lock(lock_file_name_.c_str());
-    delete_lru_files_if_full();
-  }
+        lock_file_name_(path_join(path_, file_prefix_ + "lock")) {}
 
   template <class Construct, class Serialize, class Deserialize>
   std::string get(const std::string& name,
