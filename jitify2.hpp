@@ -944,7 +944,7 @@ inline uint64_t fasthash64(uint64_t h) {
 inline std::string get_cuda_error_string(CUresult ret) {
   const char* error_c;
   cuGetErrorString(ret, &error_c);
-  return error_c;
+  return "CUDA error " + std::to_string(ret) + ": " + error_c;
 }
 
 // Returns the sha256 digest as a string of 32 hex digits.
