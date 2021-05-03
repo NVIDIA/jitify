@@ -1388,7 +1388,16 @@ static const char* jitsafe_header_preinclude_h = R"(
 // WAR to allow exceptions to be parsed
 #define try
 #define catch(...)
-)";
+)"
+#if defined(_WIN32) || defined(_WIN64)
+// WAR for NVRTC <= 11.0 not defining _WIN64.
+R"(
+#ifndef _WIN64
+#define _WIN64 1
+#endif
+)"
+#endif
+;
 
 static const char* jitsafe_header_float_h = R"(
 #pragma once
@@ -1921,8 +1930,8 @@ static const char* jitsafe_header_stdint_h =
     "#define INT8_MIN    SCHAR_MIN\n"
     "#define INT16_MIN   SHRT_MIN\n"
     "#if defined _WIN32 || defined _WIN64\n"
-    "#define WCHAR_MIN   SHRT_MIN\n"
-    "#define WCHAR_MAX   SHRT_MAX\n"
+    "#define WCHAR_MIN   0\n"
+    "#define WCHAR_MAX   USHRT_MAX\n"
     "typedef unsigned long long uintptr_t; //optional\n"
     "#else\n"
     "#define WCHAR_MIN   INT_MIN\n"
