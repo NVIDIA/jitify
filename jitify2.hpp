@@ -2972,7 +2972,8 @@ class PreprocessedProgram
 namespace detail {
 
 // TODO: Check all of these WARs.
-static const char* const jitsafe_header_preinclude_h = R"(
+static const char* const jitsafe_header_preinclude_h =
+    R"(
 // WAR for Thrust and CUB.
 #ifdef __host__
 #undef __host__
@@ -2982,7 +2983,16 @@ static const char* const jitsafe_header_preinclude_h = R"(
 // WAR to allow exceptions to be parsed.
 #define try
 #define catch(...)
-)";
+)"
+#if defined(_WIN32) || defined(_WIN64)
+    // WAR for NVRTC <= 11.0 not defining _WIN64.
+    R"(
+#ifndef _WIN64
+#define _WIN64 1
+#endif
+)"
+#endif
+    ;
 
 #define JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(name, header, std_and_global_impl, \
                                            std_only_impl)                     \
