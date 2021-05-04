@@ -78,6 +78,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cstring>
 #include <fstream>
