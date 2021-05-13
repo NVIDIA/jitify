@@ -365,7 +365,7 @@ inline std::string path_base(std::string p) {
   // "foo/bar"  -> "foo"
   // "foo/bar/" -> "foo/bar"
 #if defined _WIN32 || defined _WIN64
-  char sep = '\\';
+  const char* sep = "\\/";
 #else
   char sep = '/';
 #endif
