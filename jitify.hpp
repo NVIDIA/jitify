@@ -1891,6 +1891,42 @@ static const char* jitsafe_header_type_traits = R"(
     template<size_t len, size_t alignment> struct aligned_storage { struct type { alignas(alignment) char data[len]; }; };
     template <class T> struct alignment_of : std::integral_constant<size_t,alignof(T)> {};
 
+    template <typename T> struct make_unsigned;
+    template <> struct make_unsigned<signed char>        { typedef unsigned char type; };
+    template <> struct make_unsigned<signed short>       { typedef unsigned short type; };
+    template <> struct make_unsigned<signed int>         { typedef unsigned int type; };
+    template <> struct make_unsigned<signed long>        { typedef unsigned long type; };
+    template <> struct make_unsigned<signed long long>   { typedef unsigned long long type; };
+    template <> struct make_unsigned<unsigned char>      { typedef unsigned char type; };
+    template <> struct make_unsigned<unsigned short>     { typedef unsigned short type; };
+    template <> struct make_unsigned<unsigned int>       { typedef unsigned int type; };
+    template <> struct make_unsigned<unsigned long>      { typedef unsigned long type; };
+    template <> struct make_unsigned<unsigned long long> { typedef unsigned long long type; };
+    template <> struct make_unsigned<char>               { typedef unsigned char type; };
+    #if defined _WIN32 || defined _WIN64
+    template <> struct make_unsigned<wchar_t>            { typedef unsigned short type; };
+    #else
+    template <> struct make_unsigned<wchar_t>            { typedef unsigned int type; };
+    #endif
+
+    template <typename T> struct make_signed;
+    template <> struct make_signed<signed char>        { typedef signed char type; };
+    template <> struct make_signed<signed short>       { typedef signed short type; };
+    template <> struct make_signed<signed int>         { typedef signed int type; };
+    template <> struct make_signed<signed long>        { typedef signed long type; };
+    template <> struct make_signed<signed long long>   { typedef signed long long type; };
+    template <> struct make_signed<unsigned char>      { typedef signed char type; };
+    template <> struct make_signed<unsigned short>     { typedef signed short type; };
+    template <> struct make_signed<unsigned int>       { typedef signed int type; };
+    template <> struct make_signed<unsigned long>      { typedef signed long type; };
+    template <> struct make_signed<unsigned long long> { typedef signed long long type; };
+    template <> struct make_signed<char>               { typedef signed char type; };
+    #if defined _WIN32 || defined _WIN64
+    template <> struct make_signed<wchar_t>            { typedef signed short type; };
+    #else
+    template <> struct make_signed<wchar_t>            { typedef signed int type; };
+    #endif
+
     }  // namespace std
     #endif // c++11
 )";
