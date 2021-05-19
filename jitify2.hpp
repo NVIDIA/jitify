@@ -1587,8 +1587,12 @@ inline std::string path_base(const std::string& p) {
   // "/usr/local/myfile.dat" -> "/usr/local"
   // "foo/bar"  -> "foo"
   // "foo/bar/" -> "foo/bar"
+#if defined _WIN32 || defined _WIN64
   // Note that Windows supports both forward and backslash path separators.
+  const char* sep = "\\/";
+#else
   char sep = '/';
+#endif
   size_t i = p.find_last_of(sep);
   if (i != std::string::npos) {
     return p.substr(0, i);
@@ -1598,16 +1602,20 @@ inline std::string path_base(const std::string& p) {
 }
 
 inline std::string path_join(StringRef p1, StringRef p2) {
+#if defined _WIN32 || defined _WIN64
   // Note that Windows supports both forward and backslash path separators.
-  char sep = '/';
-  if (p1.size() && p2.size() && p2[0] == sep) {
+  const char* sep = "\\/";
+#else
+  const char* sep = "/";
+#endif
+  if (p1.size() && p2.size() && std::strchr(sep, p2[0])) {
     return {};  // Error, cannot join to absolute path
   }
   std::string result;
   result.reserve(p1.size() + 1 + p2.size());
   result += p1;
-  if (p1.size() && p1[p1.size() - 1] != sep) {
-    result += sep;
+  if (p1.size() && !std::strchr(sep, p1[p1.size() - 1])) {
+    result += sep[0];
   }
   result += p2;
   return result;
@@ -5283,17 +5291,21 @@ inline bool make_directory(const char* path,
 
 inline bool make_directories(std::string path,
                              mode_t mode = kDefaultDirectoryMode) {
+#if defined _WIN32 || defined _WIN64
   // Note that Windows supports both forward and backslash path separators.
-  char sep = '/';
+  const char* sep = "\\/";
+#else
+  const char* sep = "/";
+#endif
   // This is based on https://stackoverflow.com/a/675193/7228843
   char* p = &path[0];
   char* s;
-  while ((s = std::strchr(p, sep))) {
+  while ((s = std::strpbrk(p, sep))) {
     if (s != p) {
       // Neither root nor double slash in path.
       *s = '\0';
       if (!make_directory(path.c_str(), mode)) return false;
-      *s = sep;
+      *s = sep[0];
     }
     p = s + 1;
   }
