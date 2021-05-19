@@ -583,6 +583,30 @@ TEST(Jitify2Test, Sha256) {
       "F5EA20F5EDD6871D72D699C143C524BF9CEC13D06E9FA5763614EE3BA708C63E");
 }
 
+TEST(Jitify2Test, PathBase) {
+  EXPECT_EQ(jitify2::detail::path_base("foo/bar/2"), "foo/bar");
+  EXPECT_EQ(jitify2::detail::path_base("foo/bar/2/"), "foo/bar/2");
+  EXPECT_EQ(jitify2::detail::path_base("foo"), "");
+  EXPECT_EQ(jitify2::detail::path_base("/"), "");
+#if defined _WIN32 || defined _WIN64
+  EXPECT_EQ(jitify2::detail::path_base("foo\\bar\\2"), "foo\\bar");
+  EXPECT_EQ(jitify2::detail::path_base("foo\\bar\\2\\"), "foo\\bar\\2");
+  EXPECT_EQ(jitify2::detail::path_base("foo"), "");
+  EXPECT_EQ(jitify2::detail::path_base("\\"), "");
+#endif
+}
+
+TEST(Jitify2Test, PathJoin) {
+  EXPECT_EQ(jitify2::detail::path_join("foo/bar", "2/1"), "foo/bar/2/1");
+  EXPECT_EQ(jitify2::detail::path_join("foo/bar/", "2/1"), "foo/bar/2/1");
+  EXPECT_EQ(jitify2::detail::path_join("foo/bar", "/2/1"), "");
+#if defined _WIN32 || defined _WIN64
+  EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "2\\1"), "foo\\bar\\2\\1");
+  EXPECT_EQ(jitify2::detail::path_join("foo\\bar\\", "2\\1"), "foo\\bar\\2\\1");
+  EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "\\2\\1"), "");
+#endif
+}
+
 TEST(Jitify2Test, Program) {
   static const char* const name = "my_program";
   static const char* const source = "/* empty source */";
