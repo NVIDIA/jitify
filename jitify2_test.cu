@@ -802,6 +802,24 @@ TEST(Jitify2Test, InvalidPrograms) {
   EXPECT_NE(get_error(Program("bad_program", "NOT CUDA C!")->preprocess()), "");
 }
 
+TEST(Jitify2Test, CompileLTO_NVVM) {
+  static const char* const source = R"(
+const int arch = __CUDA_ARCH__ / 10;
+)";
+
+  if (!jitify2::nvrtc().GetNVVM()) return;  // Skip if not supported
+  int arch;
+  CompiledProgram program = Program("lto_nvvm_program", source)
+                                ->preprocess({"-rdc=true", "-dlto"})
+                                ->compile("", {}, {"-arch=compute_."});
+  EXPECT_EQ(program->ptx().size(), 0);
+  EXPECT_EQ(program->cubin().size(), 0);
+  EXPECT_GT(program->nvvm().size(), 0);
+  int current_arch = get_current_device_arch();
+  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
+  EXPECT_EQ(arch, current_arch);
+}
+
 TEST(Jitify2Test, LinkExternalFiles) {
   static const char* const source1 = R"(
 __constant__ int c = 5;

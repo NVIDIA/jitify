@@ -1538,7 +1538,7 @@ class LinkedProgram
 
  public:
   /*! \see CompiledProgramData::link */
-  static LinkedProgram link(StringRef ptx, StringRef cubin,
+  static LinkedProgram link(StringRef ptx, StringRef cubin, StringRef nvvm,
                             StringMap lowered_name_map, StringVec options);
 };
 
@@ -1677,7 +1677,7 @@ inline CUjitInputType get_cuda_jit_input_type(std::string* filename) {
 }
 
 // Note that this appends to *log if it is provided.
-inline bool link_program(StringRef ptx_or_cubin, bool is_cubin,
+inline bool link_program(StringRef program, CUjitInputType program_type,
                          const StringVec& options, std::string* error,
                          std::string* log, std::string* linked_cubin) {
 #define JITIFY_CHECK_CULINK(call)                                 \
@@ -1697,11 +1697,17 @@ inline bool link_program(StringRef ptx_or_cubin, bool is_cubin,
     if (error) *error = "Syntax error in linker options";
     return false;
   }
-  if (is_cubin && !options_map.count("-l")) {
+  if (program_type == CU_JIT_INPUT_CUBIN && !options_map.count("-l")) {
     // No linking required, just return the given CUBIN.
-    if (linked_cubin) *linked_cubin = ptx_or_cubin;
+    if (linked_cubin) *linked_cubin = program;
     return true;
   }
+#if CUDA_VERSION >= 11040
+  if (program_type == CU_JIT_INPUT_NVVM) {
+    option_keys.push_back(CU_JIT_LTO);
+    option_vals.push_back((void*)1);
+  }
+#endif
   StringVec link_files, link_paths;
   for (const auto& key_val : options_map) {
     const std::string& key = key_val.first;
@@ -1739,6 +1745,30 @@ inline bool link_program(StringRef ptx_or_cubin, bool is_cubin,
       link_files = vals;
     } else if (key == "-L") {
       link_paths = vals;
+#if CUDA_VERSION >= 11040
+      // LTO optimization options.
+    } else if (key == "-ftz" || key == "--ftz") {
+      option_keys.push_back(CU_JIT_FTZ);
+      option_vals.push_back((void*)(intptr_t)1);
+    } else if (key == "-prec-div" || key == "--prec-div") {
+      option_keys.push_back(CU_JIT_PREC_DIV);
+      option_vals.push_back((void*)(intptr_t)1);
+    } else if (key == "-prec-sqrt" || key == "--prec-sqrt") {
+      option_keys.push_back(CU_JIT_PREC_SQRT);
+      option_vals.push_back((void*)(intptr_t)1);
+    } else if (key == "-fmad" || key == "--fmad") {
+      option_keys.push_back(CU_JIT_FMA);
+      option_vals.push_back((void*)(intptr_t)1);
+    } else if (key == "-use_fast_math" || key == "--use_fast_math") {
+      option_keys.push_back(CU_JIT_FTZ);
+      option_vals.push_back((void*)(intptr_t)1);
+      option_keys.push_back(CU_JIT_PREC_DIV);
+      option_vals.push_back((void*)(intptr_t)1);
+      option_keys.push_back(CU_JIT_PREC_SQRT);
+      option_vals.push_back((void*)(intptr_t)1);
+      option_keys.push_back(CU_JIT_FMA);
+      option_vals.push_back((void*)(intptr_t)1);
+#endif
     } else {
       if (error) *error = "Unknown option: " + key;
       return false;
@@ -1776,10 +1806,9 @@ inline bool link_program(StringRef ptx_or_cubin, bool is_cubin,
     CUlinkState& culink_state_;
     ~ScopedCULinkStateDestroyer() { cuLinkDestroy(culink_state_); }
   } culink_state_scope_guard{culink_state};
-  JITIFY_CHECK_CULINK(cuLinkAddData(
-      culink_state, is_cubin ? CU_JIT_INPUT_CUBIN : CU_JIT_INPUT_PTX,
-      (void*)ptx_or_cubin.data(), ptx_or_cubin.size(), "jitified_source", 0, 0,
-      0));
+  JITIFY_CHECK_CULINK(cuLinkAddData(culink_state, program_type,
+                                    (void*)program.data(), program.size(),
+                                    "jitified_source", 0, 0, 0));
 
   for (std::string link_file : link_files) {
     CUjitInputType jit_input_type;
@@ -1826,13 +1855,25 @@ inline bool link_program(StringRef ptx_or_cubin, bool is_cubin,
 }  // namespace detail
 
 inline LinkedProgram LinkedProgram::link(StringRef ptx, StringRef cubin,
+                                         StringRef nvvm,
                                          StringMap lowered_name_map,
                                          StringVec options) {
+  const StringRef& program =
+      !nvvm.empty() ? nvvm : !cubin.empty() ? cubin : ptx;
+  int cuda_driver_version;
+  cuDriverGetVersion(&cuda_driver_version);
+  if (std::min(CUDA_VERSION, cuda_driver_version) < 11040 && !nvvm.empty()) {
+    return Error("Linking NVVM IR is not supported with CUDA < 11.4");
+  }
+  CUjitInputType program_type =
+#if CUDA_VERSION >= 11040
+      !nvvm.empty() ? CU_JIT_INPUT_NVVM :
+#endif
+                    !cubin.empty() ? CU_JIT_INPUT_CUBIN : CU_JIT_INPUT_PTX;
   std::string error, log, linked_cubin;
   log = detail::string_join(options, " ", "Linker options: \"", "\"\n");
-  bool is_cubin = !cubin.empty();
-  if (!detail::link_program(is_cubin ? cubin : ptx, is_cubin, options, &error,
-                            &log, &linked_cubin)) {
+  if (!detail::link_program(program, program_type, options, &error, &log,
+                            &linked_cubin)) {
     return Error("Linking failed: " + error + '\n' + log);
   }
   return LinkedProgram(std::move(linked_cubin), std::move(lowered_name_map),
@@ -1846,24 +1887,26 @@ class CompiledProgramData
     : public serialization::Serializable<CompiledProgramData> {
   std::string ptx_;
   std::string cubin_;  // Only available with NVRTC version >= 11.2
+  std::string nvvm_;   // Only available with NVRTC version >= 11.4
   // Maps name expressions to lowered symbol names (aka. unmangled to mangled).
   StringMap lowered_name_map_;
   StringVec remaining_linker_options_;  // Passed on to LinkedProgram::link.
   std::string log_;                     // Compilation log
   StringVec compiler_options_;          // Compiler options that were used.
 
-  JITIFY_DEFINE_SERIALIZABLE_MEMBERS(CompiledProgramData, ptx_, cubin_,
+  JITIFY_DEFINE_SERIALIZABLE_MEMBERS(CompiledProgramData, ptx_, cubin_, nvvm_,
                                      lowered_name_map_,
                                      remaining_linker_options_)
 
  public:
   CompiledProgramData() = default;
   CompiledProgramData(std::string ptx, std::string cubin = {},
-                      StringMap lowered_name_map = {},
+                      std::string nvvm = {}, StringMap lowered_name_map = {},
                       StringVec linker_options = {}, std::string log = {},
                       StringVec compiler_options = {})
       : ptx_(std::move(ptx)),
         cubin_(std::move(cubin)),
+        nvvm_(std::move(nvvm)),
         lowered_name_map_(std::move(lowered_name_map)),
         remaining_linker_options_(std::move(linker_options)),
         log_(std::move(log)),
@@ -1877,6 +1920,11 @@ class CompiledProgramData
    * LinkedProgramData::cubin.
    */
   const std::string& cubin() const { return cubin_; }
+  /*! Get the NVVM IR of the compiled program.
+   * \note The NVVM is only available here with NVRTC version >= 11.4 and the
+   * "-dlto" compiler option.
+   */
+  const std::string& nvvm() const { return nvvm_; }
   /*! Get the map of name expressions to lowered (mangled) symbol names. */
   const StringMap& lowered_name_map() const { return lowered_name_map_; }
   /*! Get the remaining options that will be passed on to the compiler. */
@@ -1897,7 +1945,7 @@ class CompiledProgramData
     extra_linker_options.insert(extra_linker_options.begin(),
                                 remaining_linker_options_.begin(),
                                 remaining_linker_options_.end());
-    return LinkedProgram::link(ptx_, cubin_, lowered_name_map_,
+    return LinkedProgram::link(ptx_, cubin_, nvvm_, lowered_name_map_,
                                std::move(extra_linker_options));
   }
 };
@@ -2094,6 +2142,17 @@ class LibNvrtc
 #else
   JITIFY_DEFINE_NVRTC_WRAPPER(GetNumSupportedArchs, nvrtcResult, int*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetSupportedArchs, nvrtcResult, int*)
+#endif
+#if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11040
+  detail::function_type<nvrtcResult, nvrtcProgram, char*>* GetNVVM() {
+    return nullptr;
+  }
+  detail::function_type<nvrtcResult, nvrtcProgram, size_t*>* GetNVVMSize() {
+    return nullptr;
+  }
+#else
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetNVVM, nvrtcResult, nvrtcProgram, char*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetNVVMSize, nvrtcResult, nvrtcProgram, size_t*)
 #endif
   JITIFY_DEFINE_NVRTC_WRAPPER(GetErrorString, const char*, nvrtcResult)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetPTX, nvrtcResult, nvrtcProgram, char*)
@@ -2454,15 +2513,13 @@ inline void find_lowered_global_variables(StringRef ptx,
 // Sets *log if provided.
 // Sets *ptx on success if provided.
 // Adds one entry to *lowered_name_map for each entry in name_expressions.
-inline bool compile_program(const std::string& name, const std::string& source,
-                            const StringMap& header_sources,
-                            const StringVec& options,
-                            std::string* error = nullptr,
-                            std::string* log = nullptr,
-                            std::string* ptx = nullptr,
-                            std::string* cubin = nullptr,
-                            const StringVec& name_expressions = {},
-                            StringMap* lowered_name_map = nullptr) {
+inline bool compile_program(
+    const std::string& name, const std::string& source,
+    const StringMap& header_sources, const StringVec& options,
+    std::string* error = nullptr, std::string* log = nullptr,
+    std::string* ptx = nullptr, std::string* cubin = nullptr,
+    std::string* nvvm = nullptr, const StringVec& name_expressions = {},
+    StringMap* lowered_name_map = nullptr) {
   if (!nvrtc()) {
     if (error) *error = nvrtc().error();
     return false;
@@ -2528,10 +2585,13 @@ inline bool compile_program(const std::string& name, const std::string& source,
   if (ptx) {
     size_t ptx_size;
     JITIFY_CHECK_NVRTC(nvrtc().GetPTXSize()(nvrtc_program, &ptx_size));
-    // Note: ptx_size includes NULL terminator, and std::string is guaranteed to
-    // include its own.
-    ptx->resize(ptx_size - 1);
-    JITIFY_CHECK_NVRTC(nvrtc().GetPTX()(nvrtc_program, &(*ptx)[0]));
+    if (ptx_size == 1) ptx_size = 0;  // WAR for issue in CUDA 11.4 NVRTC -dlto
+    if (ptx_size) {
+      // Note: ptx_size includes NULL terminator, and std::string is guaranteed
+      // to include its own.
+      ptx->resize(ptx_size - 1);
+      JITIFY_CHECK_NVRTC(nvrtc().GetPTX()(nvrtc_program, &(*ptx)[0]));
+    }
   }
 
   // Note that direct-to-CUBIN compilation is only supported with NVRTC >= 11.2.
@@ -2541,6 +2601,16 @@ inline bool compile_program(const std::string& name, const std::string& source,
     if (cubin_size) {
       cubin->resize(cubin_size, 'x');
       JITIFY_CHECK_NVRTC(nvrtc().GetCUBIN()(nvrtc_program, &(*cubin)[0]));
+    }
+  }
+
+  // Note that NVVM compilation is only supported with NVRTC >= 11.4.
+  if (nvvm && nvrtc().GetNVVM()) {
+    size_t nvvm_size;
+    JITIFY_CHECK_NVRTC(nvrtc().GetNVVMSize()(nvrtc_program, &nvvm_size));
+    if (nvvm_size) {
+      nvvm->resize(nvvm_size, 'x');
+      JITIFY_CHECK_NVRTC(nvrtc().GetNVVM()(nvrtc_program, &(*nvvm)[0]));
     }
   }
 
@@ -2727,11 +2797,11 @@ inline CompiledProgram CompiledProgram::compile(
   detail::add_default_device_flag_if_not_specified(&compiler_options);
   bool should_remove_unused_globals = detail::pop_flag(
       &compiler_options, "-remove-unused-globals", "--remove-unused-globals");
-  std::string log, ptx, cubin;
+  std::string log, ptx, cubin, nvvm;
   StringMap lowered_name_map;
   if (!detail::compile_program(name, source, header_sources, compiler_options,
-                               &error, &log, &ptx, &cubin, name_expressions,
-                               &lowered_name_map)) {
+                               &error, &log, &ptx, &cubin, &nvvm,
+                               name_expressions, &lowered_name_map)) {
     std::string options_str = detail::string_join(
         compiler_options, " ", "Compiler options: \"", "\"\n");
     std::vector<std::string> header_names;
@@ -2745,7 +2815,7 @@ inline CompiledProgram CompiledProgram::compile(
     return Error("Compilation failed: " + error + "\n" + options_str +
                  headers_str + "\n" + log);
   }
-  if (should_remove_unused_globals) {
+  if (!ptx.empty() && should_remove_unused_globals) {
     detail::ptx_remove_unused_globals(&ptx);  // Ignores errors from this
   }
 
@@ -2764,7 +2834,7 @@ inline CompiledProgram CompiledProgram::compile(
       compiler_options, &linker_options, /*has_value = */ true, "-maxrregcount",
       "--maxrregcount");
 
-  return CompiledProgram(std::move(ptx), std::move(cubin),
+  return CompiledProgram(std::move(ptx), std::move(cubin), std::move(nvvm),
                          std::move(lowered_name_map), std::move(linker_options),
                          std::move(log), std::move(compiler_options));
 }

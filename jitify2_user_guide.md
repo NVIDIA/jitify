@@ -293,12 +293,23 @@ some trigger special behavior in Jitify as detailed below:
   to be used if the source contains `#include` statements that depend
   on the value of the `__CUDA_ARCH__` macro; in all other cases there
   should not be any need to specify multiple architectures.
+  Note that an architecture flag specified for preprocessing is _not_
+  automatically passed through to the compilation phase (because it
+  would be ambiguous in the case of multiple architectures); the flag
+  must be specified separately for the compilation phase.
 
   For compilation (but not preprocessing), the architecture value may
   be specified using the special syntax "compute_."  or "sm_." to
   explicitly select the preferred type of compilation (PTX or
   direct-to-CUBIN respectively) while still relying on automatic
   detection of the architecture.
+
+  Note that when compiling with the "-dlto" flag (generating NVVM for
+  link-time optimization, which is supported as of CUDA 11.4), it does
+  not matter whether a real or virtual architecture is specified (but
+  the architecture number does matter as sets the __CUDA_ARCH__ flag).
+  However, some versions of NVRTC have an issue where they only accept
+  virtual architectures when compiling with "-dlto".
 
 - `-std=<std>`
 
