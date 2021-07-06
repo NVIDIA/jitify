@@ -963,13 +963,9 @@ inline std::string get_cuda_error_string(CUresult ret) {
 // Returns the sha256 digest as a string of 32 hex digits.
 inline std::string sha256(const char* data, size_t size) {
   // This implementation is based on pseudocode from Wikipedia.
-  // Initialize hash values to first 32 bits of the fractional parts of the
-  // square roots of the first 8 primes 2..19.
-  uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
   // Initialize array of round constants to first 32 bits of the fractional
   // parts of the cube roots of the first 64 primes 2..311.
-  uint32_t k[64] = {
+  static constexpr uint32_t k[64] = {
       0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
       0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
       0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
@@ -981,6 +977,10 @@ inline std::string sha256(const char* data, size_t size) {
       0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
       0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
       0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+  // Initialize hash values to first 32 bits of the fractional parts of the
+  // square roots of the first 8 primes 2..19.
+  uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
   // Pre-processing with padding.
   std::string padded;
   const auto pad = [](size_t n, size_t mult) {
@@ -1053,8 +1053,8 @@ inline std::string sha256(const char* data, size_t size) {
   std::string result;
   result.reserve(32);
   for (unsigned val : h) {
-    for (int k = 0; k < 32; k += 4) {
-      result += "0123456789ABCDEF"[(val >> (32 - 4 - k)) & 0xF];
+    for (int i = 0; i < 32; i += 4) {
+      result += "0123456789ABCDEF"[(val >> (32 - 4 - i)) & 0xF];
     }
   }
   return result;
@@ -4281,7 +4281,7 @@ static const std::unordered_set<std::string>& get_workaround_system_headers() {
           "stdlib.h", "string.h", "time.h", "memory.h",
       };
   return workaround_system_header_names;
-};
+}
 
 static const StringMap& get_jitsafe_headers_map() {
   static const StringMap jitsafe_headers_map = {
@@ -6022,8 +6022,8 @@ class ProgramCache {
                                         extra_compiler_options,
                                         extra_linker_options);
           },
-          [&](const LinkedProgram& linked, std::ostream& ostream) {
-            if (linked) linked->serialize(ostream);
+          [&](const LinkedProgram& _linked, std::ostream& ostream) {
+            if (_linked) _linked->serialize(ostream);
           },
           [&](std::istream& istream) {
             return LinkedProgram::deserialize(istream);
