@@ -2982,7 +2982,11 @@ class PreprocessedProgramData
                           const StringMap& extra_header_sources = {},
                           StringVec extra_compiler_options = {},
                           StringVec extra_linker_options = {}) const {
-    return compile(StringVec({name_expression}), extra_header_sources,
+    // Allow name_expression="" to be passed instead of name_expression={}
+    // (which is ambiguous with the overload above that takes a StringVec).
+    StringVec name_expressions =
+      name_expression.empty() ? StringVec() : StringVec({name_expression});
+    return compile(name_expressions, extra_header_sources,
                    std::move(extra_compiler_options),
                    std::move(extra_linker_options));
   }
