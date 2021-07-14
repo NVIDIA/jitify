@@ -767,11 +767,20 @@ __global__ void constant_test(int* x) {
     const LoadedProgramData& program = kernel->program();
     int inval[] = {3, 5, 9, 13, 15, 19};
     constexpr int n_anon_const = sizeof(inval) / sizeof(int);
-    ASSERT_EQ(program.set_global_data("(anonymous namespace)::b::a", inval, 3),
-              "");
-    ASSERT_EQ(
-        program.set_global_data("(anonymous namespace)::b::d", inval + 3, 3),
-        "");
+    std::string anon_prefix, anon_prefix2;
+    if (jitify2::nvrtc().get_version() >= 11030) {
+      // Internal linkage names changed in CUDA 11.3 (more robust mangling).
+      anon_prefix = "constmem_program2::<unnamed>::";
+      anon_prefix2 = "constmem_program2::(anonymous namespace)::";
+    } else {
+      anon_prefix = "<unnamed>::";
+      anon_prefix2 = "(anonymous namespace)::";
+    }
+    ASSERT_EQ(program.set_global_data(anon_prefix + "b::a", inval, 3), "");
+    ASSERT_EQ(program.set_global_data(anon_prefix + "b::d", inval + 3, 3), "");
+    // Make sure alternative versions work too.
+    ASSERT_EQ(program.set_global_data(anon_prefix2 + "b::a", inval, 3), "");
+    ASSERT_EQ(program.set_global_data(anon_prefix2 + "b::d", inval + 3, 3), "");
     int* outdata;
     CHECK_CUDART(cudaMalloc((void**)&outdata, n_anon_const * sizeof(int)));
     ASSERT_EQ(kernel->configure(grid, block)->launch(outdata), "");

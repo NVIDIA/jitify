@@ -77,6 +77,14 @@
 #define JITIFY_FAIL_IMMEDIATELY 0
 #endif
 
+#ifndef JITIFY_USE_LIBCUFILT
+#define JITIFY_USE_LIBCUFILT 0  // Use Jitify's builtin demangler by default
+#endif
+
+#if CUDA_VERSION >= 11040 && JITIFY_USE_LIBCUFILT
+#include <nv_decode.h>  // For __cu_demangle (requires linking with libcufilt.a)
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -552,7 +560,6 @@ inline std::string get_type_name(const std::type_info& typeinfo) {
   const char* mangled_name = typeinfo.name();
   size_t bufsize = 0;
   char* buf = nullptr;
-  std::string demangled_name;
   int status;
   auto demangled_ptr = std::unique_ptr<char, void (*)(void*)>(
       abi::__cxa_demangle(mangled_name, buf, &bufsize, &status), std::free);
@@ -1062,6 +1069,14 @@ inline std::string sha256(const char* data, size_t size) {
 
 inline std::string sha256(StringRef s) { return sha256(s.data(), s.size()); }
 
+// Normalizes an unmangled CUDA symbol name to match what cu++filt produces.
+inline std::string normalize_cuda_symbol_name(const std::string& symbol_name) {
+  // Convert "(anonymous namespace)" (c++filt) to "<unnamed>" (cu++filt).
+  static const std::regex re_anonymous_namespace(R"(\(anonymous namespace\))",
+                                                 std::regex::optimize);
+  return std::regex_replace(symbol_name, re_anonymous_namespace, "<unnamed>");
+}
+
 }  // namespace detail
 
 // class LoadedProgramData;
@@ -1131,14 +1146,15 @@ class LoadedProgramData {
    *    be stored.
    *  \return An empty string on success, otherwise an error message.
    */
-  ErrorMsg get_global_ptr(std::string name, CUdeviceptr* ptr,
+  ErrorMsg get_global_ptr(std::string symbol_name, CUdeviceptr* ptr,
                           size_t* size = nullptr) const {
-    auto iter = lowered_name_map().find(name);
+    symbol_name = detail::normalize_cuda_symbol_name(symbol_name);
+    auto iter = lowered_name_map().find(symbol_name);
     if (iter != lowered_name_map().end()) {
-      name = iter->second;  // Replace name with lowered name.
+      symbol_name = iter->second;  // Replace name with lowered name.
     }
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
-        cuModuleGetGlobal(ptr, size, module(), name.c_str()));
+        cuModuleGetGlobal(ptr, size, module(), symbol_name.c_str()));
     return {};
   }
 
@@ -1327,6 +1343,7 @@ class Kernel : public detail::FallibleObjectBase<Kernel, KernelData> {
 };
 
 inline Kernel Kernel::get_kernel(LoadedProgramData program, std::string name) {
+  name = detail::normalize_cuda_symbol_name(name);
   auto iter = program.lowered_name_map().find(name);
   if (iter != program.lowered_name_map().end()) {
     name = iter->second;  // Replace name with lowered name.
@@ -1334,7 +1351,8 @@ inline Kernel Kernel::get_kernel(LoadedProgramData program, std::string name) {
   CUfunction function;
   CUresult ret = cuModuleGetFunction(&function, program.module(), name.c_str());
   if (ret != CUDA_SUCCESS) {
-    return Error("Get kernel failed: " + detail::get_cuda_error_string(ret));
+    return Error("get_kernel with name=\"" + name +
+                 "\" failed: " + detail::get_cuda_error_string(ret));
   }
   return Kernel(std::move(program), function, std::move(name));
 }
@@ -2453,11 +2471,27 @@ inline bool pop_flag(StringVec* options, const std::string& short_flag,
 }
 
 // Demangles nested variable names using the PTX name mangling scheme
-// (which follows the Itanium64 ABI). E.g., _ZN1a3Foo2bcE -> a::Foo::bc.
-inline std::string demangle_ptx_variable_name(const char* name) {
+// (which mostly follows the Itanium64 ABI). E.g., _ZN1a3Foo2bcE -> a::Foo::bc.
+inline std::string demangle_ptx_variable_name(const char* mangled_name) {
+#if CUDA_VERSION >= 11040 && JITIFY_USE_LIBCUFILT
+  size_t bufsize = 0;
+  char* buf = nullptr;
+  int status;
+  auto demangled_ptr = std::unique_ptr<char, void (*)(void*)>(
+      __cu_demangle(mangled_name, buf, &bufsize, &status), std::free);
+  // clang-format off
+  switch (status) {
+  case 0: return demangled_ptr.get();  // Demangled successfully
+  case -2: return mangled_name;        // Interpret as plain unmangled name
+  case -1: // fall-through             // Memory allocation failure
+  case -3: // fall-through             // Invalid argument
+  default: return "";
+  }
+    // clang-format on
+#else
   std::stringstream ss;
-  const char* c = name;
-  if (*c++ != '_' || *c++ != 'Z') return name;  // Non-mangled name
+  const char* c = mangled_name;
+  if (*c++ != '_' || *c++ != 'Z') return mangled_name;  // Non-mangled name
   if (*c++ != 'N') return "";  // Not a nested name, unsupported
   while (true) {
     // Parse identifier length.
@@ -2472,14 +2506,30 @@ inline std::string demangle_ptx_variable_name(const char* name) {
     while (n-- && *c) c++;
     if (!*c) return "";  // Mangled name is truncated
     std::string id(c0, c);
-    // Identifiers starting with "_GLOBAL" are anonymous namespaces.
-    ss << (id.substr(0, 7) == "_GLOBAL" ? "(anonymous namespace)" : id);
+    if (id.substr(0, 7) == "_GLOBAL") {
+      // Identifiers starting with "_GLOBAL" are anonymous namespaces.
+      // Note: c++filt gives "(anonymous namespace)" instead of "<unnamed>", but
+      // we use the latter to match cu++filt.
+      ss << "<unnamed>";
+    } else if (id.substr(0, 10) == "_INTERNAL_") {
+      // Identifiers starting with "_INTERNAL" represent internal linkage and
+      // are replaced with the program name (which is embedded in them).
+      // (These appear as of CUDA >=11.3).
+      char* program_name;
+      long program_name_len = std::strtol(id.c_str() + 10, &program_name, 10);
+      if (!program_name_len) return "";  // Note: Program name is never empty
+      ++program_name;                    // Skip a '_' that follows the length
+      ss << StringSlice(program_name, program_name_len);
+    } else {
+      ss << id;
+    }
     // Nested name specifiers end with 'E'.
     if (*c == 'E') break;
     // There are more identifiers to come, add join token.
     ss << "::";
   }
   return ss.str();
+#endif
 }
 
 // Finds global __constant__ and __device__ variable declarations in ptx,
@@ -2985,7 +3035,7 @@ class PreprocessedProgramData
     // Allow name_expression="" to be passed instead of name_expression={}
     // (which is ambiguous with the overload above that takes a StringVec).
     StringVec name_expressions =
-      name_expression.empty() ? StringVec() : StringVec({name_expression});
+        name_expression.empty() ? StringVec() : StringVec({name_expression});
     return compile(name_expressions, extra_header_sources,
                    std::move(extra_compiler_options),
                    std::move(extra_linker_options));
