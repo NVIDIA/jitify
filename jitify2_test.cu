@@ -829,6 +829,88 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_EQ(arch, current_arch);
 }
 
+TEST(Jitify2Test, LinkMultiplePrograms) {
+  static const char* const source1 = R"(
+__constant__ int c = 5;
+__device__ int d = 7;
+__device__ int f(int i) { return i + 11; }
+)";
+
+  static const char* const source2 = R"(
+extern __constant__ int c;
+extern __device__ int d;
+extern __device__ int f(int);
+__global__ void my_kernel(int* data) {
+  *data = f(*data + c + d);
+}
+)";
+
+  CompiledProgram program1 = Program("linktest_program1", source1)
+                                 ->preprocess({"-rdc=true"})
+                                 ->compile();
+  CompiledProgram program2 = Program("linktest_program2", source2)
+                                 ->preprocess({"-rdc=true"})
+                                 ->compile("my_kernel");
+  // TODO: Consider allowing refs not ptrs for programs, and also addding a
+  //         get_kernel() shortcut method to LinkedProgram.
+  Kernel kernel = LinkedProgram::link({&program1, &program2})
+                      ->load()
+                      ->get_kernel("my_kernel");
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+  int h_data = 3;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+  ASSERT_EQ(kernel->configure(1, 1)->launch(d_data), "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 26);
+  CHECK_CUDART(cudaFree(d_data));
+}
+
+TEST(Jitify2Test, LinkLTO) {
+  static const char* const source1 = R"(
+__constant__ int c = 5;
+__device__ int d = 7;
+extern "C"
+__device__ int f(int i) { return i + 11; }
+)";
+
+  static const char* const source2 = R"(
+extern __constant__ int c;
+extern __device__ int d;
+extern "C" __device__ int f(int);
+__global__ void my_kernel(int* data) {
+  *data = f(*data + c + d);
+}
+)";
+
+  if (!jitify2::nvrtc().GetNVVM()) return;  // Skip if not supported
+
+  // **TODO: Work out what code-type mixing is allowed when linking.
+  CompiledProgram program1 = Program("linktest_program1", source1)
+                                 ->preprocess({"-rdc=true", "-dlto"})
+                                 ->compile("");
+  CompiledProgram program2 = Program("linktest_program2", source2)
+                                 ->preprocess({"-rdc=true", "-dlto"})
+                                 ->compile("my_kernel");
+  // TODO: Consider allowing refs not ptrs for programs, and also addding a
+  //         get_kernel() shortcut method to LinkedProgram.
+  Kernel kernel = LinkedProgram::link({&program1, &program2})
+                      ->load()
+                      ->get_kernel("my_kernel");
+  int* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+  int h_data = 3;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+  ASSERT_EQ(kernel->configure(1, 1)->launch(d_data), "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 26);
+  CHECK_CUDART(cudaFree(d_data));
+}
+
 TEST(Jitify2Test, LinkExternalFiles) {
   static const char* const source1 = R"(
 __constant__ int c = 5;

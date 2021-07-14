@@ -1547,6 +1547,9 @@ class LinkedProgramData
   }
 };
 
+class CompiledProgramData;
+class CompiledProgram;
+
 class LinkedProgram
     : public detail::FallibleObjectBase<LinkedProgram, LinkedProgramData> {
   friend class detail::FallibleObjectBase<LinkedProgram, LinkedProgramData>;
@@ -1556,8 +1559,26 @@ class LinkedProgram
 
  public:
   /*! \see CompiledProgramData::link */
-  static LinkedProgram link(StringRef ptx, StringRef cubin, StringRef nvvm,
-                            StringMap lowered_name_map, StringVec options);
+  static LinkedProgram link(const std::string& program,
+                            CUjitInputType program_type,
+                            StringMap lowered_name_map = {},
+                            StringVec options = {});
+  /*! Link multiple programs.
+   * \note Remaining linker options in each program must match.
+   * \see CompiledProgramData::link */
+  static LinkedProgram link(size_t num_programs,
+                            const CompiledProgramData* compiled_programs[],
+                            StringVec options = {});
+
+  static LinkedProgram link(
+      const std::vector<const CompiledProgram*>& compiled_programs,
+      StringVec options = {});
+
+ private:
+  static LinkedProgram link_impl(size_t num_programs,
+                                 const std::string* programs[],
+                                 const CUjitInputType program_types[],
+                                 StringMap lowered_name_map, StringVec options);
 };
 
 namespace detail {
@@ -1695,9 +1716,10 @@ inline CUjitInputType get_cuda_jit_input_type(std::string* filename) {
 }
 
 // Note that this appends to *log if it is provided.
-inline bool link_program(StringRef program, CUjitInputType program_type,
-                         const StringVec& options, std::string* error,
-                         std::string* log, std::string* linked_cubin) {
+inline bool link_programs(size_t num_programs, const std::string* programs[],
+                          const CUjitInputType program_types[],
+                          const StringVec& options, std::string* error,
+                          std::string* log, std::string* linked_cubin) {
 #define JITIFY_CHECK_CULINK(call)                                 \
   do {                                                            \
     CUresult jitify_cuda_ret = call;                              \
@@ -1708,6 +1730,10 @@ inline bool link_program(StringRef program, CUjitInputType program_type,
     }                                                             \
   } while (0)
 
+  if (num_programs == 0) {
+    if (error) *error = "Require at least one program to link";
+    return false;
+  }
   std::vector<CUjit_option> option_keys;
   std::vector<void*> option_vals;
   OptionsMap options_map;
@@ -1715,15 +1741,19 @@ inline bool link_program(StringRef program, CUjitInputType program_type,
     if (error) *error = "Syntax error in linker options";
     return false;
   }
-  if (program_type == CU_JIT_INPUT_CUBIN && !options_map.count("-l")) {
+  if (num_programs == 1 && program_types[0] == CU_JIT_INPUT_CUBIN &&
+      !options_map.count("-l")) {
     // No linking required, just return the given CUBIN.
-    if (linked_cubin) *linked_cubin = program;
+    if (linked_cubin) *linked_cubin = *programs[0];
     return true;
   }
 #if CUDA_VERSION >= 11040
-  if (program_type == CU_JIT_INPUT_NVVM) {
-    option_keys.push_back(CU_JIT_LTO);
-    option_vals.push_back((void*)1);
+  for (size_t i = 0; i < num_programs; ++i) {
+    if (program_types[i] == CU_JIT_INPUT_NVVM) {
+      option_keys.push_back(CU_JIT_LTO);
+      option_vals.push_back((void*)1);
+      break;
+    }
   }
 #endif
   StringVec link_files, link_paths;
@@ -1824,9 +1854,12 @@ inline bool link_program(StringRef program, CUjitInputType program_type,
     CUlinkState& culink_state_;
     ~ScopedCULinkStateDestroyer() { cuLinkDestroy(culink_state_); }
   } culink_state_scope_guard{culink_state};
-  JITIFY_CHECK_CULINK(cuLinkAddData(culink_state, program_type,
-                                    (void*)program.data(), program.size(),
-                                    "jitified_source", 0, 0, 0));
+
+  for (size_t i = 0; i < num_programs; ++i) {
+    JITIFY_CHECK_CULINK(cuLinkAddData(
+        culink_state, program_types[i], (void*)programs[i]->data(),
+        programs[i]->size(), "jitified_source", 0, 0, 0));
+  }
 
   for (std::string link_file : link_files) {
     CUjitInputType jit_input_type;
@@ -1872,32 +1905,6 @@ inline bool link_program(StringRef program, CUjitInputType program_type,
 
 }  // namespace detail
 
-inline LinkedProgram LinkedProgram::link(StringRef ptx, StringRef cubin,
-                                         StringRef nvvm,
-                                         StringMap lowered_name_map,
-                                         StringVec options) {
-  const StringRef& program =
-      !nvvm.empty() ? nvvm : !cubin.empty() ? cubin : ptx;
-  int cuda_driver_version;
-  cuDriverGetVersion(&cuda_driver_version);
-  if (std::min(CUDA_VERSION, cuda_driver_version) < 11040 && !nvvm.empty()) {
-    return Error("Linking NVVM IR is not supported with CUDA < 11.4");
-  }
-  CUjitInputType program_type =
-#if CUDA_VERSION >= 11040
-      !nvvm.empty() ? CU_JIT_INPUT_NVVM :
-#endif
-                    !cubin.empty() ? CU_JIT_INPUT_CUBIN : CU_JIT_INPUT_PTX;
-  std::string error, log, linked_cubin;
-  log = detail::string_join(options, " ", "Linker options: \"", "\"\n");
-  if (!detail::link_program(program, program_type, options, &error, &log,
-                            &linked_cubin)) {
-    return Error("Linking failed: " + error + '\n' + log);
-  }
-  return LinkedProgram(std::move(linked_cubin), std::move(lowered_name_map),
-                       std::move(log), std::move(options));
-}
-
 /*! An object containing a PTX (and maybe CUBIN) source string and associated
  *  metadata.
  */
@@ -1934,8 +1941,8 @@ class CompiledProgramData
   const std::string& ptx() const { return ptx_; }
   /*! Get the CUBIN binary of the compiled program.
    * \note The CUBIN is only available here with NVRTC version >= 11.2; older
-   * versions will return an empty string. The CUBIN is always available from
-   * LinkedProgramData::cubin.
+   * versions will return an empty string. The linked CUBIN is always available
+   * from LinkedProgramData::cubin.
    */
   const std::string& cubin() const { return cubin_; }
   /*! Get the NVVM IR of the compiled program.
@@ -1960,10 +1967,8 @@ class CompiledProgramData
    *    LinkedProgramData object or an error state.
    */
   LinkedProgram link(StringVec extra_linker_options = {}) const {
-    extra_linker_options.insert(extra_linker_options.begin(),
-                                remaining_linker_options_.begin(),
-                                remaining_linker_options_.end());
-    return LinkedProgram::link(ptx_, cubin_, nvvm_, lowered_name_map_,
+    const CompiledProgramData* compiled_programs[] = {this};
+    return LinkedProgram::link(1, compiled_programs,
                                std::move(extra_linker_options));
   }
 };
@@ -1996,6 +2001,95 @@ class CompiledProgram
                    std::move(compiler_options), std::move(linker_options));
   }
 };
+
+inline LinkedProgram LinkedProgram::link(
+    size_t num_programs, const CompiledProgramData* compiled_programs[],
+    StringVec options) {
+  if (num_programs == 0) return Error("Must have at least one program to link");
+  const StringVec& prog_linker_options =
+      compiled_programs[0]->remaining_linker_options();
+  StringMap lowered_name_map = compiled_programs[0]->lowered_name_map();
+  size_t total_lowered_names = lowered_name_map.size();
+  for (size_t i = 1; i < num_programs; ++i) {
+    if (compiled_programs[i]->remaining_linker_options() !=
+        prog_linker_options) {
+      return Error("Program linker options must match");
+    }
+    total_lowered_names += compiled_programs[i]->lowered_name_map().size();
+  }
+  options.insert(options.begin(), prog_linker_options.begin(),
+                 prog_linker_options.end());
+  lowered_name_map.reserve(total_lowered_names);
+  for (size_t i = 1; i < num_programs; ++i) {
+    lowered_name_map.insert(compiled_programs[i]->lowered_name_map().begin(),
+                            compiled_programs[i]->lowered_name_map().end());
+  }
+  std::vector<const std::string*> programs;
+  std::vector<CUjitInputType> program_types;
+  programs.reserve(num_programs);
+  program_types.reserve(num_programs);
+  for (size_t i = 0; i < num_programs; ++i) {
+    const CompiledProgramData& compiled_program = *compiled_programs[i];
+    int cuda_driver_version;
+    cuDriverGetVersion(&cuda_driver_version);
+    if (std::min(CUDA_VERSION, cuda_driver_version) < 11040 &&
+        !compiled_program.nvvm().empty()) {
+      return Error("Linking NVVM IR is not supported with CUDA < 11.4");
+    }
+    const std::string& program = !compiled_program.nvvm().empty()
+                                     ? compiled_program.nvvm()
+                                     : !compiled_program.cubin().empty()
+                                           ? compiled_program.cubin()
+                                           : compiled_program.ptx();
+    CUjitInputType program_type =
+#if CUDA_VERSION >= 11040
+        !compiled_program.nvvm().empty() ? CU_JIT_INPUT_NVVM :
+#endif
+                                         !compiled_program.cubin().empty()
+                                             ? CU_JIT_INPUT_CUBIN
+                                             : CU_JIT_INPUT_PTX;
+    programs.emplace_back(&program);
+    program_types.emplace_back(program_type);
+  }
+  return link_impl(num_programs, programs.data(), program_types.data(),
+                   std::move(lowered_name_map), std::move(options));
+}
+
+inline LinkedProgram LinkedProgram::link(
+    const std::vector<const CompiledProgram*>& compiled_programs,
+    StringVec options) {
+  std::vector<const CompiledProgramData*> prog_ptrs;
+  prog_ptrs.reserve(compiled_programs.size());
+  for (const CompiledProgram* compiled_program_ptr : compiled_programs) {
+    const CompiledProgram& compiled_program = *compiled_program_ptr;
+    if (!compiled_program) return Error(compiled_program.error());
+    prog_ptrs.emplace_back(&*compiled_program);
+  }
+  return link(compiled_programs.size(), prog_ptrs.data(), std::move(options));
+}
+
+inline LinkedProgram LinkedProgram::link(const std::string& program,
+                                         CUjitInputType program_type,
+                                         StringMap lowered_name_map,
+                                         StringVec options) {
+  const std::string* programs[] = {&program};
+  return link_impl(1, programs, &program_type, std::move(lowered_name_map),
+                   std::move(options));
+}
+
+inline LinkedProgram LinkedProgram::link_impl(
+    size_t num_programs, const std::string* programs[],
+    const CUjitInputType program_types[], StringMap lowered_name_map,
+    StringVec options) {
+  std::string error, log, linked_cubin;
+  log = detail::string_join(options, " ", "Linker options: \"", "\"\n");
+  if (!detail::link_programs(num_programs, programs, program_types, options,
+                             &error, &log, &linked_cubin)) {
+    return Error("Linking failed: " + error + '\n' + log);
+  }
+  return LinkedProgram(std::move(linked_cubin), std::move(lowered_name_map),
+                       std::move(log), std::move(options));
+}
 
 namespace detail {
 
