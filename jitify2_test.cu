@@ -1380,6 +1380,15 @@ __global__ void my_kernel(thrust::counting_iterator<int> begin,
 #if CUDA_VERSION >= 11000
 TEST(Jitify2Test, CubBlockPrimitives) {
   static const char* const cub_program_source = R"(
+// WAR for issue in CUB shipped with CUDA 11.4
+// (https://github.com/NVIDIA/cub/issues/334)
+// Note: We can't easily work around this inside Jitify itself.
+// TODO(benbarsdell): Check exactly when this issue is fixed in CUB (<1.15.0?).
+#include <cub/version.cuh>
+#if CUB_VERSION >= 101200 && CUB_VERSION < 101500
+#define ProcessFloatMinusZero BaseDigitExtractor<KeyT>::ProcessFloatMinusZero
+#endif
+
 #include <cub/block/block_load.cuh>
 #include <cub/block/block_radix_sort.cuh>
 #include <cub/block/block_reduce.cuh>
