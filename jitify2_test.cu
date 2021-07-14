@@ -1086,50 +1086,67 @@ const int arch = __CUDA_ARCH__ / 10;
   // Test default behavior (automatic architecture detection).
   PreprocessedProgram preprocessed =
       Program("arch_flags_program", source)->preprocess();
-  LoadedProgram program = preprocessed->load();
-  ASSERT_EQ(get_error(program), "");
-  ASSERT_EQ(program->get_global_value("arch", &arch), "");
+  CompiledProgram program = preprocessed->compile();
+  // Expect virtual architecture (compile to PTX).
+  ASSERT_GT(program->ptx().size(), 0);
+  ASSERT_EQ(program->cubin().size(), 0);
+  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
   // Test explicit virtual architecture (compile to PTX).
   // Note: PTX is forwards compatible.
-  program = preprocessed->load({}, {}, {"-arch=compute_35"});
-  ASSERT_EQ(get_error(program), "");
-  ASSERT_EQ(program->get_global_value("arch", &arch), "");
+  program = preprocessed->compile("", {}, {"-arch=compute_35"});
+  ASSERT_GT(program->ptx().size(), 0);
+  ASSERT_EQ(program->cubin().size(), 0);
+  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, 35);
 
+  auto expect_cubin_size_if_available = [](size_t cubin_size) {
+    if (jitify2::nvrtc().GetCUBIN()) {
+      EXPECT_GT(cubin_size, 0);
+    } else {
+      EXPECT_EQ(cubin_size, 0);
+    }
+  };
+
   // Test explicit real architecture (may compile directly to CUBIN).
-  program = preprocessed->load({}, {},
+  program = preprocessed->compile("", {},
                                {"-arch", "sm_" + std::to_string(current_arch)});
-  ASSERT_EQ(get_error(program), "");
-  ASSERT_EQ(program->get_global_value("arch", &arch), "");
+  EXPECT_GT(program->ptx().size(), 0);
+  expect_cubin_size_if_available(program->cubin().size());
+  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
   // Test automatic virtual architecture (compile to PTX).
-  program = preprocessed->load({}, {}, {"-arch", "compute_."});
-  ASSERT_EQ(get_error(program), "");
-  ASSERT_EQ(program->get_global_value("arch", &arch), "");
+  program = preprocessed->compile("", {}, {"-arch", "compute_."});
+  EXPECT_GT(program->ptx().size(), 0);
+  EXPECT_EQ(program->cubin().size(), 0);
+  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
   // Test automatic real architecture (may compile directly to CUBIN).
-  program = preprocessed->load({}, {}, {"-arch=sm_."});
-  ASSERT_EQ(get_error(program), "");
-  ASSERT_EQ(program->get_global_value("arch", &arch), "");
+  program = preprocessed->compile("", {}, {"-arch=sm_."});
+  EXPECT_GT(program->ptx().size(), 0);
+  expect_cubin_size_if_available(program->cubin().size());
+  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
   // Test that preprocessing and compilation use separate arch flags.
   program = Program("arch_flags_program", source)
                 ->preprocess({"-arch=sm_35"})
-                ->load({}, {}, {"-arch=sm_."});
-  ASSERT_EQ(get_error(program), "");
-  ASSERT_EQ(program->get_global_value("arch", &arch), "");
+                ->compile("", {}, {"-arch=sm_."});
+  EXPECT_GT(program->ptx().size(), 0);
+  expect_cubin_size_if_available(program->cubin().size());
+  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
   // Test that multiple architectures can be specified for preprocessing.
   program = Program("arch_flags_program", source)
                 ->preprocess({"-arch=compute_35", "-arch=compute_52",
                               "-arch=compute_61"})
-                ->load({}, {}, {"-arch=compute_."});
+                ->compile("", {}, {"-arch=compute_."});
+  EXPECT_GT(program->ptx().size(), 0);
+  EXPECT_EQ(program->cubin().size(), 0);
   ASSERT_EQ(get_error(program), "");
 
   // Test that certain compiler options are automatically passed to the linker.
