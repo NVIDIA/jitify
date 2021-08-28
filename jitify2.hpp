@@ -5535,12 +5535,12 @@ inline bool make_directories(std::string path,
 template <typename Func>
 inline bool for_each_file_in(const std::string& path, Func func) {
 #if defined(_WIN32) || defined(_WIN64)
-  WIN32_FIND_DATA file_data;
-  HANDLE handle = ::FindFirstFile(path_join(path, "*").c_str(), &file_data);
+  _WIN32_FIND_DATAA file_data;
+  HANDLE handle = ::FindFirstFileA(path_join(path, "*").c_str(), &file_data);
   if (handle == INVALID_HANDLE_VALUE) {
     return ::GetLastError() == ERROR_FILE_NOT_FOUND;
   }
-  while (func(file_data.cFileName) && ::FindNextFile(handle, &file_data)) {
+  while (func(file_data.cFileName) && ::FindNextFileA(handle, &file_data)) {
   }
   ::FindClose(handle);
 #else
