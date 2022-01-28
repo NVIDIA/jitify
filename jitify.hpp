@@ -2690,6 +2690,15 @@ inline nvrtcResult compile_kernel(std::string program_name,
       &nvrtc_program, program_source.c_str(), program_name.c_str(), num_headers,
       header_sources_c.data(), header_names_c.data()));
 
+  // Ensure nvrtc_program gets destroyed.
+  struct ScopedNvrtcProgramDestroyer {
+    nvrtcProgram& nvrtc_program_;
+    ~ScopedNvrtcProgramDestroyer() { nvrtcDestroyProgram(&nvrtc_program_); }
+    ScopedNvrtcProgramDestroyer(const ScopedNvrtcProgramDestroyer&) = delete;
+    ScopedNvrtcProgramDestroyer& operator=(const ScopedNvrtcProgramDestroyer&) =
+        delete;
+  } nvrtc_program_scope_guard{nvrtc_program};
+
 #if CUDA_VERSION >= 8000
   if (!instantiation.empty()) {
     CHECK_NVRTC(nvrtcAddNameExpression(nvrtc_program, instantiation.c_str()));
@@ -2737,7 +2746,6 @@ inline nvrtcResult compile_kernel(std::string program_name,
 #endif
   }
 
-  CHECK_NVRTC(nvrtcDestroyProgram(&nvrtc_program));
 #undef CHECK_NVRTC
   return NVRTC_SUCCESS;
 }
