@@ -496,10 +496,13 @@ inline std::string comment_out_code_line(int line_num, std::string source) {
 inline void print_with_line_numbers(std::string const& source) {
   int linenum = 1;
   std::stringstream source_ss(source);
+  std::stringstream output_ss;
+  output_ss.imbue(std::locale::classic());
   for (std::string line; std::getline(source_ss, line); ++linenum) {
-    std::cout << std::setfill(' ') << std::setw(3) << linenum << " " << line
+    output_ss << std::setfill(' ') << std::setw(3) << linenum << " " << line
               << std::endl;
   }
+  std::cout << output_ss.str();
 }
 
 inline void print_compile_log(std::string program_name,
@@ -693,6 +696,7 @@ inline bool load_source(
   //   of the same header from different paths.
   if (pragma_once) {
     std::stringstream ss;
+    ss.imbue(std::locale::classic());
     ss << std::uppercase << std::hex << std::setw(8) << std::setfill('0')
        << hash;
     std::string include_guard_name = "_JITIFY_INCLUDE_GUARD_" + ss.str() + "\n";
