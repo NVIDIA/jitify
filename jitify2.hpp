@@ -5557,6 +5557,7 @@ inline bool for_each_file_in(const std::string& path, Func func) {
 inline std::string sanitize_filename(const std::string& filename) {
   static const std::string bad_filename_chars = R"(\/:*?|"<>)";
   std::stringstream result;
+  result.imbue(std::locale::classic());
   size_t beg = 0;
   while (true) {
     size_t end = filename.find_first_of(bad_filename_chars, beg);
@@ -5862,6 +5863,7 @@ template <typename T>
 struct StreamToString {
   std::string operator()(const T& x) const {
     std::stringstream ss;
+    ss.imbue(std::locale::classic());
     ss << x;
     return ss.str();
   }
@@ -6160,6 +6162,7 @@ class ProgramCache {
         }
       }
       std::stringstream filename_ss;
+      filename_ss.imbue(std::locale::classic());
       filename_ss << to_filename_(key) << ".sm" << compute_capability << ".v"
                   << std::hex << serialization::kSerializationVersion;
       LinkedProgram linked;
