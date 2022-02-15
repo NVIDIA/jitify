@@ -2590,7 +2590,7 @@ inline std::string demangle_ptx_variable_name(const char* mangled_name) {
   while (true) {
     // Parse identifier length.
     int n = 0;
-    while (std::isdigit(*c)) {
+    while (std::isdigit(static_cast<unsigned char>(*c))) {
       n = n * 10 + (*c - '0');
       c++;
     }
