@@ -2866,7 +2866,7 @@ inline void load_program(std::string const& cuda_source,
              it != program_sources->end(); ++it) {
           std::cout << "  " << it->first << std::endl;
         }
-        throw std::out_of_range(include_parent +
+        throw std::out_of_range(include_name +
                                 " not in loaded sources!"
                                 " This may be due to a header being loaded by"
                                 " NVRTC without Jitify's knowledge.");
