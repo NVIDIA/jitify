@@ -93,7 +93,7 @@ requires [CMake](https://cmake.org) to be available on the system.
 See [jitify_example.cpp](jitify_example.cpp) for some examples of how to use the library.
 The [Makefile](Makefile) also demonstrates how to use the provided stringify utility.
 
-[GTC 2017 Talk by Ben Barsdell and Kate Clark](http://on-demand.gputechconf.com/gtc/2017/video/s7716-barsdell-ben-jitify.mp4)
+[GTC 2017 Talk by Ben Barsdell and Kate Clark](https://on-demand.gputechconf.com/gtc/2017/videos/s7716-barsdell-ben-jitify.mp4)
 
 ### API documentation
 
