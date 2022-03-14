@@ -160,6 +160,40 @@ TEST(JitifyTest, Simple_experimental) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+TEST(JitifyTest, DefaultConstructable) {
+  // Same as Simple, but uses default + move constructors of Program, Kernel,
+  // KernelInstantiation, and KernelLauncher classes.
+  static jitify::JitCache kernel_cache;
+  jitify::Program program;
+  program = kernel_cache.program(simple_program_source);
+  typedef float T;
+  T* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(T)));
+  dim3 grid(1);
+  dim3 block(1);
+  using jitify::reflection::type_of;
+  jitify::Kernel kernel;
+  kernel = program.kernel("my_kernel");
+  jitify::KernelInstantiation kernel_inst;
+  kernel_inst = kernel.instantiate(3, type_of(*d_data));
+  jitify::KernelLauncher kernel_launcher;
+  kernel_launcher = kernel_inst.configure(grid, block);
+  T h_data = 5;
+  CHECK_CUDART(cudaMemcpy(d_data, &h_data, sizeof(T), cudaMemcpyHostToDevice));
+  CHECK_CUDA(kernel_launcher.launch(d_data));
+  CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(T), cudaMemcpyDeviceToHost));
+  EXPECT_FLOAT_EQ(h_data, 125.f);
+
+  kernel_launcher = kernel_inst.configure_1d_max_occupancy();
+  h_data = 5;
+  CHECK_CUDART(cudaMemcpy(d_data, &h_data, sizeof(T), cudaMemcpyHostToDevice));
+  CHECK_CUDA(kernel_launcher.launch(d_data));
+  CHECK_CUDART(cudaMemcpy(&h_data, d_data, sizeof(T), cudaMemcpyDeviceToHost));
+  EXPECT_FLOAT_EQ(h_data, 125.f);
+
+  CHECK_CUDART(cudaFree(d_data));
+}
+
 static const char* const multiple_kernels_program_source =
     "my_program1\n"
     "#include \"example_headers/my_header1.cuh\"\n"
