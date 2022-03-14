@@ -3109,6 +3109,7 @@ class KernelLauncher {
   std::unique_ptr<KernelLauncher_impl const> _impl;
 
  public:
+  KernelLauncher() = default;
   inline KernelLauncher(KernelInstantiation const& kernel_inst, dim3 grid,
                         dim3 block, unsigned int smem = 0,
                         cudaStream_t stream = 0);
@@ -3177,6 +3178,7 @@ class KernelInstantiation {
   std::unique_ptr<KernelInstantiation_impl const> _impl;
 
  public:
+  KernelInstantiation() = default;
   inline KernelInstantiation(Kernel const& kernel,
                              std::vector<std::string> const& template_args);
 
@@ -3324,6 +3326,7 @@ class Kernel {
   std::unique_ptr<Kernel_impl const> _impl;
 
  public:
+  Kernel() = default;
   Kernel(Program const& program, std::string name,
          jitify::detail::vector<std::string> options = 0);
 
@@ -3388,6 +3391,7 @@ class Program {
   std::unique_ptr<Program_impl const> _impl;
 
  public:
+  Program() = default;
   Program(JitCache& cache, std::string source,
           jitify::detail::vector<std::string> headers = 0,
           jitify::detail::vector<std::string> options = 0,
