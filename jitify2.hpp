@@ -3821,16 +3821,31 @@ struct IntegerLimits {
     return Min;
   }
 #endif  // __cplusplus >= 201103L
+  // TODO: Replace this with static constexpr T member variables.
   enum {
     is_specialized = true,
-    digits = (Digits == -1) ? (int)(sizeof(T) * 8 - (Min != 0)) : Digits,
-    digits10 = (digits * 30103) / 100000,
-    is_signed = ((T)(-1) < 0),
-    is_integer = true,
-    is_exact = true,
-    radix = 2,
-    is_bounded = true,
-    is_modulo = false
+    digits            = (Digits == -1) ? (int)(sizeof(T)*8 - (Min != 0)) : Digits,
+    digits10          = (digits * 30103) / 100000,
+    is_signed         = ((T)(-1)<0),
+    is_integer        = true,
+    is_exact          = true,
+    has_infinity      = false,
+    has_quiet_NaN     = false,
+    has_signaling_NaN = false,
+    has_denorm        = 0,
+    has_denorm_loss   = false,
+    round_style       = 0,
+    is_iec559         = false,
+    is_bounded        = true,
+    is_modulo         = !(is_signed || Max == 1 /*is bool*/),
+    max_digits10      = 0,
+    radix             = 2,
+    min_exponent      = 0,
+    min_exponent10    = 0,
+    max_exponent      = 0,
+    max_exponent10    = 0,
+    tinyness_before   = false,
+    traps             = false
   };
 };
 }  // namespace __jitify_detail
