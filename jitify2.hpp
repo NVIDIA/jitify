@@ -2609,9 +2609,16 @@ inline std::string demangle_ptx_variable_name(const char* mangled_name) {
       // Identifiers starting with "_INTERNAL" represent internal linkage and
       // are replaced with the program name (which is embedded in them).
       // (These appear as of CUDA >=11.3).
+      int name_len_offset = 10;  // Skip "_INTERNAL_"
+      if (nvrtc().get_version() >= 11050) {
+        // Mangling changed slightly in CUDA 11.5.
+        name_len_offset += 9;  // Skip 8 hex digits and an underscore
+      }
       char* program_name;
-      long program_name_len = std::strtol(id.c_str() + 10, &program_name, 10);
+      long program_name_len =
+          std::strtol(id.c_str() + name_len_offset, &program_name, 10);
       if (!program_name_len) return "";  // Note: Program name is never empty
+      if (program_name[0] != '_') return "";
       ++program_name;                    // Skip a '_' that follows the length
       ss << StringSlice(program_name, program_name_len);
     } else {
