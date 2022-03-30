@@ -2711,6 +2711,8 @@ inline nvrtcResult compile_kernel(std::string program_name,
   // Ensure nvrtc_program gets destroyed.
   struct ScopedNvrtcProgramDestroyer {
     nvrtcProgram& nvrtc_program_;
+    ScopedNvrtcProgramDestroyer(nvrtcProgram& nvrtc_program)
+        : nvrtc_program_(nvrtc_program) {}    
     ~ScopedNvrtcProgramDestroyer() { nvrtcDestroyProgram(&nvrtc_program_); }
     ScopedNvrtcProgramDestroyer(const ScopedNvrtcProgramDestroyer&) = delete;
     ScopedNvrtcProgramDestroyer& operator=(const ScopedNvrtcProgramDestroyer&) =
