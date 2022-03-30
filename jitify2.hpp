@@ -1852,6 +1852,8 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
                                    &culink_state));
   struct ScopedCULinkStateDestroyer {
     CUlinkState& culink_state_;
+    ScopedCULinkStateDestroyer(CUlinkState& culink_state)
+        : culink_state_(culink_state) {}
     ~ScopedCULinkStateDestroyer() { cuLinkDestroy(culink_state_); }
   } culink_state_scope_guard{culink_state};
 
@@ -2712,6 +2714,8 @@ inline bool compile_program(
       header_sources_c.data(), header_names_c.data()));
   struct ScopedNvrtcProgramDestroyer {
     nvrtcProgram& nvrtc_program_;
+    ScopedNvrtcProgramDestroyer(nvrtcProgram& nvrtc_program)
+        : nvrtc_program_(nvrtc_program) {}
     ~ScopedNvrtcProgramDestroyer() {
       nvrtc().DestroyProgram()(&nvrtc_program_);
     }
