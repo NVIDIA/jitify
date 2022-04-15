@@ -162,8 +162,8 @@
 #else
 // TODO: Would std::exit or std::abort be better than std::terminate?
 #include <exception>
-#define JITIFY_THROW_OR_TERMINATE(msg)                     \
-  std::cerr << "Jitify fatal error: " << (msg) << std::endl;    \
+#define JITIFY_THROW_OR_TERMINATE(msg)                       \
+  std::cerr << "Jitify fatal error: " << (msg) << std::endl; \
   std::terminate()
 #endif
 
@@ -2623,7 +2623,7 @@ inline std::string demangle_ptx_variable_name(const char* mangled_name) {
           std::strtol(id.c_str() + name_len_offset, &program_name, 10);
       if (!program_name_len) return "";  // Note: Program name is never empty
       if (program_name[0] != '_') return "";
-      ++program_name;                    // Skip a '_' that follows the length
+      ++program_name;  // Skip a '_' that follows the length
       ss << StringSlice(program_name, program_name_len);
     } else {
       ss << id;
