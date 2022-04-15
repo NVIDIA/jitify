@@ -119,7 +119,7 @@ foreach(test ${TESTS})
   target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
   # Ensure the main jitify header can be found.
   target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(${test} cuda gtest_main)
+  target_link_libraries(${test} gtest_main)
   set_property(TARGET ${test} PROPERTY CUDA_ARCHITECTURES OFF)
   if (NOT WIN32)
     target_link_libraries(${test} ${CMAKE_DL_LIBS})

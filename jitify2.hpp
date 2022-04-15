@@ -72,6 +72,11 @@
 #define JITIFY_LINK_NVRTC_STATIC 0
 #endif
 
+// Default to using dynamic linking of CUDA.
+#ifndef JITIFY_LINK_CUDA_STATIC
+#define JITIFY_LINK_CUDA_STATIC 0
+#endif
+
 // Users can enable this for easier debugging.
 #ifndef JITIFY_FAIL_IMMEDIATELY
 #define JITIFY_FAIL_IMMEDIATELY 0
@@ -174,14 +179,14 @@
 #define JITIFY_THROW_OR_RETURN(msg) return msg
 #endif
 
-#define JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(call) \
-  do {                                             \
-    CUresult jitify_cuda_ret = call;               \
-    if (jitify_cuda_ret != CUDA_SUCCESS) {         \
-      const char* error_c;                         \
-      cuGetErrorString(jitify_cuda_ret, &error_c); \
-      JITIFY_THROW_OR_RETURN(error_c);             \
-    }                                              \
+#define JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(call)        \
+  do {                                                    \
+    CUresult jitify_cuda_ret = call;                      \
+    if (jitify_cuda_ret != CUDA_SUCCESS) {                \
+      const char* error_c;                                \
+      cuda().GetErrorString()(jitify_cuda_ret, &error_c); \
+      JITIFY_THROW_OR_RETURN(error_c);                    \
+    }                                                     \
   } while (0)
 
 #endif  // not JITIFY_SERIALIZATION_ONLY
@@ -963,12 +968,6 @@ inline uint64_t fasthash64(uint64_t h) {
   return h;
 }
 
-inline std::string get_cuda_error_string(CUresult ret) {
-  const char* error_c;
-  cuGetErrorString(ret, &error_c);
-  return "CUDA error " + std::to_string(ret) + ": " + error_c;
-}
-
 // Returns the sha256 digest as a string of 32 hex digits.
 inline std::string sha256(const char* data, size_t size) {
   // This implementation is based on pseudocode from Wikipedia.
@@ -1079,13 +1078,218 @@ inline std::string normalize_cuda_symbol_name(const std::string& symbol_name) {
   return std::regex_replace(symbol_name, re_anonymous_namespace, "<unnamed>");
 }
 
+template <typename ResultType, typename... Args>
+using function_type = ResultType(Args...);
+
+template <typename ResultType, typename... Args>
+class SafeFunction {
+ public:
+  SafeFunction(std::function<ResultType(Args...)> func, std::string name)
+      : func_(func), name_(std::move(name)) {}
+
+  explicit operator bool() const { return static_cast<bool>(func_); }
+
+  ResultType operator()(Args... args) const {
+    if (!func_) {
+      JITIFY_THROW_OR_TERMINATE("Failed to find dynamic symbol " + name_);
+    }
+    return func_(args...);
+  }
+
+ private:
+  std::function<ResultType(Args...)> func_;
+  std::string name_;
+};
+
+#if !JITIFY_LINK_NVRTC_STATIC || !JITIFY_LINK_CUDA_STATIC
+class DynamicLibrary {
+  using handle_type =
+#if defined(_WIN32) || defined(_WIN64)
+      HMODULE;
+#else
+      void*;
+#endif
+
+ private:
+  struct Deleter {
+    void operator()(handle_type handle) const {
+      if (handle) {
+#if defined(_WIN32) || defined(_WIN64)
+        ::FreeLibrary(handle);
+#else
+        ::dlclose(handle);
+#endif
+      }
+    }
+  };
+
+  std::unique_ptr<std::remove_pointer<handle_type>::type, Deleter> lib_;
+  std::string error_;
+
+ public:
+  DynamicLibrary() = default;
+  DynamicLibrary(const char* name) { open(name); }
+
+  bool open(const char* name) {
+    error_.clear();
+#if defined(_WIN32) || defined(_WIN64)
+    lib_.reset(::LoadLibraryA(name));
+    if (!lib_) {
+      DWORD error_code = ::GetLastError();
+      LPSTR buffer = nullptr;
+      size_t size = ::FormatMessageA(
+          FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+              FORMAT_MESSAGE_IGNORE_INSERTS,
+          NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+          (LPSTR)&buffer, 0, NULL);
+      error_ = std::string(buffer, size);
+      ::LocalFree(buffer);
+      return false;
+    }
+#else
+    ::dlerror();  // Clear any existing error
+    lib_.reset(::dlopen(name, RTLD_LAZY));
+    if (!lib_) {
+      error_ = ::dlerror();
+      return false;
+    }
+#endif
+    return true;
+  }
+
+  void close() { lib_.reset(); }
+
+  explicit operator bool() const { return static_cast<bool>(lib_); }
+  const std::string& error() const { return error_; }
+
+  template <typename ResultType, typename... Args>
+  SafeFunction<ResultType, Args...> function(const char* func_name) const {
+    auto* func =
+#if defined(_WIN32) || defined(_WIN64)
+        ::GetProcAddress(lib_.get(), func_name);
+#else
+        ::dlsym(lib_.get(), func_name);
+#endif
+    return SafeFunction<ResultType, Args...>(
+        reinterpret_cast<function_type<ResultType, Args...>*>(func), func_name);
+  }
+};
+#endif  // !JITIFY_LINK_NVRTC_STATIC || !JITIFY_LINK_CUDA_STATIC
+
 }  // namespace detail
 
-// class LoadedProgramData;
+class LibCuda
+#if !JITIFY_LINK_CUDA_STATIC
+    : public detail::DynamicLibrary
+#endif
+{
+ public:
+  LibCuda() {
+#if !JITIFY_LINK_CUDA_STATIC
+    std::string libname =
+#if defined(_WIN32) || defined(_WIN64)
+        "nvcuda.dll";
+#else
+        "libcuda.so";
+#endif
+    this->open(libname.c_str());
+#endif  // !JITIFY_LINK_CUDA_STATIC
+  }
+
+#define JITIFY_STR_IMPL(x) #x
+#define JITIFY_STR(x) JITIFY_STR_IMPL(x)
+#if JITIFY_LINK_CUDA_STATIC
+  operator bool() { return true; }
+  const std::string& error() const {
+    static std::string err;
+    return err;
+  }
+#define JITIFY_DEFINE_CUDA_WRAPPER(name, result_type, ...)        \
+  detail::function_type<result_type, __VA_ARGS__>* name() const { \
+    return &cu##name;                                             \
+  }
+#else  // dynamic linking
+#define JITIFY_DEFINE_CUDA_WRAPPER(name, result_type, ...)              \
+  detail::SafeFunction<result_type, __VA_ARGS__> name() const {         \
+    static const auto func =                                            \
+        this->function<result_type, __VA_ARGS__>(JITIFY_STR(cu##name)); \
+    return func;                                                        \
+  }
+#endif
+  JITIFY_DEFINE_CUDA_WRAPPER(DriverGetVersion, CUresult, int*)
+  JITIFY_DEFINE_CUDA_WRAPPER(GetErrorString, CUresult, CUresult, const char**)
+  JITIFY_DEFINE_CUDA_WRAPPER(GetErrorName, CUresult, CUresult, const char**)
+  JITIFY_DEFINE_CUDA_WRAPPER(CtxGetCurrent, CUresult, CUcontext*)
+  JITIFY_DEFINE_CUDA_WRAPPER(CtxGetDevice, CUresult, CUdevice*)
+  JITIFY_DEFINE_CUDA_WRAPPER(DeviceGet, CUresult, CUdevice*, int)
+  JITIFY_DEFINE_CUDA_WRAPPER(DeviceGetAttribute, CUresult, int*,
+                             CUdevice_attribute, CUdevice)
+  JITIFY_DEFINE_CUDA_WRAPPER(LinkCreate, CUresult, unsigned int, CUjit_option*,
+                             void**, CUlinkState*)
+  JITIFY_DEFINE_CUDA_WRAPPER(LinkDestroy, CUresult, CUlinkState)
+  JITIFY_DEFINE_CUDA_WRAPPER(LinkAddData, CUresult, CUlinkState, CUjitInputType,
+                             void*, size_t, const char*, unsigned int,
+                             CUjit_option*, void**)
+  JITIFY_DEFINE_CUDA_WRAPPER(LinkAddFile, CUresult, CUlinkState, CUjitInputType,
+                             const char*, unsigned int, CUjit_option*, void**)
+  JITIFY_DEFINE_CUDA_WRAPPER(LinkComplete, CUresult, CUlinkState, void**,
+                             size_t*)
+  JITIFY_DEFINE_CUDA_WRAPPER(ModuleLoadData, CUresult, CUmodule*, const void*)
+  JITIFY_DEFINE_CUDA_WRAPPER(ModuleUnload, CUresult, CUmodule)
+  JITIFY_DEFINE_CUDA_WRAPPER(ModuleGetFunction, CUresult, CUfunction*, CUmodule,
+                             const char*)
+  JITIFY_DEFINE_CUDA_WRAPPER(ModuleGetGlobal, CUresult, CUdeviceptr*, size_t*,
+                             CUmodule, const char*)
+  JITIFY_DEFINE_CUDA_WRAPPER(MemcpyHtoDAsync, CUresult, CUdeviceptr,
+                             const void*, size_t, CUstream)
+  JITIFY_DEFINE_CUDA_WRAPPER(MemcpyDtoHAsync, CUresult, void*, CUdeviceptr,
+                             size_t, CUstream)
+  JITIFY_DEFINE_CUDA_WRAPPER(FuncGetAttribute, CUresult, int*,
+                             CUfunction_attribute, CUfunction)
+  JITIFY_DEFINE_CUDA_WRAPPER(FuncSetAttribute, CUresult, CUfunction,
+                             CUfunction_attribute, int)
+  JITIFY_DEFINE_CUDA_WRAPPER(OccupancyMaxPotentialBlockSizeWithFlags, CUresult,
+                             int*, int*, CUfunction, CUoccupancyB2DSize, size_t,
+                             int, unsigned int)
+  JITIFY_DEFINE_CUDA_WRAPPER(LaunchKernel, CUresult, CUfunction, unsigned int,
+                             unsigned int, unsigned int, unsigned int,
+                             unsigned int, unsigned int, unsigned int, CUstream,
+                             void**, void**)
+#undef JITIFY_DEFINE_CUDA_WRAPPER
+#undef JITIFY_STR
+#undef JITIFY_STR_IMPL
+
+  // Returns the runtime CUDA version in the same format as CUDA_VERSION (e.g.,
+  // 11040 for 11.4).
+  int get_version() const {
+    static const int version = [this] {
+      int result;
+      DriverGetVersion()(&result);
+      return result;
+    }();
+    return version;
+  }
+};
+
+inline LibCuda& cuda() {
+  static LibCuda lib;
+  return lib;
+}
+
+namespace detail {
+
+inline std::string get_cuda_error_string(CUresult ret) {
+  const char* error_c;
+  cuda().GetErrorString()(ret, &error_c);
+  return "CUDA error " + std::to_string(ret) + ": " + error_c;
+}
+
+}  // namespace detail
+
 class Kernel;
 
 struct CudaModuleDestructor {
-  void operator()(CUmodule module) const { cuModuleUnload(module); }
+  void operator()(CUmodule module) const { cuda().ModuleUnload()(module); }
 };
 using UniqueCudaModule =
     std::unique_ptr<std::remove_pointer<CUmodule>::type, CudaModuleDestructor>;
@@ -1156,7 +1360,7 @@ class LoadedProgramData {
       symbol_name = iter->second;  // Replace name with lowered name.
     }
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
-        cuModuleGetGlobal(ptr, size, module(), symbol_name.c_str()));
+        cuda().ModuleGetGlobal()(ptr, size, module(), symbol_name.c_str()));
     return {};
   }
 
@@ -1177,7 +1381,7 @@ class LoadedProgramData {
         get_global_ptr_with_size(std::move(name), size_bytes, &ptr);
     if (!error.empty()) return error;
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
-        cuMemcpyDtoHAsync(data, ptr, size_bytes, stream));
+        cuda().MemcpyDtoHAsync()(data, ptr, size_bytes, stream));
     return {};
   }
 
@@ -1201,7 +1405,7 @@ class LoadedProgramData {
         get_global_ptr_with_size(std::move(name), size_bytes, &ptr);
     if (!error.empty()) return error;
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
-        cuMemcpyHtoDAsync(ptr, data, size_bytes, stream));
+        cuda().MemcpyHtoDAsync()(ptr, data, size_bytes, stream));
     return {};
   }
 
@@ -1283,7 +1487,7 @@ class KernelData {
    */
   ErrorMsg set_attribute(CUfunction_attribute attribute, int value) const {
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
-        cuFuncSetAttribute(function_, attribute, value));
+        cuda().FuncSetAttribute()(function_, attribute, value));
     return {};
   }
 
@@ -1294,7 +1498,7 @@ class KernelData {
    */
   ErrorMsg get_attribute(CUfunction_attribute attribute, int* value) const {
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
-        cuFuncGetAttribute(value, attribute, function_));
+        cuda().FuncGetAttribute()(value, attribute, function_));
     return {};
   }
 
@@ -1351,7 +1555,8 @@ inline Kernel Kernel::get_kernel(LoadedProgramData program, std::string name) {
     name = iter->second;  // Replace name with lowered name.
   }
   CUfunction function;
-  CUresult ret = cuModuleGetFunction(&function, program.module(), name.c_str());
+  CUresult ret =
+      cuda().ModuleGetFunction()(&function, program.module(), name.c_str());
   if (ret != CUDA_SUCCESS) {
     return Error("get_kernel with name=\"" + name +
                  "\" failed: " + detail::get_cuda_error_string(ret));
@@ -1401,8 +1606,7 @@ class ConfiguredKernelData {
    *  \return An empty string on success, otherwise an error message.
    */
   ErrorMsg launch(void** arg_ptrs) const {
-    JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuLaunchKernel(
-        // function_, grid_.x, grid_.y, grid_.z, block_.x, block_.y, block_.z,
+    JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
         kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
         block_.z, shared_memory_bytes_, stream_, arg_ptrs, nullptr));
     return {};
@@ -1475,7 +1679,7 @@ inline ConfiguredKernel ConfiguredKernel::configure_1d_max_occupancy(
     CUoccupancyB2DSize shared_memory_bytes_callback, CUstream stream,
     unsigned int flags) {
   int grid, block;
-  CUresult ret = cuOccupancyMaxPotentialBlockSizeWithFlags(
+  CUresult ret = cuda().OccupancyMaxPotentialBlockSizeWithFlags()(
       &grid, &block, kernel.function(), shared_memory_bytes_callback,
       shared_memory_bytes, max_block_size, flags);
   if (ret != CUDA_SUCCESS) {
@@ -1503,7 +1707,7 @@ class LoadedProgram
 inline LoadedProgram LoadedProgram::load(StringRef cubin,
                                          StringMap lowered_name_map) {
   CUmodule module;
-  CUresult ret = cuModuleLoadData(&module, cubin.data());
+  CUresult ret = cuda().ModuleLoadData()(&module, cubin.data());
   if (ret != CUDA_SUCCESS) {
     return Error("Loading failed: " + detail::get_cuda_error_string(ret));
   }
@@ -1849,18 +2053,18 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
   };
 
   CUlinkState culink_state;
-  JITIFY_CHECK_CULINK(cuLinkCreate((unsigned)option_keys.size(),
-                                   option_keys.data(), option_vals.data(),
-                                   &culink_state));
+  JITIFY_CHECK_CULINK(cuda().LinkCreate()((unsigned)option_keys.size(),
+                                          option_keys.data(),
+                                          option_vals.data(), &culink_state));
   struct ScopedCULinkStateDestroyer {
     CUlinkState& culink_state_;
     ScopedCULinkStateDestroyer(CUlinkState& culink_state)
         : culink_state_(culink_state) {}
-    ~ScopedCULinkStateDestroyer() { cuLinkDestroy(culink_state_); }
+    ~ScopedCULinkStateDestroyer() { cuda().LinkDestroy()(culink_state_); }
   } culink_state_scope_guard{culink_state};
 
   for (size_t i = 0; i < num_programs; ++i) {
-    JITIFY_CHECK_CULINK(cuLinkAddData(
+    JITIFY_CHECK_CULINK(cuda().LinkAddData()(
         culink_state, program_types[i], (void*)programs[i]->data(),
         programs[i]->size(), "jitified_source", 0, 0, 0));
   }
@@ -1875,14 +2079,14 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
       // Infer based on filename.
       jit_input_type = get_cuda_jit_input_type(&link_file);
     }
-    CUresult result =
-        cuLinkAddFile(culink_state, jit_input_type, link_file.c_str(), 0, 0, 0);
+    CUresult result = cuda().LinkAddFile()(culink_state, jit_input_type,
+                                           link_file.c_str(), 0, 0, 0);
     int path_num = 0;
     while (result == CUDA_ERROR_FILE_NOT_FOUND &&
            path_num < (int)link_paths.size()) {
       std::string filename = path_join(link_paths[path_num++], link_file);
-      result = cuLinkAddFile(culink_state, jit_input_type, filename.c_str(), 0,
-                             0, 0);
+      result = cuda().LinkAddFile()(culink_state, jit_input_type,
+                                    filename.c_str(), 0, 0, 0);
     }
     if (log) {
       if (result == CUDA_ERROR_FILE_NOT_FOUND) {
@@ -1898,7 +2102,8 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
 
   size_t cubin_size;
   void* cubin_ptr;
-  JITIFY_CHECK_CULINK(cuLinkComplete(culink_state, &cubin_ptr, &cubin_size));
+  JITIFY_CHECK_CULINK(
+      cuda().LinkComplete()(culink_state, &cubin_ptr, &cubin_size));
   set_log();
   if (linked_cubin) {
     linked_cubin->assign((char*)cubin_ptr, (char*)cubin_ptr + cubin_size);
@@ -2034,9 +2239,7 @@ inline LinkedProgram LinkedProgram::link(
   program_types.reserve(num_programs);
   for (size_t i = 0; i < num_programs; ++i) {
     const CompiledProgramData& compiled_program = *compiled_programs[i];
-    int cuda_driver_version;
-    cuDriverGetVersion(&cuda_driver_version);
-    if (std::min(CUDA_VERSION, cuda_driver_version) < 11040 &&
+    if (std::min(CUDA_VERSION, cuda().get_version()) < 11040 &&
         !compiled_program.nvvm().empty()) {
       return Error("Linking NVVM IR is not supported with CUDA < 11.4");
     }
@@ -2095,87 +2298,6 @@ inline LinkedProgram LinkedProgram::link_impl(
                        std::move(log), std::move(options));
 }
 
-namespace detail {
-
-template <typename ResultType, typename... Args>
-using function_type = ResultType(Args...);
-
-#if !JITIFY_LINK_NVRTC_STATIC
-class DynamicLibrary {
-  using handle_type =
-#if defined(_WIN32) || defined(_WIN64)
-      HMODULE;
-#else
-      void*;
-#endif
-
- private:
-  struct Deleter {
-    void operator()(handle_type handle) const {
-      if (handle) {
-#if defined(_WIN32) || defined(_WIN64)
-        ::FreeLibrary(handle);
-#else
-        ::dlclose(handle);
-#endif
-      }
-    }
-  };
-
-  std::unique_ptr<std::remove_pointer<handle_type>::type, Deleter> lib_;
-  std::string error_;
-
- public:
-  DynamicLibrary() = default;
-  DynamicLibrary(const char* name) { open(name); }
-
-  bool open(const char* name) {
-    error_.clear();
-#if defined(_WIN32) || defined(_WIN64)
-    lib_.reset(::LoadLibraryA(name));
-    if (!lib_) {
-      DWORD error_code = ::GetLastError();
-      LPSTR buffer = nullptr;
-      size_t size = ::FormatMessageA(
-          FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-              FORMAT_MESSAGE_IGNORE_INSERTS,
-          NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-          (LPSTR)&buffer, 0, NULL);
-      error_ = std::string(buffer, size);
-      ::LocalFree(buffer);
-      return false;
-    }
-#else
-    ::dlerror();  // Clear any existing error
-    lib_.reset(::dlopen(name, RTLD_LAZY));
-    if (!lib_) {
-      error_ = ::dlerror();
-      return false;
-    }
-#endif
-    return true;
-  }
-
-  void close() { lib_.reset(); }
-
-  explicit operator bool() const { return static_cast<bool>(lib_); }
-  const std::string& error() const { return error_; }
-
-  template <typename ResultType, typename... Args>
-  function_type<ResultType, Args...>* function(const char* func_name) const {
-    auto* func =
-#if defined(_WIN32) || defined(_WIN64)
-        ::GetProcAddress(lib_.get(), func_name);
-#else
-        ::dlsym(lib_.get(), func_name);
-#endif
-    return reinterpret_cast<function_type<ResultType, Args...>*>(func);
-  }
-};
-#endif  // !JITIFY_LINK_NVRTC_STATIC
-
-}  // namespace detail
-
 class LibNvrtc
 #if !JITIFY_LINK_NVRTC_STATIC
     : public detail::DynamicLibrary
@@ -2208,6 +2330,8 @@ class LibNvrtc
 #endif  // !JITIFY_LINK_NVRTC_STATIC
   }
 
+#define JITIFY_STR_IMPL(x) #x
+#define JITIFY_STR(x) JITIFY_STR_IMPL(x)
 #if JITIFY_LINK_NVRTC_STATIC
   operator bool() { return true; }
   const std::string& error() const {
@@ -2219,11 +2343,11 @@ class LibNvrtc
     return &nvrtc##name;                                          \
   }
 #else  // dynamic linking
-#define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)       \
-  detail::function_type<result_type, __VA_ARGS__>* name() const { \
-    static const auto func =                                      \
-        this->function<result_type, __VA_ARGS__>("nvrtc" #name);  \
-    return func;                                                  \
+#define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)                \
+  detail::SafeFunction<result_type, __VA_ARGS__> name() const {            \
+    static const auto func =                                               \
+        this->function<result_type, __VA_ARGS__>(JITIFY_STR(nvrtc##name)); \
+    return func;                                                           \
   }
 #endif
   JITIFY_DEFINE_NVRTC_WRAPPER(AddNameExpression, nvrtcResult, nvrtcProgram,
@@ -2278,6 +2402,8 @@ class LibNvrtc
                               size_t*)
   JITIFY_DEFINE_NVRTC_WRAPPER(Version, nvrtcResult, int*, int*)
 #undef JITIFY_DEFINE_NVRTC_WRAPPER
+#undef JITIFY_STR_IMPL
+#undef JITIFY_STR
 
   // Returns the runtime NVRTC version the same format as CUDA_VERSION.
   int get_version() const {
@@ -2372,11 +2498,11 @@ inline int get_current_device_compute_capability(std::string* error = nullptr) {
   CUdevice device;
   int cc_major, cc_minor;
   CUresult ret;
-  if ((ret = cuCtxGetDevice(&device)) != CUDA_SUCCESS ||
-      (ret = cuDeviceGetAttribute(
+  if ((ret = cuda().CtxGetDevice()(&device)) != CUDA_SUCCESS ||
+      (ret = cuda().DeviceGetAttribute()(
            &cc_major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device)) !=
           CUDA_SUCCESS ||
-      (ret = cuDeviceGetAttribute(
+      (ret = cuda().DeviceGetAttribute()(
            &cc_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device)) !=
           CUDA_SUCCESS) {
     if (error) *error = get_cuda_error_string(ret);
@@ -2416,7 +2542,7 @@ inline int limit_to_supported_compute_capability(int cc,
     cc = std::min(cc, max_supported_arch);
   } else {
     // Ensure that future CUDA versions just work (even if suboptimal).
-    const int cuda_major = std::min(11, CUDA_VERSION / 1000);
+    const int cuda_major = std::min(11, cuda().get_version() / 1000);
     // clang-format off
     switch (cuda_major) {
       case 11: cc = std::min(cc, 80); break; // Ampere
@@ -6152,7 +6278,7 @@ class ProgramCache {
                             StringVec extra_linker_options = {}) {
     // Add the current CUDA context to the key, as modules are context-specific.
     CUcontext context;
-    CUresult cuda_ret = cuCtxGetCurrent(&context);
+    CUresult cuda_ret = cuda().CtxGetCurrent()(&context);
     if (cuda_ret != CUDA_SUCCESS) {
       return LoadedProgram::Error(detail::get_cuda_error_string(cuda_ret));
     }
