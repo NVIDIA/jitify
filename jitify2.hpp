@@ -157,17 +157,19 @@
 
 #if JITIFY_ENABLE_EXCEPTIONS
 #include <stdexcept>
-#define JITIFY_THROW_OR_TERMINATE(msg) throw std::runtime_error(msg)
+#define JITIFY_THROW_OR_TERMINATE(msg) \
+  throw std::runtime_error(std::string("Jitify fatal error: ") + (msg))
 #else
 // TODO: Would std::exit or std::abort be better than std::terminate?
 #include <exception>
-#define JITIFY_THROW_OR_TERMINATE(msg)              \
-  std::cerr << "Fatal error: " << msg << std::endl; \
+#define JITIFY_THROW_OR_TERMINATE(msg)                     \
+  std::cerr << "Jitify fatal error: " << (msg) << std::endl;    \
   std::terminate()
 #endif
 
 #if JITIFY_ENABLE_EXCEPTIONS
-#define JITIFY_THROW_OR_RETURN(msg) throw std::runtime_error(msg)
+#define JITIFY_THROW_OR_RETURN(msg) \
+  throw std::runtime_error(std::string("Jitify error: ") + (msg))
 #else
 #define JITIFY_THROW_OR_RETURN(msg) return msg
 #endif
