@@ -6315,7 +6315,7 @@ class ProgramCache {
                             StringVec extra_linker_options = {}) {
     // Add the current CUDA context to the key, as modules are context-specific.
     CUcontext context;
-    if (!cuda) return LoadedProgram::Error(cuda().error());
+    if (!cuda()) return LoadedProgram::Error(cuda().error());
     CUresult cuda_ret = cuda().CtxGetCurrent()(&context);
     if (cuda_ret != CUDA_SUCCESS) {
       return LoadedProgram::Error(detail::get_cuda_error_string(cuda_ret));
