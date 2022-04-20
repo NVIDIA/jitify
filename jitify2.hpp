@@ -2549,7 +2549,11 @@ inline int limit_to_supported_compute_capability(int cc,
                    cc == 72);   // Xavier
   if (is_tegra) return cc;
 
-  if (nvrtc() && nvrtc().GetSupportedArchs()) {
+  if (!nvrtc()) {
+    if (error) *error = nvrtc().error();
+    return 0;
+  }
+  if (nvrtc().GetSupportedArchs()) {
     static const int max_supported_arch = [] {
       int num_supported_archs;
       nvrtcResult nvrtc_ret =
@@ -2562,21 +2566,17 @@ inline int limit_to_supported_compute_capability(int cc,
     }();
     cc = std::min(cc, max_supported_arch);
   } else {
-    if (!cuda()) {
-      if (error) *error = cuda().error();
-      return 0;
-    }
-    // Ensure that future CUDA versions just work (even if suboptimal).
-    const int cuda_major = std::min(11, cuda().get_version() / 1000);
+    // Cap to ensure that future NVRTC versions just work (even if suboptimal).
+    const int nvrtc_major = std::min(11, nvrtc().get_version() / 1000);
     // clang-format off
-    switch (cuda_major) {
+    switch (nvrtc_major) {
       case 11: cc = std::min(cc, 80); break; // Ampere
       case 10: cc = std::min(cc, 75); break; // Turing
       case  9: cc = std::min(cc, 70); break; // Volta
       case  8: cc = std::min(cc, 61); break; // Pascal
       case  7: cc = std::min(cc, 52); break; // Maxwell
       default:
-        if (error) *error = "Unsupported CUDA version";
+        if (error) *error = "Unsupported NVRTC version";
         return 0;
     }
     // clang-format on
