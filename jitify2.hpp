@@ -1142,7 +1142,8 @@ class DynamicLibrary {
               FORMAT_MESSAGE_IGNORE_INSERTS,
           NULL, error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
           (LPSTR)&buffer, 0, NULL);
-      error_ = std::string(buffer, size);
+      error_ = "Failed to open " + std::string(name) + ": " +
+               std::string(buffer, size);
       ::LocalFree(buffer);
       return false;
     }
@@ -1164,6 +1165,7 @@ class DynamicLibrary {
 
   template <typename ResultType, typename... Args>
   SafeFunction<ResultType, Args...> function(const char* func_name) const {
+    if (!*this) JITIFY_THROW_OR_TERMINATE(error());
     auto* func =
 #if defined(_WIN32) || defined(_WIN64)
         ::GetProcAddress(lib_.get(), func_name);
@@ -1289,7 +1291,9 @@ inline std::string get_cuda_error_string(CUresult ret) {
 class Kernel;
 
 struct CudaModuleDestructor {
-  void operator()(CUmodule module) const { cuda().ModuleUnload()(module); }
+  void operator()(CUmodule module) const {
+    if (module) cuda().ModuleUnload()(module);
+  }
 };
 using UniqueCudaModule =
     std::unique_ptr<std::remove_pointer<CUmodule>::type, CudaModuleDestructor>;
@@ -1359,6 +1363,7 @@ class LoadedProgramData {
     if (iter != lowered_name_map().end()) {
       symbol_name = iter->second;  // Replace name with lowered name.
     }
+    if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
         cuda().ModuleGetGlobal()(ptr, size, module(), symbol_name.c_str()));
     return {};
@@ -1486,6 +1491,7 @@ class KernelData {
    *    when using this from multiple threads.
    */
   ErrorMsg set_attribute(CUfunction_attribute attribute, int value) const {
+    if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
         cuda().FuncSetAttribute()(function_, attribute, value));
     return {};
@@ -1497,6 +1503,7 @@ class KernelData {
    *  \return An empty string on success, otherwise an error message.
    */
   ErrorMsg get_attribute(CUfunction_attribute attribute, int* value) const {
+    if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
         cuda().FuncGetAttribute()(value, attribute, function_));
     return {};
@@ -1555,6 +1562,7 @@ inline Kernel Kernel::get_kernel(LoadedProgramData program, std::string name) {
     name = iter->second;  // Replace name with lowered name.
   }
   CUfunction function;
+  if (!cuda()) return Error(cuda().error());
   CUresult ret =
       cuda().ModuleGetFunction()(&function, program.module(), name.c_str());
   if (ret != CUDA_SUCCESS) {
@@ -1606,6 +1614,7 @@ class ConfiguredKernelData {
    *  \return An empty string on success, otherwise an error message.
    */
   ErrorMsg launch(void** arg_ptrs) const {
+    if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
         kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
         block_.z, shared_memory_bytes_, stream_, arg_ptrs, nullptr));
@@ -1679,6 +1688,7 @@ inline ConfiguredKernel ConfiguredKernel::configure_1d_max_occupancy(
     CUoccupancyB2DSize shared_memory_bytes_callback, CUstream stream,
     unsigned int flags) {
   int grid, block;
+  if (!cuda()) return Error(cuda().error());
   CUresult ret = cuda().OccupancyMaxPotentialBlockSizeWithFlags()(
       &grid, &block, kernel.function(), shared_memory_bytes_callback,
       shared_memory_bytes, max_block_size, flags);
@@ -1707,6 +1717,7 @@ class LoadedProgram
 inline LoadedProgram LoadedProgram::load(StringRef cubin,
                                          StringMap lowered_name_map) {
   CUmodule module;
+  if (!cuda()) return Error(cuda().error());
   CUresult ret = cuda().ModuleLoadData()(&module, cubin.data());
   if (ret != CUDA_SUCCESS) {
     return Error("Loading failed: " + detail::get_cuda_error_string(ret));
@@ -2052,6 +2063,11 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
     }
   };
 
+  if (!cuda()) {
+    if (error) *error = cuda().error();
+    return false;
+  }
+
   CUlinkState culink_state;
   JITIFY_CHECK_CULINK(cuda().LinkCreate()((unsigned)option_keys.size(),
                                           option_keys.data(),
@@ -2237,6 +2253,7 @@ inline LinkedProgram LinkedProgram::link(
   std::vector<CUjitInputType> program_types;
   programs.reserve(num_programs);
   program_types.reserve(num_programs);
+  if (!cuda()) return Error(cuda().error());
   for (size_t i = 0; i < num_programs; ++i) {
     const CompiledProgramData& compiled_program = *compiled_programs[i];
     if (std::min(CUDA_VERSION, cuda().get_version()) < 11040 &&
@@ -2498,6 +2515,10 @@ inline int get_current_device_compute_capability(std::string* error = nullptr) {
   CUdevice device;
   int cc_major, cc_minor;
   CUresult ret;
+  if (!cuda()) {
+    if (error) *error = cuda().error();
+    return 0;
+  }
   if ((ret = cuda().CtxGetDevice()(&device)) != CUDA_SUCCESS ||
       (ret = cuda().DeviceGetAttribute()(
            &cc_major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device)) !=
@@ -2541,6 +2562,10 @@ inline int limit_to_supported_compute_capability(int cc,
     }();
     cc = std::min(cc, max_supported_arch);
   } else {
+    if (!cuda()) {
+      if (error) *error = cuda().error();
+      return 0;
+    }
     // Ensure that future CUDA versions just work (even if suboptimal).
     const int cuda_major = std::min(11, cuda().get_version() / 1000);
     // clang-format off
@@ -6290,6 +6315,7 @@ class ProgramCache {
                             StringVec extra_linker_options = {}) {
     // Add the current CUDA context to the key, as modules are context-specific.
     CUcontext context;
+    if (!cuda) return LoadedProgram::Error(cuda().error());
     CUresult cuda_ret = cuda().CtxGetCurrent()(&context);
     if (cuda_ret != CUDA_SUCCESS) {
       return LoadedProgram::Error(detail::get_cuda_error_string(cuda_ret));
