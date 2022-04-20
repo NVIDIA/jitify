@@ -5655,7 +5655,7 @@ inline bool make_directory(const char* path,
   bool is_dir;
   if (path_exists(path, &is_dir)) return is_dir;
 #if defined _WIN32 || defined _WIN64
-  return ::mkdir(path) == 0 || errno == EEXIST;
+  return ::_mkdir(path) == 0 || errno == EEXIST;
 #else
   return ::mkdir(path, mode) == 0 || errno == EEXIST;
 #endif
