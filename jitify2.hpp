@@ -5500,9 +5500,21 @@ class NewFile {
   std::string error_ = "Success";
 
   std::string get_error_msg(bool success, const std::string& operation) const {
+    char error_buf[256];
+    const char* error_str = error_buf;
+#if defined _WIN32 || defined _WIN64
+    ::strerror_s(error_buf, sizeof(error_buf), errno);
+#else
+    // See here for why this is necessary:
+    // http://www.club.cc.cmu.edu/~cmccabe/blog_strerror.html
+#if !((_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600) && !_GNU_SOURCE)
+    error_str =
+#endif
+        ::strerror_r(errno, error_buf, sizeof(error_buf));
+#endif
     return success ? "Success"
                    : "Failed to " + operation + " " + filename_ + ": (" +
-                         std::to_string(errno) + ") " + ::strerror(errno);
+                         std::to_string(errno) + ") " + error_str;
   }
 
  public:
