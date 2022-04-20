@@ -601,7 +601,7 @@ TEST(Jitify2Test, PathJoin) {
   EXPECT_EQ(jitify2::detail::path_join("foo/bar/", "2/1"), "foo/bar/2/1");
   EXPECT_EQ(jitify2::detail::path_join("foo/bar", "/2/1"), "");
 #if defined _WIN32 || defined _WIN64
-  EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "2\\1"), "foo\\bar\\2\\1");
+  EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "2\\1"), "foo\\bar/2\\1");
   EXPECT_EQ(jitify2::detail::path_join("foo\\bar\\", "2\\1"), "foo\\bar\\2\\1");
   EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "\\2\\1"), "");
 #endif
