@@ -7,7 +7,7 @@ set (CMAKE_CUDA_STANDARD 11)  # Doesn't work?
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ")
 if (MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} /O2")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
 else()
   set(CMAKE_CXX_FLAGS
       "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra -Wconversion -Wshadow")
@@ -20,7 +20,7 @@ if (MSVC)
   set(CMAKE_CUDA_FLAGS
     "${CMAKE_CUDA_FLAGS} -Xcompiler=\"/WX\" -rdc=true")
   set(CMAKE_CUDA_FLAGS_RELEASE
-    "${CMAKE_CUDA_FLAGS_RELEASE} /O2")
+    "${CMAKE_CUDA_FLAGS_RELEASE} -O3 -Xcompiler=\"/O2\"")
 else()
   set(CMAKE_CUDA_FLAGS
     "${CMAKE_CUDA_FLAGS} -Xcompiler=\"-Wall -Wextra -Wconversion -Wshadow\" -O3 -rdc=true")
@@ -119,7 +119,7 @@ foreach(test ${TESTS})
   target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
   # Ensure the main jitify header can be found.
   target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(${test} cuda gtest_main)
+  target_link_libraries(${test} gtest_main)
   set_property(TARGET ${test} PROPERTY CUDA_ARCHITECTURES OFF)
   if (NOT WIN32)
     target_link_libraries(${test} ${CMAKE_DL_LIBS})

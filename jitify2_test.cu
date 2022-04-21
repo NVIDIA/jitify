@@ -45,7 +45,7 @@
     CUresult status = call;                                               \
     if (status != CUDA_SUCCESS) {                                         \
       const char* str;                                                    \
-      cuGetErrorName(status, &str);                                       \
+      cuda().GetErrorName()(status, &str);                                \
       std::cout << "(CUDA) returned " << str;                             \
       std::cout << " (" << __FILE__ << ":" << __LINE__ << ":" << __func__ \
                 << "())" << std::endl;                                    \
@@ -281,8 +281,8 @@ __global__ void my_kernel(const T*, U*) {}
   for (int i = 0; i < nrep; ++i) {
     // Benchmark direct kernel launch.
     auto t0 = std::chrono::steady_clock::now();
-    cuLaunchKernel(kernel->function(), grid.x, grid.y, grid.z, block.x, block.y,
-                   block.z, 0, 0, arg_ptrs, nullptr);
+    cuda().LaunchKernel()(kernel->function(), grid.x, grid.y, grid.z, block.x,
+                          block.y, block.z, 0, 0, arg_ptrs, nullptr);
     auto dt = std::chrono::steady_clock::now() - t0;
     // Using the minimum is more robust than the average (though this test still
     // remains sensitive to the system environment and has been observed to fail
@@ -601,7 +601,7 @@ TEST(Jitify2Test, PathJoin) {
   EXPECT_EQ(jitify2::detail::path_join("foo/bar/", "2/1"), "foo/bar/2/1");
   EXPECT_EQ(jitify2::detail::path_join("foo/bar", "/2/1"), "");
 #if defined _WIN32 || defined _WIN64
-  EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "2\\1"), "foo\\bar\\2\\1");
+  EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "2\\1"), "foo\\bar/2\\1");
   EXPECT_EQ(jitify2::detail::path_join("foo\\bar\\", "2\\1"), "foo\\bar\\2\\1");
   EXPECT_EQ(jitify2::detail::path_join("foo\\bar", "\\2\\1"), "");
 #endif
@@ -811,6 +811,7 @@ TEST(Jitify2Test, InvalidPrograms) {
   EXPECT_NE(get_error(Program("bad_program", "NOT CUDA C!")->preprocess()), "");
 }
 
+#if CUDA_VERSION >= 11040
 TEST(Jitify2Test, CompileLTO_NVVM) {
   static const char* const source = R"(
 const int arch = __CUDA_ARCH__ / 10;
@@ -828,6 +829,7 @@ const int arch = __CUDA_ARCH__ / 10;
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 }
+#endif  // CUDA_VERSION >= 11040
 
 TEST(Jitify2Test, LinkMultiplePrograms) {
   static const char* const source1 = R"(
@@ -868,6 +870,7 @@ __global__ void my_kernel(int* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+#if CUDA_VERSION >= 11040
 TEST(Jitify2Test, LinkLTO) {
   static const char* const source1 = R"(
 __constant__ int c = 5;
@@ -910,6 +913,7 @@ __global__ void my_kernel(int* data) {
   EXPECT_EQ(h_data, 26);
   CHECK_CUDART(cudaFree(d_data));
 }
+#endif  // CUDA_VERSION >= 11040
 
 TEST(Jitify2Test, LinkExternalFiles) {
   static const char* const source1 = R"(
@@ -1078,9 +1082,9 @@ __global__ void set_attribute_kernel(int* out, int* in) {
 
   // Query the maximum supported shared bytes per block.
   CUdevice device;
-  CHECK_CUDA(cuDeviceGet(&device, 0));
+  CHECK_CUDA(cuda().DeviceGet()(&device, 0));
   int shared_bytes;
-  CHECK_CUDA(cuDeviceGetAttribute(
+  CHECK_CUDA(cuda().DeviceGetAttribute()(
       &shared_bytes, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
       device));
 
