@@ -3442,9 +3442,11 @@ JITIFY_DEFINE_C_AND_CXX_HEADERS(limits, R"(
 #define SCHAR_MIN   (-128)
 #define SCHAR_MAX   127
 #define UCHAR_MAX   255
-#define _JITIFY_CHAR_IS_UNSIGNED ((char)-1 >= 0)
-#define CHAR_MIN    (_JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN)
-#define CHAR_MAX    (_JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX)
+enum {
+    _JITIFY_CHAR_IS_UNSIGNED = ((char)-1 >= 0),
+    CHAR_MIN = (_JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN),
+    CHAR_MAX = (_JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX),
+};
 #define SHRT_MIN    (-SHRT_MAX - 1)
 #define SHRT_MAX    0x7fff
 #define USHRT_MAX   0xffff
