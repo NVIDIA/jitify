@@ -954,6 +954,41 @@ TEST(JitifyTest, BuiltinNumericLimitsHeader) {
   }
 }
 
+static const char* const builtin_numeric_cuda_std_limits_program_source =
+    "builtin_numeric_cuda_std_limits_program\n"
+    "#include <climits>\n"
+    "#include <limits>\n"
+    "#include <cuda/std/climits>\n" // test fails without this explicit include
+    "#include <cuda/std/limits>\n"
+    "struct MyType {};\n"
+    "namespace cuda {\n"
+    "namespace std {\n"
+    "template<> class numeric_limits<MyType> {\n"
+    " public:\n"
+    "  static MyType min() { return {}; }\n"
+    "  static MyType max() { return {}; }\n"
+    "};\n"
+    "}  // namespace std\n"
+    "}  // namespace cuda\n"
+    "template <typename T>\n"
+    "__global__ void my_kernel(T* data) {\n"
+    "  data[0] = cuda::std::numeric_limits<T>::min();\n"
+    "  data[1] = cuda::std::numeric_limits<T>::max();\n"
+    "}\n";
+
+TEST(JitifyTest, BuiltinNumericCudaStdLimitsHeader) {
+  cudaFree(0);
+  using namespace jitify::experimental;
+  auto program = Program(builtin_numeric_cuda_std_limits_program_source,
+                         {}, {"-I" CUDA_INC_DIR});
+  for (const auto& type :
+       {"float", "double", "char", "signed char", "unsigned char", "short",
+        "unsigned short", "int", "unsigned int", "long", "unsigned long",
+        "long long", "unsigned long long", "MyType"}) {
+    program.kernel("my_kernel").instantiate({type});
+  }
+}
+
 TEST(JitifyTest, ClassKernelArg) {
   using jitify::reflection::Type;
   thread_local static jitify::JitCache kernel_cache;
