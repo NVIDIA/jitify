@@ -52,6 +52,10 @@ jitify_example: jitify_example.cpp $(HEADERS)
 stringify: stringify.cpp
 	$(CXX) -o $@ $< -O3 -Wall
 
+nvrtc_cli: nvrtc_cli.cpp
+	$(CXX) -o $@ $< -O3 -Wall -Wextra -std=c++11 -I$(CUDA_INC_DIR) -L$(CUDA_LIB_DIR) -lnvrtc
+	bash nvrtc_cli_test.sh
+
 get-deps:
 	sudo apt-get update
 	# CMake is needed to build gtest.
