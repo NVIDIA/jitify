@@ -3431,7 +3431,7 @@ JITIFY_DEFINE_C_AND_CXX_HEADERS(limits, R"(
 #if defined _WIN32 || defined _WIN64
  #define __WORDSIZE 32
 #else
- #if defined __x86_64__ && !defined __ILP32__
+ #if defined(__LP64__) || (defined __x86_64__ && !defined __ILP32__)
   #define __WORDSIZE 64
  #else
   #define __WORDSIZE 32
@@ -3442,29 +3442,31 @@ JITIFY_DEFINE_C_AND_CXX_HEADERS(limits, R"(
 #define SCHAR_MIN   (-128)
 #define SCHAR_MAX   127
 #define UCHAR_MAX   255
-#define _JITIFY_CHAR_IS_UNSIGNED ((char)-1 >= 0)
-#define CHAR_MIN    (_JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN)
-#define CHAR_MAX    (_JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX)
-#define SHRT_MIN    (-32768)
-#define SHRT_MAX    32767
-#define USHRT_MAX   65535
+enum {
+    _JITIFY_CHAR_IS_UNSIGNED = ((char)-1 >= 0),
+    CHAR_MIN = (_JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN),
+    CHAR_MAX = (_JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX),
+};
+#define SHRT_MIN    (-SHRT_MAX - 1)
+#define SHRT_MAX    0x7fff
+#define USHRT_MAX   0xffff
 #define INT_MIN     (-INT_MAX - 1)
-#define INT_MAX     2147483647
-#define UINT_MAX    4294967295U
+#define INT_MAX     0x7fffffff
+#define UINT_MAX    0xffffffff
 #if __WORDSIZE == 64
- # define LONG_MAX  9223372036854775807L
+ # define LONG_MAX  LLONG_MAX
 #else
- # define LONG_MAX  2147483647L
+ # define LONG_MAX  UINT_MAX
 #endif
-#define LONG_MIN    (-LONG_MAX - 1L)
+#define LONG_MIN    (-LONG_MAX - 1)
 #if __WORDSIZE == 64
- #define ULONG_MAX  18446744073709551615UL
+ #define ULONG_MAX  ULLONG_MAX
 #else
- #define ULONG_MAX  4294967295UL
+ #define ULONG_MAX  UINT_MAX
 #endif
-#define LLONG_MAX  9223372036854775807LL
-#define LLONG_MIN  (-LLONG_MAX - 1LL)
-#define ULLONG_MAX 18446744073709551615ULL
+#define LLONG_MAX  0x7fffffffffffffff
+#define LLONG_MIN  (-LLONG_MAX - 1)
+#define ULLONG_MAX 0xffffffffffffffff
 )",
                                 "");
 
@@ -4171,6 +4173,10 @@ template <>
 struct is_floating_point<double> : true_type {};
 template <>
 struct is_floating_point<long double> : true_type {};
+#if __cplusplus >= 201703L
+template<typename T> inline constexpr bool is_floating_point_v = is_floating_point<T>::value;
+#endif  // __cplusplus >= 201703L
+
 
 template <class T>
 struct is_integral : false_type {};
@@ -4198,6 +4204,9 @@ template <>
 struct is_integral<long long> : true_type {};
 template <>
 struct is_integral<unsigned long long> : true_type {};
+#if __cplusplus >= 201703L
+template<typename T> inline constexpr bool is_integral_v = is_integral<T>::value;
+#endif  // __cplusplus >= 201703L
 
 template <typename T>
 struct is_signed : false_type {};
@@ -4235,6 +4244,9 @@ template <typename T, typename U>
 struct is_same : false_type {};
 template <typename T>
 struct is_same<T, T> : true_type {};
+#if __cplusplus >= 201703L
+template<typename T, typename U> inline constexpr bool is_same_v = is_same<T, U>::value;
+#endif  // __cplusplus >= 201703L
 
 template <class T>
 struct is_array : false_type {};
@@ -4258,6 +4270,20 @@ struct result_of<F(Args...)> {
   // TODO: This is a hack; a proper implem is quite complicated.
   typedef typename F::result_type type;
 };
+
+template<class T> struct is_pointer                    : false_type {};
+template<class T> struct is_pointer<T*>                : true_type {};
+template<class T> struct is_pointer<T* const>          : true_type {};
+template<class T> struct is_pointer<T* volatile>       : true_type {};
+template<class T> struct is_pointer<T* const volatile> : true_type {};
+#if __cplusplus >= 201703L
+template< class T > inline constexpr bool is_pointer_v = is_pointer<T>::value;
+#endif  // __cplusplus >= 201703L
+template <class T> struct remove_pointer { typedef T type; };
+template <class T> struct remove_pointer<T*> { typedef T type; };
+template <class T> struct remove_pointer<T* const> { typedef T type; };
+template <class T> struct remove_pointer<T* volatile> { typedef T type; };
+template <class T> struct remove_pointer<T* const volatile> { typedef T type; };
 
 template <class T>
 struct remove_reference {
@@ -4386,6 +4412,13 @@ struct integral_constant {
   constexpr value_type operator()() const noexcept { return value; }
 #endif
 };
+
+template<typename T> struct is_arithmetic :
+std::integral_constant<bool, std::is_integral<T>::value ||
+                             std::is_floating_point<T>::value> {};
+#if __cplusplus >= 201703L
+template<typename T> inline constexpr bool is_arithmetic_v = is_arithmetic<T>::value;
+#endif  // __cplusplus >= 201703L
 
 template <class T>
 struct is_lvalue_reference : false_type {};
