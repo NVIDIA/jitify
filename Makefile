@@ -39,7 +39,7 @@ HEADERS = jitify.hpp \
           example_headers/my_header1.cuh.jit \
           example_headers/my_header2.cuh
 
-all: jitify_example
+all: jitify_example jitify_test nvrtc_cli
 
 JITIFY_EXAMPLE_DEFINES = -DCUDA_INC_DIR="\"$(CUDA_INC_DIR)\""
 
