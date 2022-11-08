@@ -2815,18 +2815,21 @@ inline void find_lowered_global_variables(StringRef ptx,
   }
 }
 
+inline bool ptx_remove_unused_globals(std::string* ptx);  // Defined below
+
 // Returns false on error.
 // Sets *error on failure if provided.
 // Sets *log if provided.
 // Sets *ptx on success if provided.
-// Adds one entry to *lowered_name_map for each entry in name_expressions.
+// Adds one entry to *lowered_name_map for each entry in name_expressions as
+//   well as any global definitions found in the generated PTX.
 inline bool compile_program(
     const std::string& name, const std::string& source,
     const StringMap& header_sources, const StringVec& options,
     std::string* error = nullptr, std::string* log = nullptr,
     std::string* ptx = nullptr, std::string* cubin = nullptr,
     std::string* nvvm = nullptr, const StringVec& name_expressions = {},
-    StringMap* lowered_name_map = nullptr) {
+    StringMap* lowered_name_map = nullptr, bool remove_unused_globals = false) {
   if (!nvrtc()) {
     if (error) *error = nvrtc().error();
     return false;
@@ -2900,6 +2903,9 @@ inline bool compile_program(
       // to include its own.
       ptx->resize(ptx_size - 1);
       JITIFY_CHECK_NVRTC(nvrtc().GetPTX()(nvrtc_program, &(*ptx)[0]));
+      if (remove_unused_globals) {
+        ptx_remove_unused_globals(ptx);  // Ignores errors from this
+      }
     }
   }
 
@@ -3110,7 +3116,8 @@ inline CompiledProgram CompiledProgram::compile(
   StringMap lowered_name_map;
   if (!detail::compile_program(name, source, header_sources, compiler_options,
                                &error, &log, &ptx, &cubin, &nvvm,
-                               name_expressions, &lowered_name_map)) {
+                               name_expressions, &lowered_name_map,
+                               should_remove_unused_globals)) {
     std::string options_str = detail::string_join(
         compiler_options, " ", "Compiler options: \"", "\"\n");
     std::vector<std::string> header_names;
@@ -3123,9 +3130,6 @@ inline CompiledProgram CompiledProgram::compile(
         detail::string_join(header_names, "\n  ", "Header names:\n  ", "\n");
     return Error("Compilation failed: " + error + "\n" + options_str +
                  headers_str + "\n" + log);
-  }
-  if (!ptx.empty() && should_remove_unused_globals) {
-    detail::ptx_remove_unused_globals(&ptx);  // Ignores errors from this
   }
 
   // We copy certain compiler options to linker_options so that they are used if
