@@ -2980,12 +2980,15 @@ inline StringVec split_string(std::string str, long maxsplit = -1,
 }
 
 inline bool ptx_parse_decl_name(const std::string& line, std::string* name) {
-  size_t name_end = line.find_first_of("[;");
+  size_t name_end = line.find_first_of("[;=");
   if (name_end == std::string::npos) {
     // Failed to parse .global/.const declaration in PTX: expected a semicolon.
     return false;
   }
-  size_t name_start_minus1 = line.find_last_of(" \t", name_end);
+  if (line[name_end] == '=') {
+    --name_end;  // Remove space before '=' symbol
+  }
+  size_t name_start_minus1 = line.find_last_of(" \t", name_end - 1);
   if (name_start_minus1 == std::string::npos) {
     // Failed to parse .global/.const declaration in PTX: expected whitespace.
     return false;

@@ -1110,15 +1110,24 @@ struct Bar { int a; double b; };
 __device__ float used_scalar;
 __device__ float used_array[2];
 __device__ Bar used_struct;
+__device__ int used_scalar_init = 3;
+__device__ int used_array_init[] = {4, 5};
+__device__ Bar used_struct_init = {6, 0.0};
 __device__ float unused_scalar;
 __device__ float unused_array[3];
 __device__ Bar unused_struct;
+__device__ int unused_scalar_init = 3;
+__device__ int unused_array_init[] = {4, 5};
+__device__ Bar unused_struct_init = {6, 0.0};
 __device__ float reg, ret, bra;  // Tricky name
 __global__ void foo_kernel(int* data) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
   used_scalar = 1.f;
   used_array[1] = 2.f;
   used_struct.b = 3.f;
+  used_scalar_init = 1;
+  used_array_init[1] = 2;
+  used_struct_init.b = 3.f;
   __syncthreads();
   *data += Foo::value + used_scalar + used_array[1] + used_struct.b;
   // printf produces global symbols named $str.
@@ -1138,10 +1147,20 @@ __global__ void foo_kernel(int* data) {
               std::string::npos);
   EXPECT_TRUE(ptx.find(".global .align 8 .b8 used_struct[16];") !=
               std::string::npos);
+  EXPECT_TRUE(ptx.find(".global .align 4 .u32 used_scalar_init = 3;") !=
+              std::string::npos);
+  EXPECT_TRUE(ptx.find(".global .align 4 .b8 used_array_init[8] = {4, 0, 0, 0, "
+                       "5, 0, 0, 0};") != std::string::npos);
+  EXPECT_TRUE(ptx.find(".global .align 8 .b8 used_struct_init[16] = {6, 0, 0, "
+                       "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};") !=
+              std::string::npos);
   EXPECT_FALSE(ptx.find("_ZN3Foo5valueE") != std::string::npos);
   EXPECT_FALSE(ptx.find("unused_scalar;") != std::string::npos);
   EXPECT_FALSE(ptx.find("unused_array;") != std::string::npos);
   EXPECT_FALSE(ptx.find("unused_struct;") != std::string::npos);
+  EXPECT_FALSE(ptx.find("unused_scalar_init;") != std::string::npos);
+  EXPECT_FALSE(ptx.find("unused_array_init;") != std::string::npos);
+  EXPECT_FALSE(ptx.find("unused_struct_init;") != std::string::npos);
   EXPECT_FALSE(ptx.find(".global .align 4 .f32 reg;") != std::string::npos);
   EXPECT_FALSE(ptx.find(".global .align 4 .f32 ret;") != std::string::npos);
   EXPECT_FALSE(ptx.find(".global .align 4 .f32 bra;") != std::string::npos);
