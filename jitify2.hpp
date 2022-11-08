@@ -3681,19 +3681,27 @@ typedef unsigned long uintptr_t;  // optional
 #endif
 )");
 
-JITIFY_DEFINE_C_AND_CXX_HEADERS(stdio, "#include <cstddef>", R"(
+JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(stdio, "#include <cstddef>", R"(
 using FILE = int;
 int fflush(FILE* stream);
 int fprintf(FILE* stream, const char* format, ...);
+)",
+                                   R"(
+// NVRTC provides a built-in definition of ::size_t.
+using ::size_t;
 )");
 
 JITIFY_DEFINE_C_AND_CXX_HEADERS(stdlib, "#include <cstddef>", "");
 
-JITIFY_DEFINE_C_AND_CXX_HEADERS(string, "", R"(
+JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(string, "", R"(
 //#include <cstddef>
 char* strcpy(char* destination, const char* source);
 int strcmp(const char* str1, const char* str2);
 char* strerror(int errnum);
+)",
+                                   R"(
+// NVRTC provides a built-in definition of ::size_t.
+using ::size_t;
 )");
 
 JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(time, R"(
