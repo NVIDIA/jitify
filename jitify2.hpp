@@ -2175,8 +2175,14 @@ class CompiledProgramData
   /*! Get the NVVM IR of the compiled program.
    * \note The NVVM is only available here with NVRTC version >= 11.4 and the
    * "-dlto" compiler option.
+   * \deprecated Use lto_ir() instead.
    */
   const std::string& nvvm() const { return nvvm_; }
+  /*! Get the Link-Time Optimization (LTO) IR of the compiled program.
+   * \note The LTO IR is only available here with NVRTC version >= 11.4 and the
+   * "-dlto" compiler option.
+   */
+  const std::string& lto_ir() const { return nvvm_; }
   /*! Get the map of name expressions to lowered (mangled) symbol names. */
   const StringMap& lowered_name_map() const { return lowered_name_map_; }
   /*! Get the remaining options that will be passed on to the compiler. */
@@ -2358,13 +2364,17 @@ class LibNvrtc
     static std::string err;
     return err;
   }
-#define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)       \
-  detail::function_type<result_type, __VA_ARGS__>* name() const { \
-    return &nvrtc##name;                                          \
+  template <typename ResultType, typename... Args>
+  using wrapped_function_type = detail::function_type<ResultType, Args...>*;
+#define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)      \
+  wrapped_function_type<result_type, __VA_ARGS__> name() const { \
+    return &nvrtc##name;                                         \
   }
 #else  // dynamic linking
+  template <typename ResultType, typename... Args>
+  using wrapped_function_type = detail::SafeFunction<ResultType, Args...>;
 #define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)                \
-  detail::SafeFunction<result_type, __VA_ARGS__> name() const {            \
+  wrapped_function_type<result_type, __VA_ARGS__> name() const {           \
     static const auto func =                                               \
         this->function<result_type, __VA_ARGS__>(JITIFY_STR(nvrtc##name)); \
     return func;                                                           \
@@ -2410,9 +2420,18 @@ class LibNvrtc
   detail::function_type<nvrtcResult, nvrtcProgram, size_t*>* GetNVVMSize() {
     return nullptr;
   }
-#else
+#elif CUDA_VERSION < 12000
   JITIFY_DEFINE_NVRTC_WRAPPER(GetNVVM, nvrtcResult, nvrtcProgram, char*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetNVVMSize, nvrtcResult, nvrtcProgram, size_t*)
+#else  // CUDA_VERSION >= 12000
+  wrapped_function_type<nvrtcResult, nvrtcProgram, char*> GetNVVM() {
+    return GetLTOIR();
+  }
+  wrapped_function_type<nvrtcResult, nvrtcProgram, size_t*> GetNVVMSize() {
+    return GetLTOIRSize();
+  }
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetLTOIR, nvrtcResult, nvrtcProgram, char*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetLTOIRSize, nvrtcResult, nvrtcProgram, size_t*)
 #endif
   JITIFY_DEFINE_NVRTC_WRAPPER(GetErrorString, const char*, nvrtcResult)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetPTX, nvrtcResult, nvrtcProgram, char*)

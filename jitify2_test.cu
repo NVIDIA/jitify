@@ -815,7 +815,7 @@ TEST(Jitify2Test, InvalidPrograms) {
 }
 
 #if CUDA_VERSION >= 11040
-TEST(Jitify2Test, CompileLTO_NVVM) {
+TEST(Jitify2Test, CompileLTO_IR) {
   static const char* const source = R"(
 const int arch = __CUDA_ARCH__ / 10;
 )";
@@ -828,6 +828,7 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_EQ(program->ptx().size(), 0);
   EXPECT_EQ(program->cubin().size(), 0);
   EXPECT_GT(program->nvvm().size(), 0);
+  EXPECT_EQ(program->nvvm().size(), program->lto_ir().size());
   int current_arch = get_current_device_arch();
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
