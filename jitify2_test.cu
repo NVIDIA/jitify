@@ -1383,11 +1383,16 @@ __global__ void my_kernel() {}
 }
 
 TEST(Jitify2Test, Thrust) {
+  // TODO: The need to include cstddef here under CUDA 12.0 may be related to
+  //         the local/system include ambiguity problem in Jitify.
+  // clang-format off
   static const char* const source = R"(
+#include <cuda/std/cstddef>  // WAR for CUDA 12.0 build
 #include <thrust/iterator/counting_iterator.h>
 __global__ void my_kernel(thrust::counting_iterator<int> begin,
                           thrust::counting_iterator<int> end) {
 })";
+  // clang-format on
   // Checks that basic Thrust headers can be compiled.
 #if CUDA_VERSION < 11000
   const char* cppstd = "-std=c++03";
