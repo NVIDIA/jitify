@@ -1200,11 +1200,11 @@ const int arch = __CUDA_ARCH__ / 10;
 
   // Test explicit virtual architecture (compile to PTX).
   // Note: PTX is forwards compatible.
-  program = preprocessed->compile("", {}, {"-arch=compute_35"});
+  program = preprocessed->compile("", {}, {"-arch=compute_50"});
   ASSERT_GT(program->ptx().size(), 0);
   ASSERT_EQ(program->cubin().size(), 0);
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
-  EXPECT_EQ(arch, 35);
+  EXPECT_EQ(arch, 50);
 
   auto expect_cubin_size_if_available = [](size_t cubin_size) {
     if (jitify2::nvrtc().GetCUBIN()) {
@@ -1238,7 +1238,7 @@ const int arch = __CUDA_ARCH__ / 10;
 
   // Test that preprocessing and compilation use separate arch flags.
   program = Program("arch_flags_program", source)
-                ->preprocess({"-arch=sm_35"})
+                ->preprocess({"-arch=sm_50"})
                 ->compile("", {}, {"-arch=sm_."});
   EXPECT_GT(program->ptx().size(), 0);
   expect_cubin_size_if_available(program->cubin().size());
@@ -1247,7 +1247,7 @@ const int arch = __CUDA_ARCH__ / 10;
 
   // Test that multiple architectures can be specified for preprocessing.
   program = Program("arch_flags_program", source)
-                ->preprocess({"-arch=compute_35", "-arch=compute_52",
+                ->preprocess({"-arch=compute_50", "-arch=compute_52",
                               "-arch=compute_61"})
                 ->compile("", {}, {"-arch=compute_."});
   EXPECT_GT(program->ptx().size(), 0);
