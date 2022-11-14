@@ -2042,6 +2042,8 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
   constexpr const long kLogSize = 8192;
   char info_log[kLogSize];
   char error_log[kLogSize];
+  info_log[0] = '\0';
+  error_log[0] = '\0';
   if (log) {
     option_keys.push_back(CU_JIT_INFO_LOG_BUFFER);
     option_vals.push_back((void*)info_log);
