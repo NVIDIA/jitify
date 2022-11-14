@@ -675,7 +675,10 @@ __global__ void my_kernel() {}
   ASSERT_EQ(get_error(program), "");
   PreprocessedProgram preprog = program->preprocess();
   ASSERT_EQ(get_error(preprog), "");
-  CompiledProgram compiled = preprog->compile(instantiation, {}, {}, {"-lfoo"});
+  // TODO: Check that --remove-unused-globals is still needed.
+  // Note: "--remove-unused-globals" is needed to WAR an issue in CUDA 12.0.
+  CompiledProgram compiled = preprog->compile(
+      instantiation, {}, {"--remove-unused-globals"}, {"-lfoo"});
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_NE(compiled->ptx(), "");
   EXPECT_EQ(compiled->lowered_name_map().size(), size_t(1));
