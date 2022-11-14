@@ -1215,8 +1215,8 @@ const int arch = __CUDA_ARCH__ / 10;
   };
 
   // Test explicit real architecture (may compile directly to CUBIN).
-  program = preprocessed->compile("", {},
-                               {"-arch", "sm_" + std::to_string(current_arch)});
+  program = preprocessed->compile(
+      "", {}, {"-arch", "sm_" + std::to_string(current_arch)});
   EXPECT_GT(program->ptx().size(), 0);
   expect_cubin_size_if_available(program->cubin().size());
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
