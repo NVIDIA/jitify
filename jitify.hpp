@@ -2406,6 +2406,18 @@ static const char* jitsafe_header_tuple = R"(
     #if __cplusplus >= 201103L
     namespace std {
     template<class... Types > class tuple;
+
+    template< size_t I, class T >
+    struct tuple_element;
+    // recursive case
+    template< size_t I, class Head, class... Tail >
+    struct tuple_element<I, tuple<Head, Tail...>>
+        : tuple_element<I-1, tuple<Tail...>> { };
+    // base case
+    template< class Head, class... Tail >
+    struct tuple_element<0, tuple<Head, Tail...>> {
+      using type = Head;
+    };
     } // namespace std
     #endif
  )";
