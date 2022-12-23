@@ -678,6 +678,8 @@ inline bool load_source(
       // TODO: Handle block comments (currently they cause a compilation error).
       size_t comment_start = line_after_pragma.find("//");
       std::string pragma_args = line_after_pragma.substr(0, comment_start);
+      // handle quote character used in #pragma expression
+      pragma_args = replace_token(pragma_args, "\"", "\\\"");
       std::string comment = comment_start != std::string::npos
                                 ? line_after_pragma.substr(comment_start)
                                 : "";
