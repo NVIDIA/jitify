@@ -2389,11 +2389,11 @@ class LibNvrtc
   JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBINSize, nvrtcResult, nvrtcProgram, size_t*)
 #endif
 #if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11020
-  detail::function_type<nvrtcResult, nvrtcProgram, int*>*
+  detail::function_type<nvrtcResult, int*>*
   GetNumSupportedArchs() {
     return nullptr;
   }
-  detail::function_type<nvrtcResult, nvrtcProgram, int*>* GetSupportedArchs() {
+  detail::function_type<nvrtcResult, int*>* GetSupportedArchs() {
     return nullptr;
   }
 #else
