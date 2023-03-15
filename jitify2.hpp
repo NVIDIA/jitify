@@ -2253,13 +2253,13 @@ inline LinkedProgram LinkedProgram::link(
   std::vector<CUjitInputType> program_types;
   programs.reserve(num_programs);
   program_types.reserve(num_programs);
-  if (!cuda()) return Error(cuda().error());
   for (size_t i = 0; i < num_programs; ++i) {
     const CompiledProgramData& compiled_program = *compiled_programs[i];
-    if (std::min(CUDA_VERSION, cuda().get_version()) < 11040 &&
-        !compiled_program.nvvm().empty()) {
-      return Error("Linking NVVM IR is not supported with CUDA < 11.4");
-    }
+    if (!compiled_program.nvvm().empty()) {
+      if (!cuda()) return Error(cuda().error());
+      if (std::min(CUDA_VERSION, cuda().get_version()) < 11040) {
+        return Error("Linking NVVM IR is not supported with CUDA < 11.4");
+      }
     const std::string& program = !compiled_program.nvvm().empty()
                                      ? compiled_program.nvvm()
                                      : !compiled_program.cubin().empty()
