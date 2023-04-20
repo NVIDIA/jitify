@@ -81,7 +81,8 @@ endfunction()
 add_executable(jitify2_preprocess jitify2_preprocess.cpp)
 target_include_directories(jitify2_preprocess PRIVATE ${CUDA_INCLUDE_DIRS})
 if (NOT WIN32)
-  target_link_libraries(jitify2_preprocess PRIVATE ${CMAKE_DL_LIBS} pthread)
+  find_package(Threads REQUIRED)
+  target_link_libraries(jitify2_preprocess PRIVATE ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
 endif()
 
 # ----
