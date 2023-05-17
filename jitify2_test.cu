@@ -814,14 +814,12 @@ TEST(Jitify2Test, InvalidPrograms) {
   EXPECT_NE(get_error(Program("bad_program", "NOT CUDA C!")->preprocess()), "");
 }
 
-#if CUDA_VERSION >= 11040
 TEST(Jitify2Test, CompileLTO_IR) {
   static const char* const source = R"(
 const int arch = __CUDA_ARCH__ / 10;
 )";
 
   if (!jitify2::nvrtc().GetNVVM()) return;  // Skip if not supported
-  int arch;
   CompiledProgram program = Program("lto_nvvm_program", source)
                                 ->preprocess({"-rdc=true", "-dlto"})
                                 ->compile("", {}, {"-arch=compute_."});
@@ -830,10 +828,17 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_GT(program->nvvm().size(), 0);
   EXPECT_EQ(program->nvvm().size(), program->lto_ir().size());
   int current_arch = get_current_device_arch();
-  ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
-  EXPECT_EQ(arch, current_arch);
+  LinkedProgram linked_program = program->link();
+  if (CUDA_VERSION < 11040 || CUDA_VERSION >= 12000) {
+    ASSERT_FALSE(linked_program.ok());
+    ASSERT_TRUE(jitify2::detail::startswith(linked_program.error(),
+                                            "Linking LTO IR is not supported"));
+  } else {
+    int arch;
+    ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
+    EXPECT_EQ(arch, current_arch);
+  }
 }
-#endif  // CUDA_VERSION >= 11040
 
 TEST(Jitify2Test, LinkMultiplePrograms) {
   static const char* const source1 = R"(
@@ -874,7 +879,6 @@ __global__ void my_kernel(int* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
-#if CUDA_VERSION >= 11040
 TEST(Jitify2Test, LinkLTO) {
   static const char* const source1 = R"(
 __constant__ int c = 5;
@@ -903,9 +907,14 @@ __global__ void my_kernel(int* data) {
                                  ->compile("my_kernel");
   // TODO: Consider allowing refs not ptrs for programs, and also addding a
   //         get_kernel() shortcut method to LinkedProgram.
-  Kernel kernel = LinkedProgram::link({&program1, &program2})
-                      ->load()
-                      ->get_kernel("my_kernel");
+  LinkedProgram linked_program = LinkedProgram::link({&program1, &program2});
+  if (CUDA_VERSION < 11040 || CUDA_VERSION >= 12000) {
+    ASSERT_FALSE(linked_program.ok());
+    ASSERT_TRUE(jitify2::detail::startswith(linked_program.error(),
+                                            "Linking LTO IR is not supported"));
+    return;
+  }
+  Kernel kernel = linked_program->load()->get_kernel("my_kernel");
   int* d_data;
   CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
   int h_data = 3;
@@ -917,7 +926,6 @@ __global__ void my_kernel(int* data) {
   EXPECT_EQ(h_data, 26);
   CHECK_CUDART(cudaFree(d_data));
 }
-#endif  // CUDA_VERSION >= 11040
 
 TEST(Jitify2Test, LinkExternalFiles) {
   static const char* const source1 = R"(

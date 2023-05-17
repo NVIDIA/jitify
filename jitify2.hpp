@@ -2265,8 +2265,12 @@ inline LinkedProgram LinkedProgram::link(
     const CompiledProgramData& compiled_program = *compiled_programs[i];
     if (!compiled_program.nvvm().empty()) {
       if (!cuda()) return Error(cuda().error());
-      if (std::min(CUDA_VERSION, cuda().get_version()) < 11040) {
-        return Error("Linking NVVM IR is not supported with CUDA < 11.4");
+      const int min_cuda_version = std::min(CUDA_VERSION, cuda().get_version());
+      // TODO: CUDA 12 no longer supports using the cuLink APIs for JIT LTO. We
+      // need to add support using the nvJitLink library instead.
+      if (min_cuda_version < 11040 || CUDA_VERSION >= 12000) {
+        return Error(
+            "Linking LTO IR is not supported with CUDA < 11.4 or >= 12.0");
       }
     }
     const std::string& program = !compiled_program.nvvm().empty()
@@ -2402,8 +2406,7 @@ class LibNvrtc
   JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBINSize, nvrtcResult, nvrtcProgram, size_t*)
 #endif
 #if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11020
-  detail::function_type<nvrtcResult, int*>*
-  GetNumSupportedArchs() {
+  detail::function_type<nvrtcResult, int*>* GetNumSupportedArchs() {
     return nullptr;
   }
   detail::function_type<nvrtcResult, int*>* GetSupportedArchs() {
