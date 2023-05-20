@@ -829,7 +829,7 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_EQ(program->nvvm().size(), program->lto_ir().size());
   int current_arch = get_current_device_arch();
   LinkedProgram linked_program = program->link();
-  if (CUDA_VERSION < 11040 || CUDA_VERSION >= 12000) {
+  if (CUDA_VERSION < 11040) {
     ASSERT_FALSE(linked_program.ok());
     ASSERT_TRUE(jitify2::detail::startswith(linked_program.error(),
                                             "Linking LTO IR is not supported"));
@@ -908,7 +908,7 @@ __global__ void my_kernel(int* data) {
   // TODO: Consider allowing refs not ptrs for programs, and also addding a
   //         get_kernel() shortcut method to LinkedProgram.
   LinkedProgram linked_program = LinkedProgram::link({&program1, &program2});
-  if (CUDA_VERSION < 11040 || CUDA_VERSION >= 12000) {
+  if (CUDA_VERSION < 11040) {
     ASSERT_FALSE(linked_program.ok());
     ASSERT_TRUE(jitify2::detail::startswith(linked_program.error(),
                                             "Linking LTO IR is not supported"));

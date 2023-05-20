@@ -62,6 +62,10 @@
 #include <cuda.h>
 #include <nvrtc.h>
 
+#if CUDA_VERSION >= 12000
+#include <nvJitLink.h>
+#endif
+
 // Default to being thread-safe.
 #ifndef JITIFY_THREAD_SAFE
 #define JITIFY_THREAD_SAFE 1
@@ -70,6 +74,11 @@
 // Default to using dynamic linking of NVRTC.
 #ifndef JITIFY_LINK_NVRTC_STATIC
 #define JITIFY_LINK_NVRTC_STATIC 0
+#endif
+
+// Default to using dynamic linking of nvJitLink.
+#ifndef JITIFY_LINK_NVJITLINK_STATIC
+#define JITIFY_LINK_NVJITLINK_STATIC 0
 #endif
 
 // Default to using dynamic linking of CUDA.
@@ -442,6 +451,8 @@ namespace detail {
 // inline const std::string& to_string(const std::string& s) { return s; }
 // TODO: Double-check that this is OK
 inline StringRef to_string(StringRef s) { return s; }
+
+inline StringSlice to_string(const char& c) { return StringSlice(&c, 1); }
 
 template <class Func, typename... Args>
 inline void for_each(Func function, Args&&... args) {
@@ -1288,6 +1299,140 @@ inline std::string get_cuda_error_string(CUresult ret) {
 
 }  // namespace detail
 
+#if CUDA_VERSION >= 12000
+class LibNvJitLink
+#if !JITIFY_LINK_NVJITLINK_STATIC
+    : public detail::DynamicLibrary
+#endif
+{
+ public:
+  LibNvJitLink() {
+#if !JITIFY_LINK_NVJITLINK_STATIC
+    int compiled_major = CUDA_VERSION / 1000;
+    std::string major_str = std::to_string(compiled_major);
+    // Try to load the major-versioned-only file.
+    std::string libname =
+#if defined(_WIN32) || defined(_WIN64)
+        "nvJitLink_" + major_str + ".dll";
+#else
+        "libnvJitLink.so." + major_str;
+#endif
+    if (!this->open(libname.c_str())) {
+      // Fall back to a brute-force search over minor versions.
+      for (int minor = 9; minor >= 0; --minor) {
+#if defined(_WIN32) || defined(_WIN64)
+        libname = "nvJitLink_" + major_str + std::to_string(minor) + "_0.dll";
+#else
+        libname = "libnvJitLink.so." + major_str + "." + std::to_string(minor);
+#endif
+        if (this->open(libname.c_str())) break;
+      }
+#endif  // !JITIFY_LINK_NVJITLINK_STATIC
+    }
+  }
+
+#define JITIFY_STR_IMPL(x) #x
+#define JITIFY_STR(x) JITIFY_STR_IMPL(x)
+#if JITIFY_LINK_NVJITLINK_STATIC
+  operator bool() { return true; }
+  const std::string& error() const {
+    static std::string err;
+    return err;
+  }
+  template <typename ResultType, typename... Args>
+  using wrapped_function_type = detail::function_type<ResultType, Args...>*;
+#define JITIFY_DEFINE_NVJITLINK_WRAPPER(name, result_type, ...)  \
+  wrapped_function_type<result_type, __VA_ARGS__> name() const { \
+    return &nvJitLink##name;                                     \
+  }
+#else  // dynamic linking
+template <typename ResultType, typename... Args>
+using wrapped_function_type = detail::SafeFunction<ResultType, Args...>;
+#define JITIFY_DEFINE_NVJITLINK_WRAPPER(name, result_type, ...)        \
+  wrapped_function_type<result_type, __VA_ARGS__> name() const {       \
+    static const auto func = this->function<result_type, __VA_ARGS__>( \
+        get_symbol_name(JITIFY_STR(nvJitLink##name)).c_str());         \
+    return func;                                                       \
+  }
+#endif
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(Create, nvJitLinkResult, nvJitLinkHandle*,
+                                  uint32_t, const char**)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(Destroy, nvJitLinkResult, nvJitLinkHandle*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(AddData, nvJitLinkResult, nvJitLinkHandle,
+                                  nvJitLinkInputType, const void*, size_t,
+                                  const char*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(AddFile, nvJitLinkResult, nvJitLinkHandle,
+                                  nvJitLinkInputType, const char*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(Complete, nvJitLinkResult, nvJitLinkHandle)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetLinkedCubinSize, nvJitLinkResult,
+                                  nvJitLinkHandle, size_t*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetLinkedCubin, nvJitLinkResult,
+                                  nvJitLinkHandle, void*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetLinkedPtxSize, nvJitLinkResult,
+                                  nvJitLinkHandle, size_t*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetLinkedPtx, nvJitLinkResult,
+                                  nvJitLinkHandle, char*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetErrorLogSize, nvJitLinkResult,
+                                  nvJitLinkHandle, size_t*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetErrorLog, nvJitLinkResult, nvJitLinkHandle,
+                                  char*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetInfoLogSize, nvJitLinkResult,
+                                  nvJitLinkHandle, size_t*)
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(GetInfoLog, nvJitLinkResult, nvJitLinkHandle,
+                                  char*)
+#undef JITIFY_DEFINE_NVJITLINK_WRAPPER
+#undef JITIFY_STR_IMPL
+#undef JITIFY_STR
+
+  // TODO: Check if an official version of this is added to nvJitLink in future.
+  const char* get_error_string(nvJitLinkResult result) const {
+    // clang-format off
+    switch (result) {
+    case NVJITLINK_SUCCESS: return "NVJITLINK_SUCCESS";
+    case NVJITLINK_ERROR_UNRECOGNIZED_OPTION:
+      return "NVJITLINK_ERROR_UNRECOGNIZED_OPTION";
+    case NVJITLINK_ERROR_MISSING_ARCH: return "NVJITLINK_ERROR_MISSING_ARCH";
+    case NVJITLINK_ERROR_INVALID_INPUT: return "NVJITLINK_ERROR_INVALID_INPUT";
+    case NVJITLINK_ERROR_PTX_COMPILE: return "NVJITLINK_ERROR_PTX_COMPILE";
+    case NVJITLINK_ERROR_NVVM_COMPILE: return "NVJITLINK_ERROR_NVVM_COMPILE";
+    case NVJITLINK_ERROR_INTERNAL: return "NVJITLINK_ERROR_INTERNAL";
+    }
+    // clang-format on
+    return "(unknown nvJitLink error)";
+  }
+
+  nvJitLinkInputType get_input_type(CUjitInputType cuda_input_type) const {
+    // clang-format off
+    switch (cuda_input_type) {
+    case CU_JIT_INPUT_CUBIN: return NVJITLINK_INPUT_CUBIN;
+    case CU_JIT_INPUT_PTX: return NVJITLINK_INPUT_PTX;
+    case CU_JIT_INPUT_FATBINARY: return NVJITLINK_INPUT_FATBIN;
+    case CU_JIT_INPUT_OBJECT: return NVJITLINK_INPUT_OBJECT;
+    case CU_JIT_INPUT_LIBRARY: return NVJITLINK_INPUT_LIBRARY;
+    case CU_JIT_INPUT_NVVM: return NVJITLINK_INPUT_LTOIR;
+    case CU_JIT_NUM_INPUT_TYPES: break; // Avoid compiler warning
+    }
+    // clang-format on
+    return NVJITLINK_INPUT_NONE;  // error
+  }
+
+ private:
+  std::string get_symbol_name(const char* func_name) const {
+    const int compiled_major = CUDA_VERSION / 1000;
+    const int compiled_minor = CUDA_VERSION % 1000 / 10;
+    // We have to "guess" the symbol name because we have no way to obtain them
+    // from the nvJitLink.h header (unlike cuda.h, which uses #define).
+    return detail::string_concat("__", func_name, '_', compiled_major, '_',
+                                 compiled_minor);
+  }
+};
+
+inline LibNvJitLink& nvjitlink() {
+  static LibNvJitLink lib;
+  return lib;
+}
+#endif  // CUDA_VERSION >= 12000
+
 class Kernel;
 
 struct CudaModuleDestructor {
@@ -1877,6 +2022,15 @@ inline std::string path_join(StringRef p1, StringRef p2) {
   return result;
 }
 
+inline bool path_exists(const char* filename, bool* is_dir = nullptr) {
+  struct stat stats;
+  bool ret = ::stat(filename, &stats) == 0;
+#define JITIFY_S_ISDIR(mode) (((mode)&S_IFMT) == S_IFDIR)
+  if (is_dir) *is_dir = JITIFY_S_ISDIR(stats.st_mode);
+#undef JITIFY_S_ISDIR
+  return ret;
+}
+
 inline const char* get_current_executable_path() {
   static const char* path = []() -> const char* {
     static char buffer[JITIFY_PATH_MAX] = {};
@@ -1932,38 +2086,15 @@ inline CUjitInputType get_cuda_jit_input_type(std::string* filename) {
   }
 }
 
-// Note that this appends to *log if it is provided.
-inline bool link_programs(size_t num_programs, const std::string* programs[],
-                          const CUjitInputType program_types[],
-                          const StringVec& options, std::string* error,
-                          std::string* log, std::string* linked_cubin) {
-#define JITIFY_CHECK_CULINK(call)                                 \
-  do {                                                            \
-    CUresult jitify_cuda_ret = call;                              \
-    if (jitify_cuda_ret != CUDA_SUCCESS) {                        \
-      if (error) *error = get_cuda_error_string(jitify_cuda_ret); \
-      set_log();                                                  \
-      return false;                                               \
-    }                                                             \
-  } while (0)
-
-  if (num_programs == 0) {
-    if (error) *error = "Require at least one program to link";
-    return false;
-  }
+#if CUDA_VERSION < 12000
+inline bool link_programs_culink(size_t num_programs,
+                                 const std::string* programs[],
+                                 const CUjitInputType program_types[],
+                                 const OptionsMap& options_map,
+                                 std::string* error, std::string* log,
+                                 std::string* linked_cubin) {
   std::vector<CUjit_option> option_keys;
   std::vector<void*> option_vals;
-  OptionsMap options_map;
-  if (!parse_options(options, &options_map)) {
-    if (error) *error = "Syntax error in linker options";
-    return false;
-  }
-  if (num_programs == 1 && program_types[0] == CU_JIT_INPUT_CUBIN &&
-      !options_map.count("-l")) {
-    // No linking required, just return the given CUBIN.
-    if (linked_cubin) *linked_cubin = *programs[0];
-    return true;
-  }
 #if CUDA_VERSION >= 11040
   for (size_t i = 0; i < num_programs; ++i) {
     if (program_types[i] == CU_JIT_INPUT_NVVM) {
@@ -2065,6 +2196,16 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
     }
   };
 
+#define JITIFY_CHECK_CULINK(call)                                 \
+  do {                                                            \
+    CUresult jitify_cuda_ret = call;                              \
+    if (jitify_cuda_ret != CUDA_SUCCESS) {                        \
+      if (error) *error = get_cuda_error_string(jitify_cuda_ret); \
+      set_log();                                                  \
+      return false;                                               \
+    }                                                             \
+  } while (0)
+
   if (!cuda()) {
     if (error) *error = cuda().error();
     return false;
@@ -2128,6 +2269,215 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
   }
 #undef JITIFY_CHECK_CULINK
   return true;
+}
+#else  // CUDA_VERSION >= 12000
+inline bool link_programs_nvjitlink(size_t num_programs,
+                                    const std::string* programs[],
+                                    const CUjitInputType program_types[],
+                                    const OptionsMap& options_map,
+                                    std::string* error, std::string* log,
+                                    std::string* linked_cubin) {
+  StringVec options;
+#if CUDA_VERSION >= 11040
+  for (size_t i = 0; i < num_programs; ++i) {
+    if (program_types[i] == CU_JIT_INPUT_NVVM) {
+      options.push_back("-lto");
+      break;
+    }
+  }
+#endif
+  StringVec link_files, link_paths;
+  for (const auto& key_val : options_map) {
+    const std::string& key = key_val.first;
+    const StringVec& vals = key_val.second;
+    std::string val = !vals.empty() ? vals.back() : "";
+    // Note: ptxas actually uses "-g" (lowercase), but we use "-G" to be
+    // consistent with NVRTC and NVCC.
+    if (key == "-G" || key == "--device-debug") {
+      options.push_back("-g");
+      // HACK: Can't allow -lineinfo due to ambiguity with "-l<lib>".
+    } else if (/*key == "-lineinfo" ||*/ key == "--generate-line-info") {
+      options.push_back("-lineinfo");
+    } else if (key == "-arch" || key == "--gpu-name") {
+      if (val.substr(0, 3) != "sm_") {
+        if (error) *error = "-arch/--gpu-name value must start with \"sm_\"";
+        return false;
+      }
+      options.push_back("-arch=" + val);
+    } else if (key == "-maxrregcount" || key == "--maxrregcount") {
+      options.push_back("-maxrregcount=" + val);
+    } else if (key == "-O" || key == "--opt-level") {
+      options.push_back("-O" + val);
+    } else if (key == "-v" || key == "--verbose") {
+      options.push_back("-verbose");
+    } else if (key == "-l") {
+      link_files = vals;
+    } else if (key == "-L") {
+      link_paths = vals;
+    } else if (key == "-ftz" || key == "--ftz") {
+      options.push_back("-ftz=1");
+    } else if (key == "-prec-div" || key == "--prec-div") {
+      options.push_back("-prec-div=1");
+    } else if (key == "-prec-sqrt" || key == "--prec-sqrt") {
+      options.push_back("-prec-sqrt=1");
+    } else if (key == "-fmad" || key == "--fmad") {
+      options.push_back("-fma=1");
+    } else if (key == "-use_fast_math" || key == "--use_fast_math") {
+      options.push_back("-ftz=1");
+      options.push_back("-prec-div=1");
+      options.push_back("-prec-sqrt=1");
+      options.push_back("-fma=1");
+    } else if (key == "-Xptxas" || key == "--ptxas-options") {
+      for (const std::string& _val : vals) {
+        options.push_back("-Xptxas=" + _val);
+      }
+    } else if (key == "-Xnvvm" || key == "--nvvm-options") {
+      for (const std::string& _val : vals) {
+        options.push_back("-Xnvvm=" + _val);
+      }
+      // TODO: Work out how we should handle "-optimize-unused-variables", which
+      // sounds like the same thing as our "--remove-unused-globals" support.
+    } else {
+      if (error) *error = "Unknown option: " + key;
+      return false;
+    }
+  }
+
+  std::vector<const char*> options_cstr;
+  options_cstr.reserve(options.size());
+  for (const std::string& option : options) {
+    options_cstr.push_back(option.c_str());
+  }
+
+#define JITIFY_CHECK_NVJITLINK(call)                                          \
+  do {                                                                        \
+    nvJitLinkResult jitify_nvjitlink_ret = call;                              \
+    if (jitify_nvjitlink_ret != NVJITLINK_SUCCESS) {                          \
+      if (error) *error = nvjitlink().get_error_string(jitify_nvjitlink_ret); \
+      return false;                                                           \
+    }                                                                         \
+  } while (0)
+
+  if (!nvjitlink()) {
+    if (error) *error = nvjitlink().error();
+    return false;
+  }
+
+  nvJitLinkHandle nvjitlink_handle;
+  JITIFY_CHECK_NVJITLINK(nvjitlink().Create()(
+      &nvjitlink_handle, (uint32_t)options_cstr.size(), options_cstr.data()));
+  struct ScopedNvJitLinkDestroyer {
+    nvJitLinkHandle& nvjitlink_handle_;
+    ScopedNvJitLinkDestroyer(nvJitLinkHandle& nvjitlink_handle)
+        : nvjitlink_handle_(nvjitlink_handle) {}
+    ~ScopedNvJitLinkDestroyer() { nvjitlink().Destroy()(&nvjitlink_handle_); }
+  } nvjitlink_handle_scope_guard{nvjitlink_handle};
+
+  for (size_t i = 0; i < num_programs; ++i) {
+    JITIFY_CHECK_NVJITLINK(nvjitlink().AddData()(
+        nvjitlink_handle, nvjitlink().get_input_type(program_types[i]),
+        (void*)programs[i]->data(), programs[i]->size(), "jitified_source"));
+  }
+
+  for (std::string link_file : link_files) {
+    CUjitInputType jit_input_type;
+    if (link_file == ".") {
+      // Special case for linking to current executable.
+      link_file = get_current_executable_path();
+      jit_input_type = CU_JIT_INPUT_OBJECT;
+    } else {
+      // Infer based on filename.
+      jit_input_type = get_cuda_jit_input_type(&link_file);
+    }
+    std::string filename = link_file;
+    // WAR for nvjitlinkAddFile crashing when input file doesn't exist.
+    bool found = path_exists(filename.c_str());
+    if (!found) {
+      for (const std::string& link_path : link_paths) {
+        filename = path_join(link_path, link_file);
+        found = path_exists(filename.c_str());
+        if (found) break;
+      }
+    }
+    if (!found) {
+      if (log) {
+        log->append("Linker error: Device library not found: ");
+        log->append(link_file);
+      }
+      if (error) *error = "File not found";
+      return false;
+    }
+    const nvJitLinkResult result = nvjitlink().AddFile()(
+        nvjitlink_handle, nvjitlink().get_input_type(jit_input_type),
+        filename.c_str());
+    if (log && result != NVJITLINK_SUCCESS) {
+      log->append("Linker error: Failed to add file: ");
+      log->append(link_file);
+    }
+    JITIFY_CHECK_NVJITLINK(result);
+  }
+
+  const nvJitLinkResult result = nvjitlink().Complete()(nvjitlink_handle);
+  if (log) {
+    size_t info_log_size;
+    size_t error_log_size;
+    JITIFY_CHECK_NVJITLINK(
+        nvjitlink().GetInfoLogSize()(nvjitlink_handle, &info_log_size));
+    JITIFY_CHECK_NVJITLINK(
+        nvjitlink().GetErrorLogSize()(nvjitlink_handle, &error_log_size));
+    const size_t log_size0 = log->size();
+    log->resize(log_size0 + info_log_size + 1 + error_log_size);
+    JITIFY_CHECK_NVJITLINK(
+        nvjitlink().GetInfoLog()(nvjitlink_handle, &(*log)[0] + log_size0));
+    (*log)[log_size0 + info_log_size] = '\n';
+    JITIFY_CHECK_NVJITLINK(nvjitlink().GetErrorLog()(
+        nvjitlink_handle, &(*log)[0] + log_size0 + info_log_size + 1));
+  }
+  JITIFY_CHECK_NVJITLINK(result);
+  if (linked_cubin) {
+    size_t cubin_size;
+    JITIFY_CHECK_NVJITLINK(
+        nvjitlink().GetLinkedCubinSize()(nvjitlink_handle, &cubin_size));
+    linked_cubin->resize(cubin_size);
+    JITIFY_CHECK_NVJITLINK(
+        nvjitlink().GetLinkedCubin()(nvjitlink_handle, &(*linked_cubin)[0]));
+  }
+#undef JITIFY_CHECK_NVJITLINK
+  return true;
+}
+#endif  // CUDA_VERSION >= 12000
+
+// Note that this appends to *log if it is provided.
+inline bool link_programs(size_t num_programs, const std::string* programs[],
+                          const CUjitInputType program_types[],
+                          const StringVec& options, std::string* error,
+                          std::string* log, std::string* linked_cubin) {
+  if (num_programs == 0) {
+    if (error) *error = "Require at least one program to link";
+    return false;
+  }
+
+  OptionsMap options_map;
+  if (!parse_options(options, &options_map)) {
+    if (error) *error = "Syntax error in linker options";
+    return false;
+  }
+  if (num_programs == 1 && program_types[0] == CU_JIT_INPUT_CUBIN &&
+      !options_map.count("-l")) {
+    // No linking required, just return the given CUBIN.
+    if (linked_cubin) *linked_cubin = *programs[0];
+    return true;
+  }
+
+  const bool result =
+#if CUDA_VERSION < 12000
+      link_programs_culink(num_programs, programs, program_types, options_map,
+                           error, log, linked_cubin);
+#else
+      link_programs_nvjitlink(num_programs, programs, program_types,
+                              options_map, error, log, linked_cubin);
+#endif
+  return result;
 }
 
 }  // namespace detail
@@ -2266,11 +2616,8 @@ inline LinkedProgram LinkedProgram::link(
     if (!compiled_program.nvvm().empty()) {
       if (!cuda()) return Error(cuda().error());
       const int min_cuda_version = std::min(CUDA_VERSION, cuda().get_version());
-      // TODO: CUDA 12 no longer supports using the cuLink APIs for JIT LTO. We
-      // need to add support using the nvJitLink library instead.
-      if (min_cuda_version < 11040 || CUDA_VERSION >= 12000) {
-        return Error(
-            "Linking LTO IR is not supported with CUDA < 11.4 or >= 12.0");
+      if (min_cuda_version < 11040) {
+        return Error("Linking LTO IR is not supported with CUDA < 11.4");
       }
     }
     const std::string& program = !compiled_program.nvvm().empty()
@@ -5580,15 +5927,6 @@ static constexpr const mode_t kDefaultDirectoryMode =
 static constexpr const mode_t kDefaultFileMode =
     S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
 #endif
-
-inline bool path_exists(const char* filename, bool* is_dir = nullptr) {
-  struct stat stats;
-  bool ret = ::stat(filename, &stats) == 0;
-#define JITIFY_S_ISDIR(mode) (((mode)&S_IFMT) == S_IFDIR)
-  if (is_dir) *is_dir = JITIFY_S_ISDIR(stats.st_mode);
-#undef JITIFY_S_ISDIR
-  return ret;
-}
 
 // Opens a file, creating it if necessary.
 class NewFile {
