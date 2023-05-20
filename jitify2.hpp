@@ -2086,7 +2086,6 @@ inline CUjitInputType get_cuda_jit_input_type(std::string* filename) {
   }
 }
 
-#if CUDA_VERSION < 12000
 inline bool link_programs_culink(size_t num_programs,
                                  const std::string* programs[],
                                  const CUjitInputType program_types[],
@@ -2270,7 +2269,8 @@ inline bool link_programs_culink(size_t num_programs,
 #undef JITIFY_CHECK_CULINK
   return true;
 }
-#else  // CUDA_VERSION >= 12000
+
+#if CUDA_VERSION >= 12000
 inline bool link_programs_nvjitlink(size_t num_programs,
                                     const std::string* programs[],
                                     const CUjitInputType program_types[],
@@ -2469,14 +2469,25 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
     return true;
   }
 
+  bool use_culink = false;
+  for (const std::string& flag : {"-use-culink", "--use-culink"}) {
+    auto iter = options_map.find(flag);
+    if (iter != options_map.end()) {
+      use_culink = true;
+      options_map.erase(iter);
+    }
+  }
+
+  (void)use_culink;  // Avoid warning about being unused
   const bool result =
-#if CUDA_VERSION < 12000
-      link_programs_culink(num_programs, programs, program_types, options_map,
-                           error, log, linked_cubin);
-#else
-      link_programs_nvjitlink(num_programs, programs, program_types,
-                              options_map, error, log, linked_cubin);
+#if CUDA_VERSION >= 12000
+      !use_culink
+          ? link_programs_nvjitlink(num_programs, programs, program_types,
+                                    options_map, error, log, linked_cubin)
+          :
 #endif
+          link_programs_culink(num_programs, programs, program_types,
+                               options_map, error, log, linked_cubin);
   return result;
 }
 

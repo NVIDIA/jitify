@@ -952,20 +952,27 @@ __global__ void my_kernel(int* data) {
                     ->compile()
                     ->ptx();
   }
-  Kernel kernel =
-      Program("linktest_program2", source2)
-          ->preprocess({"-rdc=true"}, {"-Lexample_headers", "-llinktest.ptx"})
-          ->get_kernel("my_kernel");
-  int* d_data;
-  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
-  int h_data = 3;
-  CHECK_CUDART(
-      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
-  ASSERT_EQ(kernel->configure(1, 1)->launch(d_data), "");
-  CHECK_CUDART(
-      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
-  EXPECT_EQ(h_data, 26);
-  CHECK_CUDART(cudaFree(d_data));
+  const std::vector<std::string> linker_options0 = {"-Lexample_headers",
+                                                    "-llinktest.ptx"};
+  for (bool use_culink : {false, true}) {
+    std::vector<std::string> linker_options = linker_options0;
+    if (use_culink) {
+      linker_options.push_back("--use-culink");
+    }
+    Kernel kernel = Program("linktest_program2", source2)
+                      ->preprocess({"-rdc=true"}, linker_options)
+                      ->get_kernel("my_kernel");
+    int* d_data;
+    CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+    int h_data = 3;
+    CHECK_CUDART(
+        cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+    ASSERT_EQ(kernel->configure(1, 1)->launch(d_data), "");
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(h_data, 26);
+    CHECK_CUDART(cudaFree(d_data));
+  }
 }
 
 namespace a {
