@@ -2054,6 +2054,12 @@ inline bool endswith(StringRef str, StringRef suffix) {
          std::equal(suffix.begin(), suffix.end(), str.end() - suffix.size());
 }
 
+inline bool is_true_value(std::string str) {
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return !(str == "false" || str == "off" || str == "no" || str == "0");
+}
+
 // Infers the JIT input type from the filename suffix. If no known suffix is
 // present, the filename is assumed to refer to a library, and the associated
 // suffix (and possibly prefix) is automatically added to the filename.
@@ -2144,23 +2150,23 @@ inline bool link_programs_culink(size_t num_programs,
       // LTO optimization options.
     } else if (key == "-ftz" || key == "--ftz") {
       option_keys.push_back(CU_JIT_FTZ);
-      option_vals.push_back((void*)(intptr_t)1);
+      option_vals.push_back((void*)(intptr_t)is_true_value(val));
     } else if (key == "-prec-div" || key == "--prec-div") {
       option_keys.push_back(CU_JIT_PREC_DIV);
-      option_vals.push_back((void*)(intptr_t)1);
+      option_vals.push_back((void*)(intptr_t)is_true_value(val));
     } else if (key == "-prec-sqrt" || key == "--prec-sqrt") {
       option_keys.push_back(CU_JIT_PREC_SQRT);
-      option_vals.push_back((void*)(intptr_t)1);
+      option_vals.push_back((void*)(intptr_t)is_true_value(val));
     } else if (key == "-fmad" || key == "--fmad") {
       option_keys.push_back(CU_JIT_FMA);
-      option_vals.push_back((void*)(intptr_t)1);
+      option_vals.push_back((void*)(intptr_t)is_true_value(val));
     } else if (key == "-use_fast_math" || key == "--use_fast_math") {
       option_keys.push_back(CU_JIT_FTZ);
       option_vals.push_back((void*)(intptr_t)1);
       option_keys.push_back(CU_JIT_PREC_DIV);
-      option_vals.push_back((void*)(intptr_t)1);
+      option_vals.push_back((void*)(intptr_t)0);
       option_keys.push_back(CU_JIT_PREC_SQRT);
-      option_vals.push_back((void*)(intptr_t)1);
+      option_vals.push_back((void*)(intptr_t)0);
       option_keys.push_back(CU_JIT_FMA);
       option_vals.push_back((void*)(intptr_t)1);
 #endif
@@ -2315,17 +2321,17 @@ inline bool link_programs_nvjitlink(size_t num_programs,
     } else if (key == "-L") {
       link_paths = vals;
     } else if (key == "-ftz" || key == "--ftz") {
-      options.push_back("-ftz=1");
+      options.push_back(is_true_value(val) ? "-ftz=1" : "-ftz=0");
     } else if (key == "-prec-div" || key == "--prec-div") {
-      options.push_back("-prec-div=1");
+      options.push_back(is_true_value(val) ? "-prec-div=1" : "-prec-div=0");
     } else if (key == "-prec-sqrt" || key == "--prec-sqrt") {
-      options.push_back("-prec-sqrt=1");
+      options.push_back(is_true_value(val) ? "-prec-sqrt=1" : "-prec-sqrt=0");
     } else if (key == "-fmad" || key == "--fmad") {
-      options.push_back("-fma=1");
+      options.push_back(is_true_value(val) ? "-fma=1" : "-fma=0");
     } else if (key == "-use_fast_math" || key == "--use_fast_math") {
       options.push_back("-ftz=1");
-      options.push_back("-prec-div=1");
-      options.push_back("-prec-sqrt=1");
+      options.push_back("-prec-div=0");
+      options.push_back("-prec-sqrt=0");
       options.push_back("-fma=1");
     } else if (key == "-Xptxas" || key == "--ptxas-options") {
       for (const std::string& _val : vals) {
@@ -2469,16 +2475,19 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
     return true;
   }
 
+#if CUDA_VERSION >= 12000
   bool use_culink = false;
+#endif
   for (const std::string& flag : {"-use-culink", "--use-culink"}) {
     auto iter = options_map.find(flag);
     if (iter != options_map.end()) {
+#if CUDA_VERSION >= 12000
       use_culink = true;
+#endif
       options_map.erase(iter);
     }
   }
 
-  (void)use_culink;  // Avoid warning about being unused
   const bool result =
 #if CUDA_VERSION >= 12000
       !use_culink
