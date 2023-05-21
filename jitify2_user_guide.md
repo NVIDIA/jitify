@@ -233,6 +233,18 @@ $ make check
   dynamic loading of the NVRTC dynamic library and allows the
   library to be linked statically.
 
+- `JITIFY_LINK_NVJITLINK_STATIC=0`
+
+  Defining this macro to 1 before including the jitify header disables
+  dynamic loading of the nvJitLink dynamic library and allows the
+  library to be linked statically.
+
+- `JITIFY_LINK_CUDA_STATIC=0`
+
+  Defining this macro to 1 before including the jitify header disables
+  dynamic loading of the CUDA dynamic library and allows the
+  library to be linked statically.
+
 - `JITIFY_FAIL_IMMEDIATELY=0`
 
   Defining this macro to 1 before including the jitify header causes
@@ -241,14 +253,22 @@ $ make check
   debugging, as it allows the origin of an error to be found via a
   backtrace.
 
+- `JITIFY_USE_LIBCUFILT=0`
+
+  Defining this macro to 1 before including the jitify header causes
+  demangling to be done using the cuFilt library instead of jitify's
+  built-in demangler implementation. This requires at least CUDA
+  version 11.4, and the application must be linked with the
+  libcufilt.a static library.
+
 <a name="compiler_options"/>
 
 ## Compiler options
 
 The Jitify API accepts options that can be used to control compilation
 and linking. While most options are simply passed through to NVRTC
-(for compiler options) or the CUDA cuLink APIs (for linker options),
-some trigger special behavior in Jitify as detailed below:
+(for compiler options) or the CUDA cuLink or nvJitLink APIs (for linker
+options), some trigger special behavior in Jitify as detailed below:
 
 - `-I<dir>`
 
@@ -381,3 +401,63 @@ Linker options:
   `-l<library>`, the unmodified `<library>` name is tried first,
   before searching for the file in the `-L` directories in the order
   they are listed.
+
+- `--use-culink (-use-culink)`
+
+  Forces linking to be done using the CUDA driver's `cuLink` APIs
+  instead of the `nvJitLink` library. Has no effect before CUDA 12.0.
+  Note that the `cuLink` APIs do not support LTO in CUDA 12+.
+
+The following linker options are mapped directly to options in the
+`cuLink`/`nvJitLink` APIs, but do not necessarily match exactly the
+option names used by those APIs. They provide a consistent interface
+(matching nvcc/nvrtc where possible) regardless of the underlying
+implementation.
+
+- `--device-debug (-G)`
+
+  Enables the generation of debug information.
+
+- `--generate-line-info (NOT -lineinfo)`
+
+  Enables the generation of source line information.
+  Note that the short form `-lineinfo` is not supported due to
+  ambiguity with the `-l` option.
+
+- `--gpu-name=sm_XX (-arch)`
+
+  Specifies the GPU architecture (e.g., "sm_80"). Note that this is a
+  required option when using `nvJitLink` (the default in CUDA 12+).
+
+- `--maxrregcount=N (-maxrregcount)`
+
+  Specifies the maximum number of registers to use.
+
+- `--opt-level=N (-O)`
+
+  Specifies the optimization level.
+
+- `--verbose (-v)`
+
+  Enables verbose logging.
+
+- `--ftz=true/false (-ftz) [default=false]`
+
+  Specifies flush-to-zero for denormal floating point values.
+
+- `--prec-div=true/false (-prec-div) [default=true]`
+
+  Specifies full-precision floating point division.
+
+- `--prec-sqrt=true/false (-prec-sqrt) [default=true]`
+
+  Specifies full-precision floating point square root.
+
+- `--fmad=true/false (-fmad) [default=true]`
+
+  Specifies the use of fused multiply-add operations.
+
+- `--use_fast_math (-use_fast_math)`
+
+  Enables the use of fast math operations. Equivalent to `--ftz=true
+  --prec-div=false --prec-sqrt=false --fmad=true`.
