@@ -946,11 +946,14 @@ TEST(JitifyTest, BuiltinNumericLimitsHeader) {
   cudaFree(0);
   using namespace jitify::experimental;
   auto program = Program(builtin_numeric_limits_program_source);
+  auto program_with_libcudacxx =
+      Program(builtin_numeric_limits_program_source, {}, {"-I" CUDA_INC_DIR});
   for (const auto& type :
        {"float", "double", "char", "signed char", "unsigned char", "short",
         "unsigned short", "int", "unsigned int", "long", "unsigned long",
         "long long", "unsigned long long", "MyType"}) {
     program.kernel("my_kernel").instantiate({type});
+    program_with_libcudacxx.kernel("my_kernel").instantiate({type});
   }
 }
 
