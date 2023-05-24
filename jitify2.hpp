@@ -2123,9 +2123,14 @@ inline bool link_programs_culink(size_t num_programs,
     } else if (/*key == "-lineinfo" ||*/ key == "--generate-line-info") {
       option_keys.push_back(CU_JIT_GENERATE_LINE_INFO);
       option_vals.push_back((void*)(intptr_t)1);
-    } else if (key == "-arch" || key == "--gpu-name") {
+    } else if (key == "-arch" || key == "--gpu-name" ||
+               key == "--gpu-architecture") {
       if (val.substr(0, 3) != "sm_") {
-        if (error) *error = "-arch/--gpu-name value must start with \"sm_\"";
+        if (error) {
+          *error =
+              "-arch/--gpu-name/--gpu-architecture value must start with "
+              "\"sm_\"";
+        }
         return false;
       }
       int arch = std::atoi(val.substr(3).c_str());
@@ -2304,9 +2309,14 @@ inline bool link_programs_nvjitlink(size_t num_programs,
       // HACK: Can't allow -lineinfo due to ambiguity with "-l<lib>".
     } else if (/*key == "-lineinfo" ||*/ key == "--generate-line-info") {
       options.push_back("-lineinfo");
-    } else if (key == "-arch" || key == "--gpu-name") {
+    } else if (key == "-arch" || key == "--gpu-name" ||
+               key == "--gpu-architecture") {
       if (val.substr(0, 3) != "sm_") {
-        if (error) *error = "-arch/--gpu-name value must start with \"sm_\"";
+        if (error) {
+          *error =
+              "-arch/--gpu-name/--gpu-architecture value must start with "
+              "\"sm_\"";
+        }
         return false;
       }
       options.push_back("-arch=" + val);
