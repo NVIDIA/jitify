@@ -2174,6 +2174,10 @@ inline bool link_programs_culink(size_t num_programs,
       option_vals.push_back((void*)(intptr_t)0);
       option_keys.push_back(CU_JIT_FMA);
       option_vals.push_back((void*)(intptr_t)1);
+    } else if (key == "-Xptxas" || key == "--ptxas-options") {
+      // Ignore.
+    } else if (key == "-Xnvvm" || key == "--nvvm-options") {
+      // Ignore.
 #endif
     } else {
       if (error) *error = "Unknown option: " + key;
@@ -3457,7 +3461,7 @@ inline bool ptx_remove_unused_globals(std::string* ptx) {
 }
 
 // Returns false if there is a syntax error in the options.
-inline bool copy_compiler_option_for_driver_ptxas(
+inline bool copy_compiler_option_for_linker_ptxas(
     const StringVec& compiler_options, StringVec* linker_options,
     bool has_value, StringRef short_key, StringRef long_key,
     StringRef output_key = {}) {
@@ -3540,16 +3544,36 @@ inline CompiledProgram CompiledProgram::compile(
   // the linker does ptx->cubin compilation prior to linking. This allows users
   // to specify these options in compiler_options without having to worry about
   // whether they also need to be passed in linker_options.
-  detail::copy_compiler_option_for_driver_ptxas(
-      compiler_options, &linker_options, /*has_value = */ false, "-G",
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/false, "-G",
       "--device-debug");
-  detail::copy_compiler_option_for_driver_ptxas(
-      compiler_options, &linker_options, /*has_value = */ false, "-lineinfo",
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/false, "-lineinfo",
       "--generate-line-info",
       "--generate-line-info");  // Note that linker doesn't support "-lineinfo"
-  detail::copy_compiler_option_for_driver_ptxas(
-      compiler_options, &linker_options, /*has_value = */ true, "-maxrregcount",
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-maxrregcount",
       "--maxrregcount");
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-ftz",
+      "--ftz");
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-prec-div",
+      "--prec-div");
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-prec-sqrt",
+      "--prec-sqrt");
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-fmad", "--fmad");
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-use_fast_math",
+      "--use_fast_math");
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-Xptxas",
+      "--ptxas-options");
+  detail::copy_compiler_option_for_linker_ptxas(
+      compiler_options, &linker_options, /*has_value=*/true, "-Xnvvm",
+      "--nvvm-options");
 
   return CompiledProgram(std::move(ptx), std::move(cubin), std::move(nvvm),
                          std::move(lowered_name_map), std::move(linker_options),
