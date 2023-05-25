@@ -67,7 +67,7 @@ GTEST_STATIC_LIB = $(GTEST_DIR)/build/googlemock/gtest/libgtest.a
 $(GTEST_STATIC_LIB):
 	rm -rf $(GTEST_DIR)
 	git clone https://github.com/google/googletest.git $(GTEST_DIR)
-	cd $(GTEST_DIR) && git checkout release-1.8.1 && rm -rf build && mkdir build && cd build && cmake .. && make -j8
+	cd $(GTEST_DIR) && git checkout release-1.12.1 && rm -rf build && mkdir build && cd build && cmake .. && make -j8
 
 GTEST_INC = -I$(GTEST_DIR)/googletest/include
 GTEST_LIB = -L$(GTEST_DIR)/build/googlemock/gtest -lgtest -lgtest_main
