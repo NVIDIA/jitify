@@ -690,7 +690,7 @@ inline bool load_source(
     source += line + "\n";
   }
   // HACK TESTING (WAR for cub)
-  // source = "#define cudaDeviceSynchronize() cudaSuccess\n" + source;
+  source = "#define cudaDeviceSynchronize() cudaSuccess\n" + source;
   ////source = "cudaError_t cudaDeviceSynchronize() { return cudaSuccess; }\n" +
   /// source;
 
