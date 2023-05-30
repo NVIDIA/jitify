@@ -2042,6 +2042,8 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
   constexpr const long kLogSize = 8192;
   char info_log[kLogSize];
   char error_log[kLogSize];
+  info_log[0] = '\0';
+  error_log[0] = '\0';
   if (log) {
     option_keys.push_back(CU_JIT_INFO_LOG_BUFFER);
     option_vals.push_back((void*)info_log);
@@ -2173,8 +2175,14 @@ class CompiledProgramData
   /*! Get the NVVM IR of the compiled program.
    * \note The NVVM is only available here with NVRTC version >= 11.4 and the
    * "-dlto" compiler option.
+   * \deprecated Use lto_ir() instead.
    */
   const std::string& nvvm() const { return nvvm_; }
+  /*! Get the Link-Time Optimization (LTO) IR of the compiled program.
+   * \note The LTO IR is only available here with NVRTC version >= 11.4 and the
+   * "-dlto" compiler option.
+   */
+  const std::string& lto_ir() const { return nvvm_; }
   /*! Get the map of name expressions to lowered (mangled) symbol names. */
   const StringMap& lowered_name_map() const { return lowered_name_map_; }
   /*! Get the remaining options that will be passed on to the compiler. */
@@ -2257,8 +2265,12 @@ inline LinkedProgram LinkedProgram::link(
     const CompiledProgramData& compiled_program = *compiled_programs[i];
     if (!compiled_program.nvvm().empty()) {
       if (!cuda()) return Error(cuda().error());
-      if (std::min(CUDA_VERSION, cuda().get_version()) < 11040) {
-        return Error("Linking NVVM IR is not supported with CUDA < 11.4");
+      const int min_cuda_version = std::min(CUDA_VERSION, cuda().get_version());
+      // TODO: CUDA 12 no longer supports using the cuLink APIs for JIT LTO. We
+      // need to add support using the nvJitLink library instead.
+      if (min_cuda_version < 11040 || CUDA_VERSION >= 12000) {
+        return Error(
+            "Linking LTO IR is not supported with CUDA < 11.4 or >= 12.0");
       }
     }
     const std::string& program = !compiled_program.nvvm().empty()
@@ -2356,13 +2368,17 @@ class LibNvrtc
     static std::string err;
     return err;
   }
-#define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)       \
-  detail::function_type<result_type, __VA_ARGS__>* name() const { \
-    return &nvrtc##name;                                          \
+  template <typename ResultType, typename... Args>
+  using wrapped_function_type = detail::function_type<ResultType, Args...>*;
+#define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)      \
+  wrapped_function_type<result_type, __VA_ARGS__> name() const { \
+    return &nvrtc##name;                                         \
   }
 #else  // dynamic linking
+  template <typename ResultType, typename... Args>
+  using wrapped_function_type = detail::SafeFunction<ResultType, Args...>;
 #define JITIFY_DEFINE_NVRTC_WRAPPER(name, result_type, ...)                \
-  detail::SafeFunction<result_type, __VA_ARGS__> name() const {            \
+  wrapped_function_type<result_type, __VA_ARGS__> name() const {           \
     static const auto func =                                               \
         this->function<result_type, __VA_ARGS__>(JITIFY_STR(nvrtc##name)); \
     return func;                                                           \
@@ -2390,8 +2406,7 @@ class LibNvrtc
   JITIFY_DEFINE_NVRTC_WRAPPER(GetCUBINSize, nvrtcResult, nvrtcProgram, size_t*)
 #endif
 #if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 11020
-  detail::function_type<nvrtcResult, int*>*
-  GetNumSupportedArchs() {
+  detail::function_type<nvrtcResult, int*>* GetNumSupportedArchs() {
     return nullptr;
   }
   detail::function_type<nvrtcResult, int*>* GetSupportedArchs() {
@@ -2408,9 +2423,18 @@ class LibNvrtc
   detail::function_type<nvrtcResult, nvrtcProgram, size_t*>* GetNVVMSize() {
     return nullptr;
   }
-#else
+#elif CUDA_VERSION < 12000
   JITIFY_DEFINE_NVRTC_WRAPPER(GetNVVM, nvrtcResult, nvrtcProgram, char*)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetNVVMSize, nvrtcResult, nvrtcProgram, size_t*)
+#else  // CUDA_VERSION >= 12000
+  wrapped_function_type<nvrtcResult, nvrtcProgram, char*> GetNVVM() {
+    return GetLTOIR();
+  }
+  wrapped_function_type<nvrtcResult, nvrtcProgram, size_t*> GetNVVMSize() {
+    return GetLTOIRSize();
+  }
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetLTOIR, nvrtcResult, nvrtcProgram, char*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetLTOIRSize, nvrtcResult, nvrtcProgram, size_t*)
 #endif
   JITIFY_DEFINE_NVRTC_WRAPPER(GetErrorString, const char*, nvrtcResult)
   JITIFY_DEFINE_NVRTC_WRAPPER(GetPTX, nvrtcResult, nvrtcProgram, char*)
@@ -2815,18 +2839,21 @@ inline void find_lowered_global_variables(StringRef ptx,
   }
 }
 
+inline bool ptx_remove_unused_globals(std::string* ptx);  // Defined below
+
 // Returns false on error.
 // Sets *error on failure if provided.
 // Sets *log if provided.
 // Sets *ptx on success if provided.
-// Adds one entry to *lowered_name_map for each entry in name_expressions.
+// Adds one entry to *lowered_name_map for each entry in name_expressions as
+//   well as any global definitions found in the generated PTX.
 inline bool compile_program(
     const std::string& name, const std::string& source,
     const StringMap& header_sources, const StringVec& options,
     std::string* error = nullptr, std::string* log = nullptr,
     std::string* ptx = nullptr, std::string* cubin = nullptr,
     std::string* nvvm = nullptr, const StringVec& name_expressions = {},
-    StringMap* lowered_name_map = nullptr) {
+    StringMap* lowered_name_map = nullptr, bool remove_unused_globals = false) {
   if (!nvrtc()) {
     if (error) *error = nvrtc().error();
     return false;
@@ -2900,6 +2927,9 @@ inline bool compile_program(
       // to include its own.
       ptx->resize(ptx_size - 1);
       JITIFY_CHECK_NVRTC(nvrtc().GetPTX()(nvrtc_program, &(*ptx)[0]));
+      if (remove_unused_globals) {
+        ptx_remove_unused_globals(ptx);  // Ignores errors from this
+      }
     }
   }
 
@@ -2974,12 +3004,15 @@ inline StringVec split_string(std::string str, long maxsplit = -1,
 }
 
 inline bool ptx_parse_decl_name(const std::string& line, std::string* name) {
-  size_t name_end = line.find_first_of("[;");
+  size_t name_end = line.find_first_of("[;=");
   if (name_end == std::string::npos) {
     // Failed to parse .global/.const declaration in PTX: expected a semicolon.
     return false;
   }
-  size_t name_start_minus1 = line.find_last_of(" \t", name_end);
+  if (line[name_end] == '=') {
+    --name_end;  // Remove space before '=' symbol
+  }
+  size_t name_start_minus1 = line.find_last_of(" \t", name_end - 1);
   if (name_start_minus1 == std::string::npos) {
     // Failed to parse .global/.const declaration in PTX: expected whitespace.
     return false;
@@ -3110,7 +3143,8 @@ inline CompiledProgram CompiledProgram::compile(
   StringMap lowered_name_map;
   if (!detail::compile_program(name, source, header_sources, compiler_options,
                                &error, &log, &ptx, &cubin, &nvvm,
-                               name_expressions, &lowered_name_map)) {
+                               name_expressions, &lowered_name_map,
+                               should_remove_unused_globals)) {
     std::string options_str = detail::string_join(
         compiler_options, " ", "Compiler options: \"", "\"\n");
     std::vector<std::string> header_names;
@@ -3123,9 +3157,6 @@ inline CompiledProgram CompiledProgram::compile(
         detail::string_join(header_names, "\n  ", "Header names:\n  ", "\n");
     return Error("Compilation failed: " + error + "\n" + options_str +
                  headers_str + "\n" + log);
-  }
-  if (!ptx.empty() && should_remove_unused_globals) {
-    detail::ptx_remove_unused_globals(&ptx);  // Ignores errors from this
   }
 
   // We copy certain compiler options to linker_options so that they are used if
@@ -3681,19 +3712,27 @@ typedef unsigned long uintptr_t;  // optional
 #endif
 )");
 
-JITIFY_DEFINE_C_AND_CXX_HEADERS(stdio, "#include <cstddef>", R"(
+JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(stdio, "#include <cstddef>", R"(
 using FILE = int;
 int fflush(FILE* stream);
 int fprintf(FILE* stream, const char* format, ...);
+)",
+                                   R"(
+// NVRTC provides a built-in definition of ::size_t.
+using ::size_t;
 )");
 
 JITIFY_DEFINE_C_AND_CXX_HEADERS(stdlib, "#include <cstddef>", "");
 
-JITIFY_DEFINE_C_AND_CXX_HEADERS(string, "", R"(
+JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(string, "", R"(
 //#include <cstddef>
 char* strcpy(char* destination, const char* source);
 int strcmp(const char* str1, const char* str2);
 char* strerror(int errnum);
+)",
+                                   R"(
+// NVRTC provides a built-in definition of ::size_t.
+using ::size_t;
 )");
 
 JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(time, R"(
