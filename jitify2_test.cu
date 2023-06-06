@@ -1698,7 +1698,7 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   // Test order is actually undefined, so we use filters to force the
   // AssertHeader test to run last.
-  ::testing::GTEST_FLAG(filter) = "-Jitify2Test.AssertHeader";
+  ::testing::GTEST_FLAG(filter) += ":-Jitify2Test.AssertHeader";
   int result = RUN_ALL_TESTS();
   ::testing::GTEST_FLAG(filter) = "Jitify2Test.AssertHeader";
   return result | RUN_ALL_TESTS();
