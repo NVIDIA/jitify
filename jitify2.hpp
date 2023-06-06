@@ -554,6 +554,9 @@ inline std::string get_type_name(const std::type_info& typeinfo) {
   // Note: UNDNAME_NO_MS_KEYWORDS removes __cdecl, __ptr64 etc. but has a bug in
   // some versions that breaks function types. Instead, we leave these tokens in
   // and #define them away as necessary.
+  // Note: UnDecorateSymbolName is not thread safe.
+  JITIFY_IF_THREAD_SAFE(static std::mutex mutex;
+                        std::lock_guard<std::mutex> lock(mutex);)
   if (!UnDecorateSymbolName(
           decorated_name, undecorated_name,
           sizeof(undecorated_name) / sizeof(*undecorated_name),
