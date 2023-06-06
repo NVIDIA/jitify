@@ -5302,6 +5302,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
       &compiler_options, "-no-replace-pragma-once", "--no-replace-pragma-once");
   bool use_builtin_headers = !detail::pop_flag(
       &compiler_options, "-no-builtin-headers", "--no-builtin-headers");
+  // Allow -nostdinc as an alias for -no-builtin-headers.
+  if (detail::pop_flag(&compiler_options, "-nostdinc", "--nostdinc")) {
+    use_builtin_headers = false;
+  }
 
   // This is re-added to the remaining options below.
   bool should_remove_unused_globals = detail::pop_flag(
