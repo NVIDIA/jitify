@@ -5422,7 +5422,7 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
               compile_log, &include_name, &include_parent, &line_num)) {
         // There was a non include-related compilation error.
         return Error("Compilation failed: " + compile_error + "\n" +
-                     compiler_options_msg + compile_log);
+                     compiler_options_msg + header_log + compile_log);
       }
 
       bool is_included_with_quotes = false;
@@ -5475,9 +5475,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
         }
         // Log where the header was found.
         header_log += detail::string_join(
-            {"Found #include ", include_name, " from ", include_parent, ":",
-             std::to_string(line_num), " [", include_parent_fullpath, "]",
-             " at:\n  ", header_fullpath, "\n"},
+            {"Found #include ", (is_included_with_quotes ? "\"" : "<"),
+             include_name, (is_included_with_quotes ? "\"" : ">"), " from ",
+             include_parent, ":", std::to_string(line_num), " [",
+             include_parent_fullpath, "]", " at:\n  ", header_fullpath, "\n"},
             "");
       } else {
         // Missing header.
