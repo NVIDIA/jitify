@@ -10,7 +10,7 @@ if (MSVC)
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
 else()
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra -Wconversion -Wshadow")
+      "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra -Wconversion -Wshadow -fmessage-length=80")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 endif()
 
