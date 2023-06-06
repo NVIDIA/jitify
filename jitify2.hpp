@@ -1609,6 +1609,8 @@ class ConfiguredKernelData {
   /*! Get the configured CUDA stream. */
   CUstream stream() const { return stream_; }
 
+  // TODO: Taking void** here is dangerous due to ambiguity with the variadic
+  // overload below. E.g., passing void*const* silently fails.
   /*! Launch the configured kernel.
    *  \param arg_ptrs Array of pointers to kernel arguments.
    *  \return An empty string on success, otherwise an error message.
@@ -1626,7 +1628,7 @@ class ConfiguredKernelData {
    *  \return An empty string on success, otherwise an error message.
    */
   ErrorMsg launch(const std::vector<void*>& arg_ptrs = {}) const {
-    return launch(arg_ptrs.data());
+    return launch(const_cast<void**>(arg_ptrs.data()));
   }
 
   /*! Launch the configured kernel.
