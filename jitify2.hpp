@@ -4829,20 +4829,32 @@ inline bool is_include_directive_with_quotes(StringRef source, int line_num,
 
 // Elides "/." and "/.." tokens from path. Returns empty string if illformed.
 inline std::string path_simplify(StringRef path) {
+#if defined _WIN32 || defined _WIN64
+  // Note that Windows supports both forward and backslash path separators.
+  const char* sep = "\\/";
+#else
+  const char* sep = "/";
+#endif
+  const int n = (int)path.size();
   StringVec dirs;
+  std::string seps;
   std::string cur_dir;
   bool after_slash = false;
-  for (int i = 0; i < (int)path.size(); ++i) {
-    if (path[i] == '/') {
+  for (int i = 0; i < n + 1; ++i) {
+    if (i == n || std::strchr(sep, path[i])) {
       if (after_slash) continue;  // Ignore repeat slashes
-      after_slash = true;
+      after_slash = i < n;
       if (cur_dir == ".." && !dirs.empty() && dirs.back() != "..") {
         if (dirs.size() == 1 && dirs.front().empty()) {
           return {};  // Bad path: back-traversals exceed depth of absolute path
         }
         dirs.pop_back();
+        seps.pop_back();
       } else if (cur_dir != ".") {  // Ignore /./
         dirs.push_back(cur_dir);
+        if (after_slash) {
+          seps.push_back(path[i]);
+        }
       }
       cur_dir.clear();
     } else {
@@ -4850,15 +4862,12 @@ inline std::string path_simplify(StringRef path) {
       cur_dir.push_back(path[i]);
     }
   }
-  if (!after_slash) {
-    dirs.push_back(cur_dir);
-  }
   std::ostringstream ss;
   for (int i = 0; i < (int)dirs.size() - 1; ++i) {
-    ss << dirs[i] << "/";
+    ss << dirs[i] << seps[i];
   }
   if (!dirs.empty()) ss << dirs.back();
-  if (after_slash) ss << "/";
+  if (after_slash) ss << seps.back();
   return ss.str();
 }
 
