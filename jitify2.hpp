@@ -2522,7 +2522,7 @@ inline bool link_programs(size_t num_programs, const std::string* programs[],
 #if CUDA_VERSION >= 12000
   bool use_culink = false;
 #endif
-  for (const std::string& flag : {"-use-culink", "--use-culink"}) {
+  for (const std::string flag : {"-use-culink", "--use-culink"}) {
     auto iter = options_map.find(flag);
     if (iter != options_map.end()) {
 #if CUDA_VERSION >= 12000

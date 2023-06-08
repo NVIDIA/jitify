@@ -960,8 +960,8 @@ __global__ void my_kernel(int* data) {
       linker_options.push_back("--use-culink");
     }
     Kernel kernel = Program("linktest_program2", source2)
-                      ->preprocess({"-rdc=true"}, linker_options)
-                      ->get_kernel("my_kernel");
+                        ->preprocess({"-rdc=true"}, linker_options)
+                        ->get_kernel("my_kernel");
     int* d_data;
     CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
     int h_data = 3;
@@ -1524,7 +1524,7 @@ __global__ void my_kernel(float* data) {
 #if CUDA_VERSION >= 11000
 TEST(Jitify2Test, LibCudaCxx) {
   // Test that each libcudacxx header can be compiled on its own.
-  for (const std::string& header :
+  for (const std::string header :
        {"atomic", "barrier", "cassert", "cfloat", "chrono", "climits",
         "cstddef", "cstdint", "ctime", "functional", "latch",
         /*"limits",*/ "ratio", "semaphore", "type_traits", "utility"}) {
