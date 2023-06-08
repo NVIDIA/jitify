@@ -1112,7 +1112,8 @@ class SafeFunction {
   std::string name_;
 };
 
-#if !JITIFY_LINK_NVRTC_STATIC || !JITIFY_LINK_CUDA_STATIC
+#if !JITIFY_LINK_NVRTC_STATIC || !JITIFY_LINK_CUDA_STATIC || \
+    !JITIFY_LINK_NVJITLINK_STATIC
 class DynamicLibrary {
   using handle_type =
 #if defined(_WIN32) || defined(_WIN64)
@@ -1136,6 +1137,9 @@ class DynamicLibrary {
 
   std::unique_ptr<std::remove_pointer<handle_type>::type, Deleter> lib_;
   std::string error_;
+
+ protected:
+  void set_error(std::string e) { error_ = std::move(e); }
 
  public:
   DynamicLibrary() = default;
@@ -1171,7 +1175,7 @@ class DynamicLibrary {
 
   void close() { lib_.reset(); }
 
-  explicit operator bool() const { return static_cast<bool>(lib_); }
+  explicit operator bool() const { return error_.empty(); }
   const std::string& error() const { return error_; }
 
   template <typename ResultType, typename... Args>
@@ -1187,7 +1191,8 @@ class DynamicLibrary {
         reinterpret_cast<function_type<ResultType, Args...>*>(func), func_name);
   }
 };
-#endif  // !JITIFY_LINK_NVRTC_STATIC || !JITIFY_LINK_CUDA_STATIC
+#endif  // !JITIFY_LINK_NVRTC_STATIC || !JITIFY_LINK_CUDA_STATIC ||
+        // !JITIFY_LINK_NVJITLINK_STATIC
 
 }  // namespace detail
 
@@ -1327,8 +1332,15 @@ class LibNvJitLink
 #endif
         if (this->open(libname.c_str())) break;
       }
-#endif  // !JITIFY_LINK_NVJITLINK_STATIC
     }
+    if (*this && !Create()) {
+      const int compiled_minor = CUDA_VERSION % 1000 / 10;
+      this->set_error(detail::string_concat(
+          "Dynamically loaded ", libname, " is too old; it is version ",
+          compiled_major, ".", get_loaded_minor_version(),
+          ", need at least version ", compiled_major, ".", compiled_minor));
+    }
+#endif  // !JITIFY_LINK_NVJITLINK_STATIC
   }
 
 #define JITIFY_STR_IMPL(x) #x
@@ -1346,8 +1358,8 @@ class LibNvJitLink
     return &nvJitLink##name;                                     \
   }
 #else  // dynamic linking
-template <typename ResultType, typename... Args>
-using wrapped_function_type = detail::SafeFunction<ResultType, Args...>;
+  template <typename ResultType, typename... Args>
+  using wrapped_function_type = detail::SafeFunction<ResultType, Args...>;
 #define JITIFY_DEFINE_NVJITLINK_WRAPPER(name, result_type, ...)        \
   wrapped_function_type<result_type, __VA_ARGS__> name() const {       \
     static const auto func = this->function<result_type, __VA_ARGS__>( \
@@ -1417,14 +1429,32 @@ using wrapped_function_type = detail::SafeFunction<ResultType, Args...>;
   }
 
  private:
-  std::string get_symbol_name(const char* func_name) const {
+  std::string get_symbol_name(const char* func_name, int major = -1,
+                              int minor = -1) const {
     const int compiled_major = CUDA_VERSION / 1000;
     const int compiled_minor = CUDA_VERSION % 1000 / 10;
+    if (major == -1) major = compiled_major;
+    if (minor == -1) minor = compiled_minor;
     // We have to "guess" the symbol name because we have no way to obtain them
     // from the nvJitLink.h header (unlike cuda.h, which uses #define).
-    return detail::string_concat("__", func_name, '_', compiled_major, '_',
-                                 compiled_minor);
+    return detail::string_concat("__", func_name, '_', major, '_', minor);
   }
+
+#if !JITIFY_LINK_NVJITLINK_STATIC
+  // WAR for nvJitLink providing no API to query its version number.
+  // Returns -1 on failure.
+  int get_loaded_minor_version() const {
+    const int compiled_major = CUDA_VERSION / 1000;
+    for (int minor = 9; minor >= 0; --minor) {
+      if (this->function<void>(
+              get_symbol_name("nvJitLinkCreate", compiled_major, minor)
+                  .c_str())) {
+        return minor;
+      }
+    }
+    return -1;
+  }
+#endif  // !JITIFY_LINK_NVJITLINK_STATIC
 };
 
 inline LibNvJitLink& nvjitlink() {
@@ -3555,8 +3585,7 @@ inline CompiledProgram CompiledProgram::compile(
       compiler_options, &linker_options, /*has_value=*/true, "-maxrregcount",
       "--maxrregcount");
   detail::copy_compiler_option_for_linker_ptxas(
-      compiler_options, &linker_options, /*has_value=*/true, "-ftz",
-      "--ftz");
+      compiler_options, &linker_options, /*has_value=*/true, "-ftz", "--ftz");
   detail::copy_compiler_option_for_linker_ptxas(
       compiler_options, &linker_options, /*has_value=*/true, "-prec-div",
       "--prec-div");
