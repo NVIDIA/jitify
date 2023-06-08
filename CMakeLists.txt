@@ -106,11 +106,17 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/jitify_2nd_compilation_unit.cu
 enable_testing()
 set(TESTS
     jitify2_test
+    jitify2_test_static
 )
 foreach(test ${TESTS})
+  if (${test} MATCHES "_static$")
+    STRING(REGEX REPLACE "_static$" "" test_base ${test})
+  else()
+    set(test_base ${test})
+  endif()
   # Note that generated headers are listed as source files to force dependency.
   add_executable(
-      ${test} EXCLUDE_FROM_ALL ${test}.cu
+      ${test} EXCLUDE_FROM_ALL ${test_base}.cu
       ${CMAKE_CURRENT_BINARY_DIR}/jitify_2nd_compilation_unit.cu
       ${CMAKE_CURRENT_BINARY_DIR}/example_headers/my_header1.cuh.jit
       ${CMAKE_CURRENT_BINARY_DIR}/jitify2_test_kernels.cu.jit.hpp
@@ -121,6 +127,13 @@ foreach(test ${TESTS})
   target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(${test} gtest_main)
   set_property(TARGET ${test} PROPERTY CUDA_ARCHITECTURES OFF)
+  if (${test} MATCHES "_static$")
+    target_compile_definitions(${test}
+                               PUBLIC JITIFY_LINK_CUDA_STATIC=1
+                               PUBLIC JITIFY_LINK_NVRTC_STATIC=1
+                               PUBLIC JITIFY_LINK_NVJITLINK_STATIC=1)
+    target_link_libraries(${test} cuda nvrtc nvJitLink)
+  endif()
   if (NOT WIN32)
     target_link_libraries(${test} ${CMAKE_DL_LIBS})
   endif()
