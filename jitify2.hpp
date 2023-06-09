@@ -1784,6 +1784,8 @@ class ConfiguredKernelData {
   /*! Get the configured CUDA stream. */
   CUstream stream() const { return stream_; }
 
+  // TODO: Taking void** here is dangerous due to ambiguity with the variadic
+  // overload below. E.g., passing void*const* silently fails.
   /*! Launch the configured kernel.
    *  \param arg_ptrs Array of pointers to kernel arguments.
    *  \return An empty string on success, otherwise an error message.
@@ -1801,7 +1803,7 @@ class ConfiguredKernelData {
    *  \return An empty string on success, otherwise an error message.
    */
   ErrorMsg launch(const std::vector<void*>& arg_ptrs = {}) const {
-    return launch(arg_ptrs.data());
+    return launch(const_cast<void**>(arg_ptrs.data()));
   }
 
   /*! Launch the configured kernel.
@@ -4159,11 +4161,15 @@ JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(string, "", R"(
 char* strcpy(char* destination, const char* source);
 int strcmp(const char* str1, const char* str2);
 char* strerror(int errnum);
+char* strcat(char* dest, const char* src);
 )",
                                    R"(
 // NVRTC provides a built-in definition of ::size_t.
 using ::size_t;
 )");
+
+// va_start, va_arg etc. are predefined by NVRTC, but we still need a header.
+JITIFY_DEFINE_C_AND_CXX_HEADERS(stdarg, "", "");
 
 JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(time, R"(
 #define NULL 0
@@ -4316,7 +4322,7 @@ struct input_iterator_tag {};
 struct forward_iterator_tag {};
 struct bidirectional_iterator_tag {};
 struct random_access_iterator_tag {};
-template<class Iterator>
+template <class Iterator>
 struct iterator_traits {
   typedef typename Iterator::iterator_category iterator_category;
   typedef typename Iterator::value_type        value_type;
@@ -4324,7 +4330,7 @@ struct iterator_traits {
   typedef typename Iterator::pointer           pointer;
   typedef typename Iterator::reference         reference;
 };
-template<class T>
+template <class T>
 struct iterator_traits<T*> {
   typedef random_access_iterator_tag iterator_category;
   typedef T                          value_type;
@@ -4332,7 +4338,7 @@ struct iterator_traits<T*> {
   typedef T*                         pointer;
   typedef T&                         reference;
 };
-template<class T>
+template <class T>
 struct iterator_traits<T const*> {
   typedef random_access_iterator_tag iterator_category;
   typedef T                          value_type;
@@ -4605,7 +4611,19 @@ static const char* const jitsafe_header_tuple = R"(
 #if __cplusplus >= 201103L
 namespace std {
 template <class... Types> class tuple;
-}  // namespace std
+
+template <size_t I, class T>
+struct tuple_element;
+// Recursive case.
+template <size_t I, class Head, class... Tail>
+struct tuple_element<I, tuple<Head, Tail...>>
+    : tuple_element<I - 1, tuple<Tail...>> {};
+// Base case.
+template <class Head, class... Tail>
+struct tuple_element<0, tuple<Head, Tail...>> {
+  using type = Head;
+};
+} // namespace std
 #endif  // c++11
 )";
 
@@ -4644,9 +4662,8 @@ struct is_floating_point<double> : true_type {};
 template <>
 struct is_floating_point<long double> : true_type {};
 #if __cplusplus >= 201703L
-template<typename T> inline constexpr bool is_floating_point_v = is_floating_point<T>::value;
+template <typename T> inline constexpr bool is_floating_point_v = is_floating_point<T>::value;
 #endif  // __cplusplus >= 201703L
-
 
 template <class T>
 struct is_integral : false_type {};
@@ -4675,7 +4692,7 @@ struct is_integral<long long> : true_type {};
 template <>
 struct is_integral<unsigned long long> : true_type {};
 #if __cplusplus >= 201703L
-template<typename T> inline constexpr bool is_integral_v = is_integral<T>::value;
+template <typename T> inline constexpr bool is_integral_v = is_integral<T>::value;
 #endif  // __cplusplus >= 201703L
 
 template <typename T>
@@ -4715,7 +4732,7 @@ struct is_same : false_type {};
 template <typename T>
 struct is_same<T, T> : true_type {};
 #if __cplusplus >= 201703L
-template<typename T, typename U> inline constexpr bool is_same_v = is_same<T, U>::value;
+template <typename T, typename U> inline constexpr bool is_same_v = is_same<T, U>::value;
 #endif  // __cplusplus >= 201703L
 
 template <class T>
@@ -4740,14 +4757,25 @@ struct result_of<F(Args...)> {
   // TODO: This is a hack; a proper implem is quite complicated.
   typedef typename F::result_type type;
 };
+// Note: We include this before C++17 for convenience.
+// TODO: This implementation is probably not standard-conforming.
+template <class F, class... Args>
+struct invoke_result : result_of<F(Args...)> {};
 
-template<class T> struct is_pointer                    : false_type {};
-template<class T> struct is_pointer<T*>                : true_type {};
-template<class T> struct is_pointer<T* const>          : true_type {};
-template<class T> struct is_pointer<T* volatile>       : true_type {};
-template<class T> struct is_pointer<T* const volatile> : true_type {};
+#if __cplusplus >= 201402L
+template <class T>
+using result_of_t = typename result_of<T>::type;
+template <class F, class... Args>
+using invoke_result_t = typename invoke_result<F, Args...>::type;
+#endif  // __cplusplus >= 201402L
+
+template <class T> struct is_pointer                    : false_type {};
+template <class T> struct is_pointer<T*>                : true_type {};
+template <class T> struct is_pointer<T* const>          : true_type {};
+template <class T> struct is_pointer<T* volatile>       : true_type {};
+template <class T> struct is_pointer<T* const volatile> : true_type {};
 #if __cplusplus >= 201703L
-template< class T > inline constexpr bool is_pointer_v = is_pointer<T>::value;
+template <class T> inline constexpr bool is_pointer_v = is_pointer<T>::value;
 #endif  // __cplusplus >= 201703L
 template <class T> struct remove_pointer { typedef T type; };
 template <class T> struct remove_pointer<T*> { typedef T type; };
@@ -4872,6 +4900,16 @@ template <class T>
 using decay_t = typename decay<T>::type;
 #endif
 
+// Note: We include this before C++20 for convenience.
+#if __cplusplus >= 201402L
+template <class T>
+struct remove_cvref {
+  using type = std::remove_cv_t<std::remove_reference_t<T>>;
+};
+template <class T>
+using remove_cvref_t = typename remove_cvref<T>::type;
+#endif
+
 template <class T, T v>
 struct integral_constant {
   static constexpr T value = v;
@@ -4883,11 +4921,11 @@ struct integral_constant {
 #endif
 };
 
-template<typename T> struct is_arithmetic :
+template <typename T> struct is_arithmetic :
 std::integral_constant<bool, std::is_integral<T>::value ||
                              std::is_floating_point<T>::value> {};
 #if __cplusplus >= 201703L
-template<typename T> inline constexpr bool is_arithmetic_v = is_arithmetic<T>::value;
+template <typename T> inline constexpr bool is_arithmetic_v = is_arithmetic<T>::value;
 #endif  // __cplusplus >= 201703L
 
 template <class T>
@@ -4900,11 +4938,15 @@ struct is_rvalue_reference : false_type {};
 template <class T>
 struct is_rvalue_reference<T&&> : true_type {};
 
-namespace __jitify_detail {
+// Note: We include this before C++20 for convenience.
 template <class T>
 struct type_identity {
   using type = T;
 };
+template <class T>
+using type_identity_t = typename type_identity<T>::type;
+
+namespace __jitify_detail {
 template <class T>
 auto add_lvalue_reference(int) -> type_identity<T&>;
 template <class T>
@@ -5064,13 +5106,21 @@ template <> struct make_signed<wchar_t>            { typedef signed short type; 
 template <> struct make_signed<wchar_t>            { typedef signed int type; };
 #endif
 
+#if __cplusplus >= 201703L
+template <typename... Ts> struct __jitify_make_void { typedef void type; };
+template <typename... Ts> using void_t = typename __jitify_make_void<Ts...>::type;
+#endif  // __cplusplus >= 201703L
+
 }  // namespace std
 #endif  // __cplusplus >= 201103L
 )";
 
 static const char* const jitsafe_header_utility = R"(
 #pragma once
+#include <type_traits>
+
 namespace std {
+
 template <class T1, class T2>
 struct pair {
   T1 first;
@@ -5085,6 +5135,75 @@ template <class T1, class T2>
 pair<T1, T2> make_pair(const T1& first, const T2& second) {
   return pair<T1, T2>(first, second);
 }
+
+#if __cplusplus >= 201103L
+
+template <typename T>
+struct __jitify_always_false {
+  static constexpr bool value = false;
+};
+template <typename T>
+typename std::add_rvalue_reference<T>::type declval() noexcept {
+  static_assert(__jitify_always_false<T>::value,
+                "declval not allowed in an evaluated context");
+
+#endif  // __cplusplus >= 201103L
+}
+
+#if __cplusplus >= 201402L
+
+template <typename T, T... Ints>
+class integer_sequence {
+ public:
+  using type = integer_sequence;  // Needed by make_index_sequence
+  using value_type = T;
+  static constexpr std::size_t size() noexcept { return sizeof...(Ints); }
+};
+
+template <std::size_t... Ints>
+using index_sequence = std::integer_sequence<std::size_t, Ints...>;
+
+namespace __jitify_detail {
+template <std::size_t Sequence1Length, class Sequence1, class Sequence2>
+struct concat_integer_sequence;
+template <std::size_t Sequence1Length, typename T, T... Ints1, T... Ints2>
+struct concat_integer_sequence<Sequence1Length, integer_sequence<T, Ints1...>,
+                               integer_sequence<T, Ints2...>>
+    : integer_sequence<T, Ints1..., (Sequence1Length + Ints2)...> {};
+}  // __jitify_detail
+
+template <typename T, T N>
+struct make_integer_sequence
+    : __jitify_detail::concat_integer_sequence<
+          N / 2, typename make_integer_sequence<T, N / 2>::type,
+          typename make_integer_sequence<T, N - N / 2>::type> {};
+#define JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(T)            \
+  template <>                                                  \
+  struct make_integer_sequence<T, 0> : integer_sequence<T> {}; \
+  template <>                                                  \
+  struct make_integer_sequence<T, 1> : integer_sequence<T, 0> {};
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(bool)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(char)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(signed char)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(unsigned char)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(short)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(unsigned short)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(int)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(unsigned int)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(long)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(unsigned long)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(long long)
+JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE(unsigned long long)
+#undef JITIFY_DEFINE_MAKE_INTEGER_SEQUENCE_TYPE
+
+template <std::size_t N>
+using make_index_sequence = std::make_integer_sequence<std::size_t, N>;
+
+template <class... T>
+using index_sequence_for = std::make_index_sequence<sizeof...(T)>;
+
+#endif  // __cplusplus >= 201402L
+
 }  // namespace std
 )";
 
@@ -5099,6 +5218,106 @@ struct vector {};
 static const char* const jitsafe_header_memory_h = R"(
 #pragma once
 #include <string.h>
+)";
+
+static const char* const jitsafe_header_functional = R"(
+#pragma once
+#if __cplusplus >= 201103L
+#include <type_traits>
+#include <utility>
+// TODO: Lots of other stuff here.
+namespace std {
+namespace __jitify_detail {
+template <class T>
+constexpr T& FUN(T& t) noexcept {
+  return t;
+}
+template <class T>
+void FUN(T&&) = delete;
+}  // namespace __jitify_detail
+
+template <class T>
+class reference_wrapper {
+ public:
+  using type = T;
+
+  template <class U,
+            class = decltype(__jitify_detail::FUN<T>(std::declval<U>()),
+                             std::enable_if_t<!std::is_same_v<
+                                 reference_wrapper, std::remove_cvref_t<U>>>())>
+  constexpr reference_wrapper(U&& u) noexcept(
+      noexcept(__jitify_detail::FUN<T>(std::forward<U>(u))))
+      : ptr_(std::addressof(__jitify_detail::FUN<T>(std::forward<U>(u)))) {}
+
+  reference_wrapper(const reference_wrapper&) noexcept = default;
+
+  reference_wrapper& operator=(const reference_wrapper&) noexcept = default;
+
+  constexpr operator T&() const noexcept { return *ptr_; }
+  constexpr T& get() const noexcept { return *ptr_; }
+
+  // TODO: operator().
+
+ private:
+  T* ptr_;
+};
+} // namespace std
+#endif  // __cplusplus >= 201103L
+)";
+
+static const char* const jitsafe_header_map = R"(
+#pragma once
+namespace std {
+// Placeholder class to avoid errors from host code.
+template <class Key, class T, class Compare = void, class Allocator = void>
+class map {};
+} // namespace std
+)";
+
+static const char* const jitsafe_header_stack = R"(
+#pragma once
+namespace std {
+// Placeholder class to avoid errors from host code.
+template <class T, class = void>
+class stack {};
+} // namespace std
+)";
+
+static const char* const jitsafe_header_iomanip = R"(
+#pragma once
+namespace std {
+} // namespace std
+)";
+
+// Note that typeid/std::type_info/dynamic_cast cannot be used in device code
+// even with nvcc.
+static const char* const jitsafe_header_typeinfo = R"(
+#pragma once
+// WAR for typeid being builtin but not supported in device code.
+#define typeid(x) type_info{}
+class type_info {
+ public:
+  virtual ~type_info();
+  bool operator==(const type_info& rhs) const noexcept;
+  bool operator!=(const type_info& rhs) const noexcept;
+  bool before(const type_info& rhs) const noexcept;
+  std::size_t hash_code() const noexcept;
+  const char* name() const noexcept;
+};
+)";
+
+static const char* const jitsafe_header_sys_time = R"(
+#pragma once
+struct timeval {
+  unsigned long long tv_sec;
+  unsigned long long tv_usec;
+};
+struct timeval it_interval;
+struct timeval it_value;
+int getitimer(int, struct itimerval*);
+int gettimeofday(struct timeval*, void*);
+int setitimer(int, const struct itimerval*, struct itimerval*);
+int utimes(const char*, const struct timeval[2]);
 )";
 
 // WAR: These need to be pre-added as a workaround for NVRTC implicitly using
@@ -5134,6 +5353,8 @@ static const StringMap& get_jitsafe_headers_map() {
       {"cstdlib", jitsafe_header_cstdlib},
       {"string.h", jitsafe_header_string_h},
       {"cstring", jitsafe_header_cstring},
+      {"stdarg.h", jitsafe_header_stdarg_h},
+      {"cstdarg", jitsafe_header_cstdarg},
       {"time.h", jitsafe_header_time_h},
       {"ctime", jitsafe_header_ctime},
       {"algorithm", jitsafe_header_algorithm},
@@ -5154,6 +5375,12 @@ static const StringMap& get_jitsafe_headers_map() {
       {"type_traits", jitsafe_header_type_traits},
       {"vector", jitsafe_header_vector},
       {"memory.h", jitsafe_header_memory_h},
+      {"functional", jitsafe_header_functional},
+      {"map", jitsafe_header_map},
+      {"stack", jitsafe_header_stack},
+      {"iomanip", jitsafe_header_iomanip},
+      {"typeinfo", jitsafe_header_typeinfo},
+      {"sys/time.h", jitsafe_header_sys_time},
   };
   return jitsafe_headers_map;
 }
