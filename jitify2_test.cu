@@ -829,7 +829,7 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_EQ(program->nvvm().size(), program->lto_ir().size());
   int current_arch = get_current_device_arch();
   LinkedProgram linked_program = program->link();
-  if (CUDA_VERSION < 11040 || CUDA_VERSION >= 12000) {
+  if (CUDA_VERSION < 11040) {
     ASSERT_FALSE(linked_program.ok());
     ASSERT_TRUE(jitify2::detail::startswith(linked_program.error(),
                                             "Linking LTO IR is not supported"));
@@ -908,7 +908,7 @@ __global__ void my_kernel(int* data) {
   // TODO: Consider allowing refs not ptrs for programs, and also addding a
   //         get_kernel() shortcut method to LinkedProgram.
   LinkedProgram linked_program = LinkedProgram::link({&program1, &program2});
-  if (CUDA_VERSION < 11040 || CUDA_VERSION >= 12000) {
+  if (CUDA_VERSION < 11040) {
     ASSERT_FALSE(linked_program.ok());
     ASSERT_TRUE(jitify2::detail::startswith(linked_program.error(),
                                             "Linking LTO IR is not supported"));
@@ -952,20 +952,27 @@ __global__ void my_kernel(int* data) {
                     ->compile()
                     ->ptx();
   }
-  Kernel kernel =
-      Program("linktest_program2", source2)
-          ->preprocess({"-rdc=true"}, {"-Lexample_headers", "-llinktest.ptx"})
-          ->get_kernel("my_kernel");
-  int* d_data;
-  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
-  int h_data = 3;
-  CHECK_CUDART(
-      cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
-  ASSERT_EQ(kernel->configure(1, 1)->launch(d_data), "");
-  CHECK_CUDART(
-      cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
-  EXPECT_EQ(h_data, 26);
-  CHECK_CUDART(cudaFree(d_data));
+  const std::vector<std::string> linker_options0 = {"-Lexample_headers",
+                                                    "-llinktest.ptx"};
+  for (bool use_culink : {false, true}) {
+    std::vector<std::string> linker_options = linker_options0;
+    if (use_culink) {
+      linker_options.push_back("--use-culink");
+    }
+    Kernel kernel = Program("linktest_program2", source2)
+                        ->preprocess({"-rdc=true"}, linker_options)
+                        ->get_kernel("my_kernel");
+    int* d_data;
+    CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(int)));
+    int h_data = 3;
+    CHECK_CUDART(
+        cudaMemcpy(d_data, &h_data, sizeof(int), cudaMemcpyHostToDevice));
+    ASSERT_EQ(kernel->configure(1, 1)->launch(d_data), "");
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(int), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(h_data, 26);
+    CHECK_CUDART(cudaFree(d_data));
+  }
 }
 
 namespace a {
@@ -1517,7 +1524,7 @@ __global__ void my_kernel(float* data) {
 #if CUDA_VERSION >= 11000
 TEST(Jitify2Test, LibCudaCxx) {
   // Test that each libcudacxx header can be compiled on its own.
-  for (const std::string& header :
+  for (const std::string header :
        {"atomic", "barrier", "cassert", "cfloat", "chrono", "climits",
         "cstddef", "cstdint", "ctime", "functional", "latch",
         /*"limits",*/ "ratio", "semaphore", "type_traits", "utility"}) {
