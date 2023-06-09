@@ -607,6 +607,58 @@ TEST(Jitify2Test, PathJoin) {
 #endif
 }
 
+TEST(Jitify2Test, PathSimplify) {
+  EXPECT_EQ(jitify2::detail::path_simplify(""), "");
+  EXPECT_EQ(jitify2::detail::path_simplify("/"), "/");
+  EXPECT_EQ(jitify2::detail::path_simplify("//"), "/");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar"), "/foo/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar"), "foo/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/./bar"), "/foo/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/./bar"), "foo/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar"), "/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar"), "bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/cat/../../bar"), "/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/cat/../../bar"), "bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("/./bar"), "/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("./bar"), "bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("../bar"), "../bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("../../bar"), "../../bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("../.././bar"), "../../bar");
+  EXPECT_EQ(jitify2::detail::path_simplify(".././../bar"), "../../bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("./../../bar"), "../../bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/.."), "/foo");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar/.."), "foo");
+  EXPECT_EQ(jitify2::detail::path_simplify("//foo///..////bar"), "/bar");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/"), "foo/");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/"), "/foo/");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar/"), "foo/bar/");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/"), "/foo/bar/");
+  EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar/"), "bar/");
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar/"), "/bar/");
+  EXPECT_EQ(jitify2::detail::path_simplify("/../foo"), "");  // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../../bar"), // Invalid path
+            "");
+  EXPECT_EQ(jitify2::detail::path_simplify("/.."), "");  // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../.."), "");  // Invalid path
+#if defined _WIN32 || defined _WIN64
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\)"), R"(\)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\\)"), R"(\)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\bar)"), R"(\foo\bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\bar)"), R"(foo\bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\.\bar)"), R"(\foo\bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\.\bar)"), R"(foo\bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\..\bar)"), R"(\bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\..\bar)"), R"(bar)");
+
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar)"),
+            R"(\foo/bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\./cat)"),
+            R"(\foo/bar\cat)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)"),
+            R"(\foo/cat)");
+#endif
+}
+
 TEST(Jitify2Test, Program) {
   static const char* const name = "my_program";
   static const char* const source = "/* empty source */";
@@ -1653,7 +1705,7 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   // Test order is actually undefined, so we use filters to force the
   // AssertHeader test to run last.
-  ::testing::GTEST_FLAG(filter) = "-Jitify2Test.AssertHeader";
+  ::testing::GTEST_FLAG(filter) += ":-Jitify2Test.AssertHeader";
   int result = RUN_ALL_TESTS();
   ::testing::GTEST_FLAG(filter) = "Jitify2Test.AssertHeader";
   return result | RUN_ALL_TESTS();

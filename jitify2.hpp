@@ -565,6 +565,9 @@ inline std::string get_type_name(const std::type_info& typeinfo) {
   // Note: UNDNAME_NO_MS_KEYWORDS removes __cdecl, __ptr64 etc. but has a bug in
   // some versions that breaks function types. Instead, we leave these tokens in
   // and #define them away as necessary.
+  // Note: UnDecorateSymbolName is not thread safe.
+  JITIFY_IF_THREAD_SAFE(static std::mutex mutex;
+                        std::lock_guard<std::mutex> lock(mutex);)
   if (!UnDecorateSymbolName(
           decorated_name, undecorated_name,
           sizeof(undecorated_name) / sizeof(*undecorated_name),
@@ -5483,20 +5486,32 @@ inline bool is_include_directive_with_quotes(StringRef source, int line_num,
 
 // Elides "/." and "/.." tokens from path. Returns empty string if illformed.
 inline std::string path_simplify(StringRef path) {
+#if defined _WIN32 || defined _WIN64
+  // Note that Windows supports both forward and backslash path separators.
+  const char* sep = "\\/";
+#else
+  const char* sep = "/";
+#endif
+  const int n = (int)path.size();
   StringVec dirs;
+  std::string seps;
   std::string cur_dir;
   bool after_slash = false;
-  for (int i = 0; i < (int)path.size(); ++i) {
-    if (path[i] == '/') {
+  for (int i = 0; i < n + 1; ++i) {
+    if (i == n || std::strchr(sep, path[i])) {
       if (after_slash) continue;  // Ignore repeat slashes
-      after_slash = true;
+      after_slash = i < n;
       if (cur_dir == ".." && !dirs.empty() && dirs.back() != "..") {
         if (dirs.size() == 1 && dirs.front().empty()) {
           return {};  // Bad path: back-traversals exceed depth of absolute path
         }
         dirs.pop_back();
+        seps.pop_back();
       } else if (cur_dir != ".") {  // Ignore /./
         dirs.push_back(cur_dir);
+        if (after_slash) {
+          seps.push_back(path[i]);
+        }
       }
       cur_dir.clear();
     } else {
@@ -5504,15 +5519,12 @@ inline std::string path_simplify(StringRef path) {
       cur_dir.push_back(path[i]);
     }
   }
-  if (!after_slash) {
-    dirs.push_back(cur_dir);
-  }
   std::ostringstream ss;
   for (int i = 0; i < (int)dirs.size() - 1; ++i) {
-    ss << dirs[i] << "/";
+    ss << dirs[i] << seps[i];
   }
   if (!dirs.empty()) ss << dirs.back();
-  if (after_slash) ss << "/";
+  if (after_slash) ss << seps.back();
   return ss.str();
 }
 
@@ -5947,6 +5959,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
       &compiler_options, "-no-replace-pragma-once", "--no-replace-pragma-once");
   bool use_builtin_headers = !detail::pop_flag(
       &compiler_options, "-no-builtin-headers", "--no-builtin-headers");
+  // Allow -nostdinc as an alias for -no-builtin-headers.
+  if (detail::pop_flag(&compiler_options, "-nostdinc", "--nostdinc")) {
+    use_builtin_headers = false;
+  }
 
   // This is re-added to the remaining options below.
   bool should_remove_unused_globals = detail::pop_flag(
@@ -6063,7 +6079,7 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
               compile_log, &include_name, &include_parent, &line_num)) {
         // There was a non include-related compilation error.
         return Error("Compilation failed: " + compile_error + "\n" +
-                     compiler_options_msg + compile_log);
+                     compiler_options_msg + header_log + compile_log);
       }
 
       bool is_included_with_quotes = false;
@@ -6116,9 +6132,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
         }
         // Log where the header was found.
         header_log += detail::string_join(
-            {"Found #include ", include_name, " from ", include_parent, ":",
-             std::to_string(line_num), " [", include_parent_fullpath, "]",
-             " at:\n  ", header_fullpath, "\n"},
+            {"Found #include ", (is_included_with_quotes ? "\"" : "<"),
+             include_name, (is_included_with_quotes ? "\"" : ">"), " from ",
+             include_parent, ":", std::to_string(line_num), " [",
+             include_parent_fullpath, "]", " at:\n  ", header_fullpath, "\n"},
             "");
       } else {
         // Missing header.

@@ -28,13 +28,13 @@ Jitify is just a single header file:
 #include <jitify2.hpp>
 ```
 
-which only requires linking with the CUDA Driver (and NVRTC at runtime):
+It does not have any link-time dependencies besides the dynamic loader (which is used to load the CUDA driver, NVRTC, and nvJitLink libraries at runtime), so compilation is simple:
 
 ```bash
 # with NVCC:
-$ nvcc ...
+$ nvcc ... -ldl
 # or with GCC:
-$ g++ ... -I$CUDA_INC_DIR -L$CUDA_LIB_DIR -lcuda
+$ g++ ... -I$CUDA_INC_DIR -ldl
 ```
 
 It provides a simple API for compiling and executing CUDA source code at runtime:
