@@ -1436,46 +1436,51 @@ static const char* jitsafe_header_float_h = R"(
 
 static const char* jitsafe_header_limits_h = R"(
 #pragma once
-
-#if defined _WIN32 || defined _WIN64
- #define __WORDSIZE 32
+#if __has_include(<cuda/std/climits>)
+ #include <cuda/std/climits>
+ #include <cuda/std/limits>
+ #include <cuda/std/cstdint>
 #else
- #if defined(__LP64__) || (defined __x86_64__ && !defined __ILP32__)
-  #define __WORDSIZE 64
- #else
+ #if defined _WIN32 || defined _WIN64
   #define __WORDSIZE 32
+ #else
+  #if defined(__LP64__) || (defined __x86_64__ && !defined __ILP32__)
+   #define __WORDSIZE 64
+  #else
+   #define __WORDSIZE 32
+  #endif
  #endif
+ #define MB_LEN_MAX  16
+ #define CHAR_BIT    8
+ #define SCHAR_MIN   (-128)
+ #define SCHAR_MAX   127
+ #define UCHAR_MAX   255
+ enum {
+   _JITIFY_CHAR_IS_UNSIGNED = (char)-1 >= 0,
+   CHAR_MIN = _JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN,
+   CHAR_MAX = _JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX,
+ };
+ #define SHRT_MIN    (-SHRT_MAX - 1)
+ #define SHRT_MAX    0x7fff
+ #define USHRT_MAX   0xffff
+ #define INT_MIN     (-INT_MAX - 1)
+ #define INT_MAX     0x7fffffff
+ #define UINT_MAX    0xffffffff
+ #if __WORDSIZE == 64
+  # define LONG_MAX  LLONG_MAX
+ #else
+  # define LONG_MAX  UINT_MAX
+ #endif
+ #define LONG_MIN    (-LONG_MAX - 1)
+ #if __WORDSIZE == 64
+  #define ULONG_MAX  ULLONG_MAX
+ #else
+  #define ULONG_MAX  UINT_MAX
+ #endif
+ #define LLONG_MAX  0x7fffffffffffffff
+ #define LLONG_MIN  (-LLONG_MAX - 1)
+ #define ULLONG_MAX 0xffffffffffffffff
 #endif
-#define MB_LEN_MAX  16
-#define CHAR_BIT    8
-#define SCHAR_MIN   (-128)
-#define SCHAR_MAX   127
-#define UCHAR_MAX   255
-enum {
-  _JITIFY_CHAR_IS_UNSIGNED = (char)-1 >= 0,
-  CHAR_MIN = _JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN,
-  CHAR_MAX = _JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX,
-};
-#define SHRT_MIN    (-SHRT_MAX - 1)
-#define SHRT_MAX    0x7fff
-#define USHRT_MAX   0xffff
-#define INT_MIN     (-INT_MAX - 1)
-#define INT_MAX     0x7fffffff
-#define UINT_MAX    0xffffffff
-#if __WORDSIZE == 64
- # define LONG_MAX  LLONG_MAX
-#else
- # define LONG_MAX  UINT_MAX
-#endif
-#define LONG_MIN    (-LONG_MAX - 1)
-#if __WORDSIZE == 64
- #define ULONG_MAX  ULLONG_MAX
-#else
- #define ULONG_MAX  UINT_MAX
-#endif
-#define LLONG_MAX  0x7fffffffffffffff
-#define LLONG_MIN  (-LLONG_MAX - 1)
-#define ULLONG_MAX 0xffffffffffffffff
 )";
 
 static const char* jitsafe_header_iterator = R"(
@@ -1519,6 +1524,11 @@ struct iterator_traits<T const*> {
 //              using type specific structs since we can't template on floats.
 static const char* jitsafe_header_limits = R"(
 #pragma once
+#if __has_include(<cuda/std/limits>)
+ #include <cuda/std/climits>
+ #include <cuda/std/limits>
+ #include <cuda/std/cstdint>
+#endif
 #include <cfloat>
 #include <climits>
 #include <cstdint>
@@ -1985,6 +1995,11 @@ static const char* jitsafe_header_type_traits = R"(
 // TODO: INT_FAST8_MAX et al. and a few other misc constants
 static const char* jitsafe_header_stdint_h =
     "#pragma once\n"
+    "#if __has_include(<cuda/std/cstdint>)\n"
+    " #include <cuda/std/climits>\n"
+    " #include <cuda/std/cstdint>\n"
+    " #define __jitify_using_libcudacxx\n"
+    "#endif\n"
     "#include <climits>\n"
     "namespace __jitify_stdint_ns {\n"
     "typedef signed char      int8_t;\n"
@@ -2000,7 +2015,6 @@ static const char* jitsafe_header_stdint_h =
     "typedef signed int       int_least32_t;\n"
     "typedef signed long long int_least64_t;\n"
     "typedef signed long long intmax_t;\n"
-    "typedef signed long      intptr_t; //optional\n"
     "typedef unsigned char      uint8_t;\n"
     "typedef unsigned short     uint16_t;\n"
     "typedef unsigned int       uint32_t;\n"
@@ -2014,36 +2028,43 @@ static const char* jitsafe_header_stdint_h =
     "typedef unsigned int       uint_least32_t;\n"
     "typedef unsigned long long uint_least64_t;\n"
     "typedef unsigned long long uintmax_t;\n"
-    "#define INT8_MIN    SCHAR_MIN\n"
-    "#define INT16_MIN   SHRT_MIN\n"
-    "#if defined _WIN32 || defined _WIN64\n"
-    "#define WCHAR_MIN   0\n"
-    "#define WCHAR_MAX   USHRT_MAX\n"
-    "typedef unsigned long long uintptr_t; //optional\n"
-    "#else\n"
-    "#define WCHAR_MIN   INT_MIN\n"
-    "#define WCHAR_MAX   INT_MAX\n"
-    "typedef unsigned long      uintptr_t; //optional\n"
+    "#ifndef __jitify_using_libcudacxx\n"
+    " typedef signed long      intptr_t; //optional\n"
+    " #define INT8_MIN    SCHAR_MIN\n"
+    " #define INT16_MIN   SHRT_MIN\n"
+    " #define INT32_MIN   INT_MIN\n"
+    " #define INT64_MIN   LLONG_MIN\n"
+    " #define INT8_MAX    SCHAR_MAX\n"
+    " #define INT16_MAX   SHRT_MAX\n"
+    " #define INT32_MAX   INT_MAX\n"
+    " #define INT64_MAX   LLONG_MAX\n"
+    " #define UINT8_MAX   UCHAR_MAX\n"
+    " #define UINT16_MAX  USHRT_MAX\n"
+    " #define UINT32_MAX  UINT_MAX\n"
+    " #define UINT64_MAX  ULLONG_MAX\n"
+    " #define INTPTR_MIN  LONG_MIN\n"
+    " #define INTMAX_MIN  LLONG_MIN\n"
+    " #define INTPTR_MAX  LONG_MAX\n"
+    " #define INTMAX_MAX  LLONG_MAX\n"
+    " #define UINTPTR_MAX ULONG_MAX\n"
+    " #define UINTMAX_MAX ULLONG_MAX\n"
+    " #define PTRDIFF_MIN INTPTR_MIN\n"
+    " #define PTRDIFF_MAX INTPTR_MAX\n"
+    " #define SIZE_MAX    UINT64_MAX\n"
     "#endif\n"
-    "#define INT32_MIN   INT_MIN\n"
-    "#define INT64_MIN   LLONG_MIN\n"
-    "#define INT8_MAX    SCHAR_MAX\n"
-    "#define INT16_MAX   SHRT_MAX\n"
-    "#define INT32_MAX   INT_MAX\n"
-    "#define INT64_MAX   LLONG_MAX\n"
-    "#define UINT8_MAX   UCHAR_MAX\n"
-    "#define UINT16_MAX  USHRT_MAX\n"
-    "#define UINT32_MAX  UINT_MAX\n"
-    "#define UINT64_MAX  ULLONG_MAX\n"
-    "#define INTPTR_MIN  LONG_MIN\n"
-    "#define INTMAX_MIN  LLONG_MIN\n"
-    "#define INTPTR_MAX  LONG_MAX\n"
-    "#define INTMAX_MAX  LLONG_MAX\n"
-    "#define UINTPTR_MAX ULONG_MAX\n"
-    "#define UINTMAX_MAX ULLONG_MAX\n"
-    "#define PTRDIFF_MIN INTPTR_MIN\n"
-    "#define PTRDIFF_MAX INTPTR_MAX\n"
-    "#define SIZE_MAX    UINT64_MAX\n"
+    "#if defined _WIN32 || defined _WIN64\n"
+    " #define WCHAR_MIN   0\n"
+    " #define WCHAR_MAX   USHRT_MAX\n"
+    " #ifndef __jitify_using_libcudacxx\n"
+    "  typedef unsigned long long uintptr_t; //optional\n"
+    " #endif\n"
+    "#else\n"
+    " #define WCHAR_MIN   INT_MIN\n"
+    " #define WCHAR_MAX   INT_MAX\n"
+    " #ifndef __jitify_using_libcudacxx\n"
+    "  typedef unsigned long      uintptr_t; //optional\n"
+    " #endif\n"
+    "#endif\n"
     "} // namespace __jitify_stdint_ns\n"
     "namespace std { using namespace __jitify_stdint_ns; }\n"
     "using namespace __jitify_stdint_ns;\n";
