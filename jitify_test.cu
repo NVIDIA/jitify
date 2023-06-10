@@ -961,8 +961,6 @@ static const char* const builtin_numeric_cuda_std_limits_program_source =
     "builtin_numeric_cuda_std_limits_program\n"
     "#include <climits>\n"
     "#include <limits>\n"
-    "#include <cuda/std/climits>\n" // test fails without this explicit include
-    "#include <cuda/std/limits>\n"
     "struct MyType {};\n"
     "namespace cuda {\n"
     "namespace std {\n"
