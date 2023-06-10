@@ -687,6 +687,47 @@ inline bool load_source(
              comment;
     }
 
+    // WAR where nvrtc can fail to correctly return if an include is present
+    if (cleanline.find("#if __has_include") != std::string::npos) {
+      // check for angle bracket include
+      size_t start = cleanline.find("<") + 1;
+      size_t count = cleanline.find(">") - start;
+      std::string has_include_name = cleanline.substr(start, count);
+
+#if JITIFY_PRINT_HEADER_PATHS
+        std::cout << "Found #if __has_include(<" << has_include_name << ">)" << " from "
+                  << filename << ":" << linenum << std::endl;
+#endif
+      // Try loading from filesystem
+      bool found_file = false;
+      std::string has_include_fullpath = path_join(current_dir, has_include_name);
+      if (search_current_dir) {
+        file_stream.open(has_include_fullpath.c_str());
+        if (file_stream) found_file = true;
+      }
+      // Search include directories
+      if (!found_file) {
+        for (int i = 0; i < (int)include_paths.size(); ++i) {
+          has_include_fullpath = path_join(include_paths[i], has_include_name);
+          file_stream.open(has_include_fullpath.c_str());
+          if (file_stream) {
+            found_file = true;
+            break;
+          }
+        }
+        if (!found_file) {
+          // Try loading from builtin headers
+          has_include_fullpath = path_join("__jitify_builtin", has_include_name);
+          auto it = get_jitsafe_headers_map().find(has_include_name);
+          if (it != get_jitsafe_headers_map().end()) {
+            found_file = true;
+          }
+        }
+      }
+
+      line = found_file ? "#if 1" : "#if 0";
+    }
+
     source += line + "\n";
   }
   // HACK TESTING (WAR for cub)
