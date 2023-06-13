@@ -688,44 +688,77 @@ inline bool load_source(
     }
 
     // WAR where nvrtc can fail to correctly return if an include is present
-    if (cleanline.find("#if __has_include") != std::string::npos) {
-      // check for angle bracket include
-      size_t start = cleanline.find("<") + 1;
-      size_t count = cleanline.find(">") - start;
-      std::string has_include_name = cleanline.substr(start, count);
+    size_t has_include_start = cleanline.find("__has_include");
+    if (has_include_start != std::string::npos) {
+      // find subsequent opening and closing braces
+      size_t open = cleanline.find("(", has_include_start);
+      size_t close = cleanline.find(")", open);
+      if (!(open == std::string::npos || close == std::string::npos)) {
+        std::string has_name = cleanline.substr(open + 1, close - open - 1);
+
+        size_t header_start = 0;
+        size_t header_count = 0;
+        bool quote_include = false;
+        if (has_name.find("<") != std::string::npos) {
+          header_start = has_name.find("<") + 1;
+          header_count = has_name.find(">") - header_start;
+        } else if (has_name.find("\"") != std::string::npos) {
+          quote_include = true;
+          header_start = has_name.find("\"") + 1;
+          header_count = has_name.find("\"", header_start) - header_start;
+          if (has_name.find("\"", header_start) == std::string::npos)
+            throw std::runtime_error("Malformed __has_include statement (" +
+                                     filename + ":" + std::to_string(linenum) +
+                                     ")");
+        }
+
+        if (header_count != 0) {
+          std::string has_include_name =
+              has_name.substr(header_start, header_count);
 
 #if JITIFY_PRINT_HEADER_PATHS
-        std::cout << "Found #if __has_include(<" << has_include_name << ">)" << " from "
-                  << filename << ":" << linenum << std::endl;
+          std::cout << "Found #if __has_include(" << has_name << ")"
+                    << " from " << filename << ":" << linenum << std::endl;
 #endif
-      // Try loading from filesystem
-      bool found_file = false;
-      std::string has_include_fullpath = path_join(current_dir, has_include_name);
-      if (search_current_dir) {
-        file_stream.open(has_include_fullpath.c_str());
-        if (file_stream) found_file = true;
-      }
-      // Search include directories
-      if (!found_file) {
-        for (int i = 0; i < (int)include_paths.size(); ++i) {
-          has_include_fullpath = path_join(include_paths[i], has_include_name);
-          file_stream.open(has_include_fullpath.c_str());
-          if (file_stream) {
-            found_file = true;
-            break;
+          // Try loading from filesystem
+          bool found_file = false;
+          std::string has_include_fullpath =
+              path_join(current_dir, has_include_name);
+          if (quote_include) {
+            file_stream.open(has_include_fullpath.c_str());
+            if (file_stream) found_file = true;
           }
-        }
-        if (!found_file) {
-          // Try loading from builtin headers
-          has_include_fullpath = path_join("__jitify_builtin", has_include_name);
-          auto it = get_jitsafe_headers_map().find(has_include_name);
-          if (it != get_jitsafe_headers_map().end()) {
-            found_file = true;
+          // Search include directories
+          if (!found_file) {
+            for (int i = 0; i < (int)include_paths.size(); ++i) {
+              has_include_fullpath =
+                  path_join(include_paths[i], has_include_name);
+              file_stream.open(has_include_fullpath.c_str());
+              if (file_stream) {
+                found_file = true;
+                break;
+              }
+            }
+            if (!found_file) {
+              // Try loading from builtin headers
+              has_include_fullpath =
+                  path_join("__jitify_builtin", has_include_name);
+              auto it = get_jitsafe_headers_map().find(has_include_name);
+              if (it != get_jitsafe_headers_map().end()) {
+                found_file = true;
+              }
+            }
           }
-        }
-      }
 
-      line = found_file ? "#if 1" : "#if 0";
+          if (found_file) {
+            line = cleanline.substr(0, has_include_start) + "(1)" +
+                   cleanline.substr(close + 1);
+          } else {
+            line = cleanline.substr(0, has_include_start) + "(0)" +
+                   cleanline.substr(close + 1);
+          }
+        }
+      }
     }
 
     source += line + "\n";
