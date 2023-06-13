@@ -1149,3 +1149,59 @@ TEST(JitifyTest, AssertHeader) {
                   .configure(grid, block)
                   .launch()));
 }
+
+static const char* const has_include_source = R"(
+  #if __has_include(<limits>)
+  #else
+  #error __has_include failed
+  #endif
+
+  #if 1 && __has_include(<limits>)
+  #else
+  #error __has_include failed
+  #endif
+
+  #if __has_include(<limits>) && 0
+  #error __has_include failed
+  #else
+  #endif
+
+  #if __has_include("<limits>")
+  #else
+  #error __has_include failed
+  #endif
+
+  #if __has_include("limits")
+  #else
+  #error __has_include failed
+  #endif
+
+  #if __has_include("example_headers/my_header1.cuh")
+  #else
+  #error __has_include failed
+  #endif
+
+  // check we don't touch these
+  #if defined(__has_include)
+  #else
+  #error __has_include failed
+  #endif
+
+  #if !defined(__has_include)
+  #error __has_include failed
+  #endif
+
+  __global__ void has_include_kernel() { }
+)";
+
+TEST(JitifyTest, HasInclude) {
+  // Checks that cassert works as expected
+  jitify::JitCache kernel_cache;
+  auto program = kernel_cache.program(has_include_source);
+  dim3 grid(1);
+  dim3 block(1);
+  CHECK_CUDA((program.kernel("has_include_kernel")
+                  .instantiate<>()
+                  .configure(grid, block)
+                  .launch()));
+}
