@@ -6341,13 +6341,7 @@ class NewFile {
     fl.l_whence = SEEK_SET;  // Start at beginning of file
     // Note: The Open File Descriptor (OFD) version of this call ensures that
     // the lock is per-descriptor not per-process (and so is thread-safe).
-    
-#ifdef _POSIX_VERSION
-    bool success = ::fcntl(fd_, F_SETLKW, &fl) == 0;
-#else
     bool success = ::fcntl(fd_, F_OFD_SETLKW, &fl) == 0;
-#endif
-
 #endif
     error_ = get_error_msg(success, "lock");
     return success;
