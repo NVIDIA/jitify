@@ -5771,7 +5771,7 @@ inline std::string remove_cpp_comments_and_line_continuations(
       // Elide comments and line continuations.
     }
   }
-  result.append(source, old_pos);
+  result.append(source, old_pos, std::string::npos);
   return result;
 }
 
@@ -5838,7 +5838,7 @@ inline std::string remove_cpp_whitespace(const std::string& source) {
       }
     }
   }
-  result.append(source, old_pos);
+  result.append(source, old_pos, std::string::npos);
   return result;
 }
 
