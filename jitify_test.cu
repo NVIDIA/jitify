@@ -1136,20 +1136,6 @@ TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "", true);
 }
 
-// NOTE: This MUST be the last test in the file, due to sticky CUDA error.
-TEST(JitifyTest, AssertHeader) {
-  // Checks that cassert works as expected
-  jitify::JitCache kernel_cache;
-  auto program =
-      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
-  dim3 grid(1);
-  dim3 block(1);
-  CHECK_CUDA((program.kernel("my_assert_kernel")
-                  .instantiate<>()
-                  .configure(grid, block)
-                  .launch()));
-}
-
 static const char* const has_include_source = R"(
   #if __has_include(<limits>)
   #else
@@ -1201,6 +1187,20 @@ TEST(JitifyTest, HasInclude) {
   dim3 grid(1);
   dim3 block(1);
   CHECK_CUDA((program.kernel("has_include_kernel")
+                  .instantiate<>()
+                  .configure(grid, block)
+                  .launch()));
+}
+
+// NOTE: This MUST be the last test in the file, due to sticky CUDA error.
+TEST(JitifyTest, AssertHeader) {
+  // Checks that cassert works as expected
+  jitify::JitCache kernel_cache;
+  auto program =
+      kernel_cache.program(assert_program_source, {}, {"-I" CUDA_INC_DIR});
+  dim3 grid(1);
+  dim3 block(1);
+  CHECK_CUDA((program.kernel("my_assert_kernel")
                   .instantiate<>()
                   .configure(grid, block)
                   .launch()));
