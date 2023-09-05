@@ -696,21 +696,19 @@ inline bool load_source(
       if (!(open == std::string::npos || close == std::string::npos)) {
         std::string has_name = cleanline.substr(open + 1, close - open - 1);
 
-        size_t header_start = 0;
-        size_t header_count = 0;
-        bool quote_include = false;
-        if (has_name.find("<") != std::string::npos) {
-          header_start = has_name.find("<") + 1;
-          header_count = has_name.find(">") - header_start;
-        } else if (has_name.find("\"") != std::string::npos) {
-          quote_include = true;
-          header_start = has_name.find("\"") + 1;
-          header_count = has_name.find("\"", header_start) - header_start;
-          if (has_name.find("\"", header_start) == std::string::npos)
-            throw std::runtime_error("Malformed __has_include statement (" +
-                                     filename + ":" + std::to_string(linenum) +
-                                     ")");
-        }
+        if (has_name.find("<") == std::string::npos && has_name.find("\"") == std::string::npos)
+          throw std::runtime_error("Malformed __has_include statement (" +
+                                   filename + ":" + std::to_string(linenum) +
+                                   ")");
+        // are we using quote includes or angle brackets?
+        // (test using angle brackets, since quotes are valid around angle brackets)
+        bool quote_include = has_name.find("<") == std::string::npos;
+        size_t header_start = (quote_include ? has_name.find("\"") : has_name.find("<")) + 1;
+        size_t header_count = has_name.find(quote_include ? "\"" : ">", header_start) - header_start;
+        if (has_name.find(quote_include ? "\"" : ">", header_start) == std::string::npos)
+          throw std::runtime_error("Malformed __has_include statement (" +
+                                   filename + ":" + std::to_string(linenum) +
+                                   ")");
 
         if (header_count != 0) {
           std::string has_include_name =
@@ -750,13 +748,8 @@ inline bool load_source(
             }
           }
 
-          if (found_file) {
-            line = cleanline.substr(0, has_include_start) + "(1)" +
-                   cleanline.substr(close + 1);
-          } else {
-            line = cleanline.substr(0, has_include_start) + "(0)" +
-                   cleanline.substr(close + 1);
-          }
+          line = cleanline.substr(0, has_include_start) + (found_file ? "(1)" : "(0)") +
+            cleanline.substr(close + 1);
         }
       }
     }
