@@ -3923,7 +3923,7 @@ enum {
 #if __WORDSIZE == 64
  # define LONG_MAX  LLONG_MAX
 #else
- # define LONG_MAX  UINT_MAX
+ # define LONG_MAX  INT_MAX
 #endif
 #define LONG_MIN    (-LONG_MAX - 1)
 #if __WORDSIZE == 64
