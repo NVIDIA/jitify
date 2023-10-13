@@ -1777,6 +1777,20 @@ static const char* jitsafe_header_type_traits = R"(
     template<class Ret, class... Args> struct is_function<Ret(Args...)> : true_type {}; //regular
     template<class Ret, class... Args> struct is_function<Ret(Args......)> : true_type {}; // variadic
 
+    template<typename T> struct make_signed { typedef T type; };
+    template<> struct make_signed<unsigned char> { typedef signed char type; };
+    template<> struct make_signed<unsigned short> { typedef signed short type; };
+    template<> struct make_signed<unsigned int> { typedef signed int type; };
+    template<> struct make_signed<unsigned long> { typedef signed long type; };
+    template<> struct make_signed<unsigned long long> { typedef signed long long type; };
+
+    template<typename T> struct make_unsigned { typedef T type; };
+    template<> struct make_unsigned<char> { typedef unsigned char type; };
+    template<> struct make_unsigned<short> { typedef unsigned short type; };
+    template<> struct make_unsigned<int> { typedef unsigned int type; };
+    template<> struct make_unsigned<long> { typedef unsigned long type; };
+    template<> struct make_unsigned<long long> { typedef unsigned long long type; };
+
     template<class> struct result_of;
     template<class F, typename... Args>
     struct result_of<F(Args...)> {
