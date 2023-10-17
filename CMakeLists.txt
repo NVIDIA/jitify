@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.9)
 project(jitify LANGUAGES CXX CUDA)
 
+option(ASAN "Enable address sanitizer in debug build" ON)
+
 # C++ compiler options.
 set (CMAKE_CXX_STANDARD 11)
 set (CMAKE_CUDA_STANDARD 11)  # Doesn't work?
@@ -12,6 +14,13 @@ else()
   set(CMAKE_CXX_FLAGS
       "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra -Wconversion -Wshadow -fmessage-length=80")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
+  if (ASAN)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
+        -fsanitize=undefined,address")
+  else()
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
+        -fsanitize=undefined")
+  endif()
 endif()
 
 # CUDA compiler options.
