@@ -6336,6 +6336,9 @@ class NewFile {
 #if defined _WIN32 || defined _WIN64
     bool success = ::_locking(fd_, _LK_LOCK, 1) == 0;
 #else
+#ifndef F_OFD_SETLKW
+#error F_OFD_SETLKW is not defined; try building with -D_FILE_OFFSET_BITS=64
+#endif  // F_OFD_SETLKW
     flock fl = {};
     fl.l_type = F_WRLCK;     // Exclusive lock for writing
     fl.l_whence = SEEK_SET;  // Start at beginning of file
