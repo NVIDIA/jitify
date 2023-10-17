@@ -133,7 +133,10 @@ foreach(test ${TESTS})
                                PUBLIC JITIFY_LINK_CUDA_STATIC=1
                                PUBLIC JITIFY_LINK_NVRTC_STATIC=1
                                PUBLIC JITIFY_LINK_NVJITLINK_STATIC=1)
-    target_link_libraries(${test} cuda nvrtc nvJitLink)
+    target_link_libraries(${test} cuda nvrtc)
+    if (CUDA_VERSION_MAJOR GREATER_EQUAL 12)
+      target_link_libraries(${test} nvJitLink)
+    endif()
   endif()
   if (NOT WIN32)
     target_link_libraries(${test} ${CMAKE_DL_LIBS})
