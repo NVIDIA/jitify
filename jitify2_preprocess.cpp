@@ -139,6 +139,7 @@ jitify2_preprocess \
   [-o / --output-directory <dir>]     Write output files to the specified dir.
   [-p / --variable-prefix <prefix>]   Prefix to add to variable names (see -i).
   [-s / --shared-headers <filename>]  Write headers to a separate file.
+  [-n / --dry-run]                    Don't write any output files.
   [-v / --verbose]                    Print header locations.
   [-h / --help]                       Show this help.
 
@@ -180,6 +181,7 @@ int main(int argc, char* argv[]) {
   StringVec source_filenames;
   bool write_as_cpp_headers = false;
   bool verbose = false;
+  bool dry_run = false;
   const char* arg_c;
   while ((arg_c = *++argv)) {
     std::string arg = arg_c;
@@ -213,6 +215,8 @@ int main(int argc, char* argv[]) {
         varname_prefix = arg_c;
       } else if (arg == "-i" || arg == "--include-style") {
         write_as_cpp_headers = true;
+      } else if (arg == "-n" || arg == "--dry-run") {
+        dry_run = true;
       } else if (arg == "-v" || arg == "--verbose") {
         verbose = true;
       } else {
@@ -261,6 +265,8 @@ int main(int argc, char* argv[]) {
                                 preprocessed->header_sources().end());
     }
 
+    if (dry_run) continue;  // Skip writing output files
+
     if (write_as_cpp_headers) {
       std::stringstream ss(std::stringstream::in | std::stringstream::out |
                            std::stringstream::binary);
@@ -290,6 +296,7 @@ int main(int argc, char* argv[]) {
       }
     }
   }
+  if (dry_run) return EXIT_SUCCESS;  // Skip writing output file
   if (share_headers) {
     if (write_as_cpp_headers) {
       std::stringstream ss(std::stringstream::in | std::stringstream::out |
