@@ -1411,6 +1411,9 @@ class LibNvJitLink
     case NVJITLINK_ERROR_PTX_COMPILE: return "NVJITLINK_ERROR_PTX_COMPILE";
     case NVJITLINK_ERROR_NVVM_COMPILE: return "NVJITLINK_ERROR_NVVM_COMPILE";
     case NVJITLINK_ERROR_INTERNAL: return "NVJITLINK_ERROR_INTERNAL";
+#if CUDA_VERSION >= 12030
+    case NVJITLINK_ERROR_THREADPOOL: return "NVJITLINK_ERROR_THREADPOOL";
+#endif
     }
     // clang-format on
     return "(unknown nvJitLink error)";

@@ -1220,10 +1220,12 @@ __global__ void foo_kernel(int* data) {
               std::string::npos);
   EXPECT_TRUE(ptx.find(".global .align 4 .u32 used_scalar_init = 3;") !=
               std::string::npos);
-  EXPECT_TRUE(ptx.find(".global .align 4 .b8 used_array_init[8] = {4, 0, 0, 0, "
-                       "5, 0, 0, 0};") != std::string::npos);
-  EXPECT_TRUE(ptx.find(".global .align 8 .b8 used_struct_init[16] = {6, 0, 0, "
-                       "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};") !=
+  // Note: Since CUDA 12.3, the array initialization values do not include
+  // trailing zeros (e.g., "{6};" instead of "{6, 0, 0, 0, ...};".
+  EXPECT_TRUE(
+      ptx.find(".global .align 4 .b8 used_array_init[8] = {4, 0, 0, 0, 5") !=
+      std::string::npos);
+  EXPECT_TRUE(ptx.find(".global .align 8 .b8 used_struct_init[16] = {6") !=
               std::string::npos);
   EXPECT_FALSE(ptx.find("_ZN3Foo5valueE") != std::string::npos);
   EXPECT_FALSE(ptx.find("unused_scalar;") != std::string::npos);
@@ -1454,11 +1456,16 @@ __global__ void my_kernel() {}
 }
 
 TEST(Jitify2Test, Thrust) {
-  // TODO: The need to include cstddef here under CUDA 12.0 may be related to
-  //         the local/system include ambiguity problem in Jitify.
   // clang-format off
   static const char* const source = R"(
-#include <cuda/std/cstddef>  // WAR for CUDA 12.0 build
+// WAR for header include issue (note: order of includes matters):
+//   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
+#include <cuda/std/cstdint>
+#include <cuda/std/cstddef>
+#include <cuda/std/type_traits>
+#include <cuda/std/limits>
+namespace std { using ::ptrdiff_t; }
+
 #include <thrust/iterator/counting_iterator.h>
 __global__ void my_kernel(thrust::counting_iterator<int> begin,
                           thrust::counting_iterator<int> end) {
@@ -1487,6 +1494,13 @@ TEST(Jitify2Test, CubBlockPrimitives) {
 #if CUB_VERSION >= 101200 && CUB_VERSION < 101500
 #define ProcessFloatMinusZero BaseDigitExtractor<KeyT>::ProcessFloatMinusZero
 #endif
+
+// WAR for header include issue (note: order of includes matters):
+//   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
+#include <cuda/std/cstdint>
+#include <cuda/std/cstddef>
+#include <cuda/std/type_traits>
+#include <cuda/std/limits>
 
 #include <cub/block/block_load.cuh>
 #include <cub/block/block_radix_sort.cuh>
@@ -1662,21 +1676,30 @@ hopefully.*/
 const char* const foo = R"foo(abc\def
 ghi"')foo";  // )'
 
-  #include <iterator>  // Here's a comment
-  #include <tuple>  // Here's another comment
-
 const char* const linecont_str = "line1 \
 line2";
 const char c = '\xff';
 
-#include <cuda.h>
 #if CUDA_VERSION >= 11000
+
+// WAR for header include issue (note: order of includes matters):
+//   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
+#include <cuda/std/cstdint>
+#include <cuda/std/cstddef>
+#include <cuda/std/type_traits>
+#include <cuda/std/limits>
+
 // CUB headers can be tricky to parse.
 #include <cub/block/block_load.cuh>
 #include <cub/block/block_radix_sort.cuh>
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_store.cuh>
 #endif  // CUDA_VERSION >= 11000
+
+#include <cuda.h>
+
+  #include <iterator>  // Here's a comment
+  #include <tuple>  // Here's another comment
 
 #include "example_headers/my_header1.cuh"
 __global__ void my_kernel() {}
