@@ -4126,7 +4126,6 @@ typedef signed short int_least16_t;
 typedef signed int int_least32_t;
 typedef signed long long int_least64_t;
 typedef signed long long intmax_t;
-typedef signed long intptr_t;  // optional
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
@@ -4140,11 +4139,8 @@ typedef unsigned short uint_least16_t;
 typedef unsigned int uint_least32_t;
 typedef unsigned long long uint_least64_t;
 typedef unsigned long long uintmax_t;
-#if defined _WIN32 || defined _WIN64
-typedef unsigned long long uintptr_t;  // optional
-#else  // not Windows
-typedef unsigned long uintptr_t;  // optional
-#endif
+typedef int64_t intptr_t;  // optional
+typedef uint64_t uintptr_t;  // optional
 )");
 
 JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(stdio, "#include <cstddef>", R"(
