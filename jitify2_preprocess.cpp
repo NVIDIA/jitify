@@ -104,11 +104,11 @@ void write_serialized_headers_as_cpp_source(std::istream& istream,
 // begins with a digit.
 std::string sanitize_varname(const std::string& s) {
   std::string r = s;
-  if (std::isdigit(r[0])) {
+  if (std::isdigit((unsigned char)r[0])) {
     r = '_' + r;
   }
   for (std::string::iterator it = r.begin(); it != r.end(); ++it) {
-    if (!std::isalnum(*it)) {
+    if (!std::isalnum((unsigned char)*it)) {
       *it = '_';
     }
   }
@@ -200,7 +200,8 @@ int main(int argc, char* argv[]) {
       } else if (arg == "-s" || arg == "--shared-headers") {
         arg_c = *++argv;
         if (!arg_c) {
-          std::cerr << "Expected filename after -s" << std::endl;
+          std::cerr << "Expected filename after -s / --shared-headers"
+                    << std::endl;
           return EXIT_FAILURE;
         }
         shared_headers_filename = arg_c;
@@ -279,7 +280,8 @@ int main(int argc, char* argv[]) {
       std::string output_filename =
           path_join(output_dir, source_filename + ".jit.hpp");
       if (!make_directories_for(output_filename)) return EXIT_FAILURE;
-      std::ofstream file(output_filename, std::ios::binary);
+      std::ofstream file(output_filename);
+      file.imbue(std::locale::classic());
       write_serialized_program_as_cpp_header(ss, file, source_varname,
                                              shared_headers_varname);
       if (!file) {
@@ -306,7 +308,8 @@ int main(int argc, char* argv[]) {
       std::string output_filename =
           path_join(output_dir, shared_headers_filename + ".jit.cpp");
       if (!make_directories_for(output_filename)) return EXIT_FAILURE;
-      std::ofstream file(output_filename, std::ios::binary);
+      std::ofstream file(output_filename);
+      file.imbue(std::locale::classic());
       write_serialized_headers_as_cpp_source(ss, file, shared_headers_varname);
       if (!file) {
         std::cerr << "Error writing output to " << output_filename << std::endl;

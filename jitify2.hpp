@@ -3441,6 +3441,10 @@ inline bool ptx_parse_decl_name(const std::string& line, std::string* name) {
   return true;
 }
 
+inline bool is_alpha(char c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
 inline bool ptx_remove_unused_globals(std::string* ptx) {
   std::istringstream iss(*ptx);
   StringVec lines;
@@ -3468,7 +3472,7 @@ inline bool ptx_remove_unused_globals(std::string* ptx) {
       const char* token_delims = " \t()[]{},;+-*/~&|^?:=!<>\"'\\";
       for (auto token : split_string(terms[i], -1, token_delims)) {
         if (  // Ignore non-names
-            !(std::isalpha(token[0]) || token[0] == '_' || token[0] == '$') ||
+            !(is_alpha(token[0]) || token[0] == '_' || token[0] == '$') ||
             token.find('.') != std::string::npos ||
             // Ignore variable/parameter declarations
             terms[i - 1][0] == '.' ||
