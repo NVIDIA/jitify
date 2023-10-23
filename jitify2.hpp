@@ -127,6 +127,12 @@
 #define JITIFY_IF_THREAD_SAFE(x)
 #endif
 
+#if __cplusplus >= 201402L
+#define JITIFY_DEPRECATED(msg) [[deprecated(msg)]]
+#else
+#define JITIFY_DEPRECATED(msg)
+#endif
+
 #ifdef __linux__
 #include <cxxabi.h>             // For abi::__cxa_demangle
 #include <dirent.h>             // For struct dirent, opendir etc.
@@ -2599,6 +2605,7 @@ class CompiledProgramData
    * "-dlto" compiler option.
    * \deprecated Use lto_ir() instead.
    */
+  JITIFY_DEPRECATED("Use lto_ir() instead")
   const std::string& nvvm() const { return nvvm_; }
   /*! Get the Link-Time Optimization (LTO) IR of the compiled program.
    * \note The LTO IR is only available here with NVRTC version >= 11.4 and the
@@ -2685,25 +2692,25 @@ inline LinkedProgram LinkedProgram::link(
   program_types.reserve(num_programs);
   for (size_t i = 0; i < num_programs; ++i) {
     const CompiledProgramData& compiled_program = *compiled_programs[i];
-    if (!compiled_program.nvvm().empty()) {
+    if (!compiled_program.lto_ir().empty()) {
       if (!cuda()) return Error(cuda().error());
       const int min_cuda_version = std::min(CUDA_VERSION, cuda().get_version());
       if (min_cuda_version < 11040) {
         return Error("Linking LTO IR is not supported with CUDA < 11.4");
       }
     }
-    const std::string& program = !compiled_program.nvvm().empty()
-                                     ? compiled_program.nvvm()
+    const std::string& program = !compiled_program.lto_ir().empty()
+                                     ? compiled_program.lto_ir()
                                      : !compiled_program.cubin().empty()
                                            ? compiled_program.cubin()
                                            : compiled_program.ptx();
     CUjitInputType program_type =
 #if CUDA_VERSION >= 11040
-        !compiled_program.nvvm().empty() ? CU_JIT_INPUT_NVVM :
+        !compiled_program.lto_ir().empty() ? CU_JIT_INPUT_NVVM :
 #endif
-                                         !compiled_program.cubin().empty()
-                                             ? CU_JIT_INPUT_CUBIN
-                                             : CU_JIT_INPUT_PTX;
+                                           !compiled_program.cubin().empty()
+                                               ? CU_JIT_INPUT_CUBIN
+                                               : CU_JIT_INPUT_PTX;
     programs.emplace_back(&program);
     program_types.emplace_back(program_type);
   }
