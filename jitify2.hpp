@@ -1796,13 +1796,30 @@ class ConfiguredKernelData {
   /*! Get the configured CUDA stream. */
   CUstream stream() const { return stream_; }
 
-  // TODO: Taking void** here is dangerous due to ambiguity with the variadic
   // overload below. E.g., passing void*const* silently fails.
   /*! Launch the configured kernel.
    *  \param arg_ptrs Array of pointers to kernel arguments.
    *  \return An empty string on success, otherwise an error message.
+   *  \deprecated Use \p launch_raw instead.
    */
-  ErrorMsg launch(void** arg_ptrs) const {
+  JITIFY_DEPRECATED("Use launch_raw instead")
+  ErrorMsg launch(void** arg_ptrs) const { return launch_raw(arg_ptrs); }
+
+  /*! Launch the configured kernel.
+   *  \param arg_ptrs Vector of pointers to kernel arguments.
+   *  \return An empty string on success, otherwise an error message.
+   *  \deprecated Use \p launch_raw instead.
+   */
+  JITIFY_DEPRECATED("Use launch_raw instead")
+  ErrorMsg launch(const std::vector<void*>& arg_ptrs) const {
+    return launch_raw(arg_ptrs);
+  }
+
+  /*! Launch the configured kernel.
+   *  \param arg_ptrs Array of pointers to kernel arguments.
+   *  \return An empty string on success, otherwise an error message.
+   */
+  ErrorMsg launch_raw(void** arg_ptrs) const {
     if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
         kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
@@ -1814,8 +1831,8 @@ class ConfiguredKernelData {
    *  \param arg_ptrs Vector of pointers to kernel arguments.
    *  \return An empty string on success, otherwise an error message.
    */
-  ErrorMsg launch(const std::vector<void*>& arg_ptrs = {}) const {
-    return launch(const_cast<void**>(arg_ptrs.data()));
+  ErrorMsg launch_raw(const std::vector<void*>& arg_ptrs) const {
+    return launch_raw(const_cast<void**>(arg_ptrs.data()));
   }
 
   /*! Launch the configured kernel.
@@ -1823,10 +1840,17 @@ class ConfiguredKernelData {
    *    be passed as pointers.
    *  \return An empty string on success, otherwise an error message.
    */
-  template <typename... Args>
-  ErrorMsg launch(const Args&... args) const {
-    void* arg_ptrs[] = {(void*)&args...};
-    return this->launch(arg_ptrs);
+  template <typename Arg, typename... Args>
+  ErrorMsg launch(const Arg& arg, const Args&... args) const {
+    void* arg_ptrs[] = {(void*)&arg, (void*)&args...};
+    return this->launch_raw(arg_ptrs);
+  }
+
+  /*! Launch the configured kernel.
+   *  \return An empty string on success, otherwise an error message.
+   */
+  ErrorMsg launch() const {
+    return this->launch_raw(nullptr);
   }
 };
 
