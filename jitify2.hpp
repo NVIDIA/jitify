@@ -5531,12 +5531,31 @@ inline std::string path_simplify(StringRef path) {
   return ss.str();
 }
 
+// Reads a whole text file into *content. Returns false on failure.
 inline bool read_text_file(const std::string& fullpath, std::string* content) {
-  std::ifstream file(fullpath.c_str());
+  FILE* file = ::fopen(fullpath.c_str(), "r");
   if (!file) return false;
-  std::stringstream buf;
-  buf << file.rdbuf();
-  *content = buf.str();
+  std::unique_ptr<FILE, std::integral_constant<decltype(::fclose)*, ::fclose>>
+      unique_file(file);
+#ifdef POSIX_FADV_WILLNEED
+  // Hints to potentially improve read performance.
+  ::posix_fadvise(::fileno(file), 0, 0, POSIX_FADV_SEQUENTIAL);
+  ::posix_fadvise(::fileno(file), 0, 0, POSIX_FADV_WILLNEED);
+#endif
+  if (::fseek(file, 0, SEEK_END)) return false;
+  const long size = ::ftell(file);
+  if (::fseek(file, 0, SEEK_SET)) return false;
+  content->resize(size);
+  // Note: This supports empty (size=0) files.
+  if ((long)::fread(&(*content)[0], 1, size, file) != size) return false;
+  // Crop off trailing null characters that may arise due to multi-character
+  // newline conversions (e.g., on Windows).
+  const size_t last_char_pos = content->find_last_not_of("\0");
+  if (last_char_pos == std::string::npos) {
+    content->resize(0);
+  } else {
+    content->resize(last_char_pos + 1);
+  }
   return true;
 }
 

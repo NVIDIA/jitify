@@ -115,16 +115,6 @@ std::string sanitize_varname(const std::string& s) {
   return r;
 }
 
-bool read_file(const std::string& fullpath, std::string* content) {
-  std::ifstream file(fullpath.c_str(), std::ios::binary | std::ios::ate);
-  if (!file) return false;
-  std::streamsize size = file.tellg();
-  file.seekg(0, std::ios::beg);
-  content->resize(size);
-  file.read(&(*content)[0], size);
-  return true;
-}
-
 bool make_directories_for(const std::string& filename) {
   using jitify2::detail::make_directories;
   using jitify2::detail::path_base;
@@ -245,7 +235,7 @@ int main(int argc, char* argv[]) {
   StringMap all_header_sources;
   for (const std::string& source_filename : source_filenames) {
     std::string source;
-    if (!read_file(source_filename, &source)) {
+    if (!jitify2::detail::read_text_file(source_filename, &source)) {
       std::cerr << "Error reading source file " << source_filename << std::endl;
       return EXIT_FAILURE;
     }
