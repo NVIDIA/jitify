@@ -250,7 +250,7 @@ int main(int argc, char* argv[]) {
     }
 
     PreprocessedProgram preprocessed =
-        Program(source_filename, source)->preprocess(options);
+        Program(source_filename, source, all_header_sources)->preprocess(options);
     if (!preprocessed) {
       std::cerr << "Error processing source file " << source_filename << "\n"
                 << preprocessed.error() << std::endl;
