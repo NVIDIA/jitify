@@ -38,6 +38,13 @@
 #include <string>
 #include <vector>
 
+#if defined _WIN32 || defined _WIN64
+#include <direct.h>
+#define chdir _chdir
+#else
+#include <unistd.h>
+#endif
+
 #include "gtest/gtest.h"
 
 #define CHECK_CUDA(call)                                                  \
@@ -635,10 +642,10 @@ TEST(Jitify2Test, PathSimplify) {
   EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/"), "/foo/bar/");
   EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar/"), "bar/");
   EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar/"), "/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/../foo"), "");  // Invalid path
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../../bar"), // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/../foo"), "");    // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../../bar"),  // Invalid path
             "");
-  EXPECT_EQ(jitify2::detail::path_simplify("/.."), "");  // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/.."), "");         // Invalid path
   EXPECT_EQ(jitify2::detail::path_simplify("/foo/../.."), "");  // Invalid path
 #if defined _WIN32 || defined _WIN64
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\)"), R"(\)");
@@ -650,8 +657,7 @@ TEST(Jitify2Test, PathSimplify) {
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\..\bar)"), R"(\bar)");
   EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\..\bar)"), R"(bar)");
 
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar)"),
-            R"(\foo/bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar)"), R"(\foo/bar)");
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\./cat)"),
             R"(\foo/bar\cat)");
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)"),
@@ -697,11 +703,18 @@ TEST(Jitify2Test, PreprocessedProgram) {
 __global__ void my_kernel() {}
 )";
   static const char* const header_name = "my_header1.cuh";
+
+  Program empty_program(name, "");
+  ASSERT_EQ(get_error(empty_program), "");
+  PreprocessedProgram empty_preprog =
+      empty_program->preprocess({"-no-preinclude-workarounds"});
+  ASSERT_TRUE(static_cast<bool>(empty_preprog));
+
   Program program(name, source);
   ASSERT_EQ(get_error(program), "");
   PreprocessedProgram preprog = program->preprocess();
   ASSERT_EQ(static_cast<bool>(preprog), false);
-  EXPECT_TRUE(CONTAINS(preprog.error(), "File not found"));
+  EXPECT_TRUE(CONTAINS(preprog.error(), "could not open source file"));
   preprog = program->preprocess({"-Iexample_headers"}, {"-lfoo"});
   ASSERT_EQ(get_error(preprog), "");
   EXPECT_EQ(preprog->name(), name);
@@ -711,6 +724,89 @@ __global__ void my_kernel() {}
   EXPECT_EQ(preprog->remaining_linker_options(), StringVec({"-lfoo"}));
   EXPECT_NE(preprog->header_log(), "");
   EXPECT_EQ(preprog->compile_log(), "");
+
+  // Ensure that the --disable-warnings flag doesn't break things.
+  preprog = program->preprocess(
+      {"-Iexample_headers", "--disable-warnings", "-w"}, {"-lfoo"});
+  ASSERT_EQ(get_error(preprog), "");
+  CompiledProgram compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+}
+
+TEST(Jitify2Test, ExplicitHeaderSources) {
+  // This test checks how the keys in a user-provided header_sources map are
+  // matched to #include directives in the source.
+  static const std::string good_header = R"()";
+  static const std::string bad_header =
+      R"(#error TEST FAIL: WRONG HEADER FOUND)";
+  static const std::string angle_header = R"(#include <bar>)";
+  static const std::string quote_header = R"(#include "bar")";
+  static const std::string quote_abs_header = R"(#include "/bar")";
+  PreprocessedProgram preprog;
+  preprog = Program("my_program", R"(#include <foo>)", {{"foo", good_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog =
+      Program("my_program", R"(#include <foo/bar>)", {{"foo/bar", good_header}})
+          ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include <foo/angle>)",
+                    {{"foo/angle", angle_header},
+                     {"bar", good_header},
+                     {"foo/bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include "foo")",
+                    {{"foo", good_header}, {"/foo", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include "foo/bar")",
+                    {{"foo/bar", good_header},
+                     {"/foo/bar", bad_header},
+                     {"bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include <foo/quote>)",
+                    {{"foo/quote", quote_header},
+                     {"foo/bar", good_header},
+                     {"bar", bad_header},
+                     {"/foo/bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include </foo/bar>)",
+                    {{"/foo/bar", good_header},
+                     {"foo/bar", bad_header},
+                     {"bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include "/foo/bar")",
+                    {{"/foo/bar", good_header},
+                     {"foo/bar", bad_header},
+                     {"bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include <foo/quote_abs>)",
+                    {{"foo/quote_abs", quote_abs_header},
+                     {"/bar", good_header},
+                     {"bar", bad_header},
+                     {"/foo/bar", bad_header},
+                     {"foo/bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+}
+
+TEST(Jitify2Test, CurrentExeIncludePath) {
+  static const std::string source = R"(
+#include <example_headers/my_header1.cuh>
+)";
+  std::unique_ptr<const char, int (*)(const char*)> cd_back("..", ::chdir);
+  ASSERT_EQ(::chdir("example_headers"), 0);
+  // This requires -I. to be expanded to the current executable directory, not
+  // the current working directory.
+  PreprocessedProgram preprog =
+      Program("my_program", source)->preprocess({"-I."});
+  ASSERT_EQ(get_error(preprog), "");
+  ASSERT_EQ(get_error(preprog->compile()), "");
 }
 
 TEST(Jitify2Test, CompiledProgram) {
@@ -1527,14 +1623,6 @@ __global__ void my_kernel() {}
 TEST(Jitify2Test, Thrust) {
   // clang-format off
   static const char* const source = R"(
-// WAR for header include issue (note: order of includes matters):
-//   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
-#include <cuda/std/cstdint>
-#include <cuda/std/cstddef>
-#include <cuda/std/type_traits>
-#include <cuda/std/limits>
-namespace std { using ::ptrdiff_t; }
-
 #include <thrust/iterator/counting_iterator.h>
 __global__ void my_kernel(thrust::counting_iterator<int> begin,
                           thrust::counting_iterator<int> end) {
@@ -1878,6 +1966,439 @@ TEST(Jitify2Test, SerializationGoldensLinkedProgram) {
     return LinkedProgram(LinkedProgramData(
         "some cubin", {{"name", "lowered_name"}}, "log", {"-lfoo"}));
   });
+}
+
+void expect_tokenization(const char* source,
+                         std::vector<parser::Token::Type> expected_types,
+                         std::vector<std::string> expected_token_strings) {
+  using namespace jitify2::parser;
+  CppLexer lexer(source);
+  std::vector<Token> tokens;
+  Token cur_token = lexer.next();
+  while (cur_token) {
+    tokens.push_back(cur_token);
+    cur_token = lexer.next();
+  }
+  std::vector<Token::Type> types;
+  std::vector<std::string> token_strings;
+  types.reserve(tokens.size());
+  token_strings.reserve(tokens.size());
+  for (const Token& token : tokens) {
+    types.push_back(token.type());
+    token_strings.push_back(std::string(token.token_string()));
+  }
+  EXPECT_EQ(types, expected_types);
+  EXPECT_EQ(token_strings, expected_token_strings);
+}
+
+TEST(Jitify2ParserTest, SingleTokens) {
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  expect_tokenization("(", {Tt::kLParen}, {"("});
+  expect_tokenization(")", {Tt::kRParen}, {")"});
+  expect_tokenization("[", {Tt::kLBracket}, {"["});
+  expect_tokenization("<:", {Tt::kLBracket}, {"<:"});
+  expect_tokenization("]", {Tt::kRBracket}, {"]"});
+  expect_tokenization(":>", {Tt::kRBracket}, {":>"});
+  expect_tokenization("{", {Tt::kLBrace}, {"{"});
+  expect_tokenization("<%", {Tt::kLBrace}, {"<%"});
+  expect_tokenization("}", {Tt::kRBrace}, {"}"});
+  expect_tokenization("%>", {Tt::kRBrace}, {"%>"});
+  expect_tokenization(".", {Tt::kDot}, {"."});
+  expect_tokenization(".*", {Tt::kDotStar}, {".*"});
+  expect_tokenization("->", {Tt::kArrow}, {"->"});
+  expect_tokenization("->*", {Tt::kArrowStar}, {"->*"});
+  expect_tokenization(",", {Tt::kComma}, {","});
+  expect_tokenization("+", {Tt::kPlus}, {"+"});
+  expect_tokenization("++", {Tt::kPlusPlus}, {"++"});
+  expect_tokenization("+=", {Tt::kPlusEq}, {"+="});
+  expect_tokenization("-", {Tt::kMinus}, {"-"});
+  expect_tokenization("--", {Tt::kMinusMinus}, {"--"});
+  expect_tokenization("-=", {Tt::kMinusEq}, {"-="});
+  expect_tokenization("*", {Tt::kStar}, {"*"});
+  expect_tokenization("*=", {Tt::kStarEq}, {"*="});
+  expect_tokenization("/", {Tt::kSlash}, {"/"});
+  expect_tokenization("/=", {Tt::kSlashEq}, {"/="});
+  expect_tokenization("%", {Tt::kPercent}, {"%"});
+  expect_tokenization("%=", {Tt::kPercentEq}, {"%="});
+  expect_tokenization("?", {Tt::kQuestion}, {"?"});
+  expect_tokenization(":", {Tt::kColon}, {":"});
+  expect_tokenization("::", {Tt::kColonColon}, {"::"});
+  expect_tokenization("&", {Tt::kAmp}, {"&"});
+  expect_tokenization("&&", {Tt::kAmpAmp}, {"&&"});
+  expect_tokenization("&=", {Tt::kAmpEq}, {"&="});
+  expect_tokenization("|", {Tt::kBar}, {"|"});
+  expect_tokenization("||", {Tt::kBarBar}, {"||"});
+  expect_tokenization("|=", {Tt::kBarEq}, {"|="});
+  expect_tokenization("^", {Tt::kCaret}, {"^"});
+  expect_tokenization("^=", {Tt::kCaretEq}, {"^="});
+  expect_tokenization("~", {Tt::kTilde}, {"~"});
+  expect_tokenization("=", {Tt::kEq}, {"="});
+  expect_tokenization("==", {Tt::kEqEq}, {"=="});
+  expect_tokenization("!", {Tt::kBang}, {"!"});
+  expect_tokenization("!=", {Tt::kBangEq}, {"!="});
+  expect_tokenization("<", {Tt::kLt}, {"<"});
+  expect_tokenization("<<", {Tt::kLtLt}, {"<<"});
+  expect_tokenization("<=", {Tt::kLtEq}, {"<="});
+  expect_tokenization("<<=", {Tt::kLtLtEq}, {"<<="});
+  expect_tokenization(">", {Tt::kGt}, {">"});
+  expect_tokenization(">>", {Tt::kGtGt}, {">>"});
+  expect_tokenization(">=", {Tt::kGtEq}, {">="});
+  expect_tokenization(">>=", {Tt::kGtGtEq}, {">>="});
+  expect_tokenization("#", {Tt::kHash}, {"#"});
+  expect_tokenization("%:", {Tt::kHash}, {"%:"});
+  expect_tokenization("##", {Tt::kHashHash}, {"##"});
+  expect_tokenization("%:%:", {Tt::kHashHash}, {"%:%:"});
+  expect_tokenization(";", {Tt::kSemicolon}, {";"});
+  expect_tokenization(" ", {Tt::kWhitespace}, {" "});
+  expect_tokenization("\f", {Tt::kWhitespace}, {"\f"});
+  expect_tokenization("\r", {Tt::kWhitespace}, {"\r"});
+  expect_tokenization("\t", {Tt::kWhitespace}, {"\t"});
+  expect_tokenization("\v", {Tt::kWhitespace}, {"\v"});
+  expect_tokenization("\n", {Tt::kWhitespace}, {"\n"});
+  expect_tokenization("0123", {Tt::kNumber}, {"0123"});
+  expect_tokenization("123", {Tt::kNumber}, {"123"});
+  expect_tokenization("0x1F", {Tt::kNumber}, {"0x1F"});
+  expect_tokenization("0b10", {Tt::kNumber}, {"0b10"});
+  expect_tokenization("123u", {Tt::kNumber}, {"123u"});
+  expect_tokenization("123LLu", {Tt::kNumber}, {"123LLu"});
+  expect_tokenization("\"str\"", {Tt::kString}, {"\"str\""});
+  expect_tokenization("u\"str\"", {Tt::kString}, {"u\"str\""});
+  expect_tokenization("u8\"str\"", {Tt::kString}, {"u8\"str\""});
+  expect_tokenization("U\"str\"", {Tt::kString}, {"U\"str\""});
+  expect_tokenization("L\"str\"", {Tt::kString}, {"L\"str\""});
+  expect_tokenization(R"("a \n\"b\"")", {Tt::kString}, {R"("a \n\"b\"")"});
+  expect_tokenization("R\"xx(str)xx\"", {Tt::kRawString}, {"R\"xx(str)xx\""});
+  expect_tokenization("uR\"xx(str)xx\"", {Tt::kRawString}, {"uR\"xx(str)xx\""});
+  expect_tokenization("u8R\"xx(str)xx\"", {Tt::kRawString},
+                      {"u8R\"xx(str)xx\""});
+  expect_tokenization("UR\"xx(str)xx\"", {Tt::kRawString}, {"UR\"xx(str)xx\""});
+  expect_tokenization("LR\"xx(str)xx\"", {Tt::kRawString}, {"LR\"xx(str)xx\""});
+  expect_tokenization(R"yy(R"xx(a\nb
+\c\\")xx")yy",
+                      {Tt::kRawString}, {R"yy(R"xx(a\nb
+\c\\")xx")yy"});
+  expect_tokenization("'c'", {Tt::kCharacter}, {"'c'"});
+  expect_tokenization("u'c'", {Tt::kCharacter}, {"u'c'"});
+  expect_tokenization("u8'c'", {Tt::kCharacter}, {"u8'c'"});
+  expect_tokenization("U'c'", {Tt::kCharacter}, {"U'c'"});
+  expect_tokenization("L'c'", {Tt::kCharacter}, {"L'c'"});
+  expect_tokenization(R"('\'')", {Tt::kCharacter}, {R"('\'')"});
+  expect_tokenization(R"('\\')", {Tt::kCharacter}, {R"('\\')"});
+  expect_tokenization(R"('\n')", {Tt::kCharacter}, {R"('\n')"});
+  expect_tokenization("abc_DEF1", {Tt::kIdentifier}, {"abc_DEF1"});
+  expect_tokenization("u", {Tt::kIdentifier}, {"u"});
+  expect_tokenization("u8", {Tt::kIdentifier}, {"u8"});
+  expect_tokenization("U", {Tt::kIdentifier}, {"U"});
+  expect_tokenization("L", {Tt::kIdentifier}, {"L"});
+  expect_tokenization("uabc", {Tt::kIdentifier}, {"uabc"});
+  expect_tokenization("u8abc", {Tt::kIdentifier}, {"u8abc"});
+  expect_tokenization("Uabc", {Tt::kIdentifier}, {"Uabc"});
+  expect_tokenization("Labc", {Tt::kIdentifier}, {"Labc"});
+  expect_tokenization("class", {Tt::kKeyword}, {"class"});
+  expect_tokenization("not", {Tt::kKeyword}, {"not"});
+  expect_tokenization("consteval", {Tt::kKeyword}, {"consteval"});
+  expect_tokenization("__device__", {Tt::kKeyword}, {"__device__"});
+  expect_tokenization("__constant__", {Tt::kKeyword}, {"__constant__"});
+  expect_tokenization("// A comment", {Tt::kComment}, {"// A comment"});
+  expect_tokenization("// A \"comment\"", {Tt::kComment}, {"// A \"comment\""});
+  expect_tokenization("/* A comment\n*/", {Tt::kComment}, {"/* A comment\n*/"});
+  expect_tokenization("/* A \"comment\"\n*/", {Tt::kComment},
+                      {"/* A \"comment\"\n*/"});
+}
+
+TEST(Jitify2ParserTest, MultipleTokens) {
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  // Make sure escaped backslashes don't break string tokenization.
+  expect_tokenization(R"('\\';)", {Tt::kCharacter, Tt::kSemicolon},
+                      {R"('\\')", ";"});
+  expect_tokenization(R"("\\";)", {Tt::kString, Tt::kSemicolon},
+                      {R"("\\")", ";"});
+  // Make sure unterminated string doesn't run on into the next line.
+  expect_tokenization(R"("foo
+";)",
+                      {Tt::kString, Tt::kWhitespace, Tt::kString},
+                      {R"("foo)", "\n", R"(";)"});
+  // Make sure #include strings treat backslashes literally.
+  expect_tokenization(
+      R"(#include "x\n\\y\"//comment)",
+      {Tt::kHash, Tt::kIdentifier, Tt::kWhitespace, Tt::kString, Tt::kComment},
+      {"#", "include", " ", R"("x\n\\y\")", "//comment"});
+  expect_tokenization(
+      R"(#include <x\n\\y\>//comment)",
+      {Tt::kHash, Tt::kIdentifier, Tt::kWhitespace, Tt::kString, Tt::kComment},
+      {"#", "include", " ", R"(<x\n\\y\>)", "//comment"});
+}
+
+TEST(Jitify2ParserTest, AlternativeOperatorRepresentations) {
+  using namespace jitify2::parser;
+  static const char* const source1 = "vector<::std::string>";
+  CppLexer lexer(source1);
+  ASSERT_EQ(lexer.next().token_string(), "vector");
+  ASSERT_EQ(lexer.next().token_string(), "<");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "std");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "string");
+
+  static const char* const source2 = "(argv<::>)";
+  lexer = CppLexer(source2);
+  ASSERT_EQ(lexer.next().token_string(), "(");
+  ASSERT_EQ(lexer.next().token_string(), "argv");
+  ASSERT_EQ(lexer.next().token_string(), "<:");
+  ASSERT_EQ(lexer.next().token_string(), ":>");
+  ASSERT_EQ(lexer.next().token_string(), ")");
+
+  static const char* const source3 = "foo<:::std::string>";
+  lexer = CppLexer(source3);
+  ASSERT_EQ(lexer.next().token_string(), "foo");
+  ASSERT_EQ(lexer.next().token_string(), "<:");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "std");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "string");
+}
+
+TEST(Jitify2ParserTest, Minify) {
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  static const char* const source = R"~(#pragma once
+#define BAR -1
+#define CAT ( x )
+#define CAT2 (x) + (y)
+#define DOG( x )
+#define DOG2( x ) x
+#define DOG3( x ) ( x )
+#define DOG4( x ) (x) + (y)
+#define DOG5( x )x 
+#define DOG6( x )( x )
+
+#define FOO            \
+  do {                 \
+    printf("error\n"); \
+  while (0)
+
+#define _STR(x) #x
+#define STR(x) _STR(x)
+#define PLUS +
+const char* str_suf1 = "foo"s;
+const char* str_suf2 = "foo" STR(bar) "bar";
+#pragma once
+const char* rstr_suf1 = R"(foo)"s;
+const char* rstr_suf2 = R"(foo)" s;
+char char_suf = 'c's;
+#pragma once
+unsigned num_suf1 = 123u;
+unsigned num_suf2 = 123 PLUS 1;
+
+#pragma once
+c += a++ + b;
+c += a + ++b;
+c += a +++ b;
+c += a++++ + ++++b;
+
+a : ::b;
+)~";
+  static const char* const minified_source = R"~(#pragma once
+#define BAR -1
+#define CAT (x)
+#define CAT2 (x)+(y)
+#define DOG(x)
+#define DOG2(x)x
+#define DOG3(x)(x)
+#define DOG4(x)(x)+(y)
+#define DOG5(x)x
+#define DOG6(x)(x)
+#define FOO do{printf("error\n");while(0)
+#define _STR(x)#x
+#define STR(x)_STR(x)
+#define PLUS +
+const char*str_suf1="foo"s;const char*str_suf2="foo" STR(bar)"bar";
+#pragma once
+const char*rstr_suf1=R"(foo)"s;const char*rstr_suf2=R"(foo)" s;char char_suf='c's;
+#pragma once
+unsigned num_suf1=123u;unsigned num_suf2=123 PLUS 1;
+#pragma once
+c+=a+++b;c+=a+ ++b;c+=a+++b;c+=a+++++ ++++b;a: ::b;)~";
+  auto tokens = CppLexer::tokenize<TokenSequence>(source);
+  const int cxx_standard_year = 20;
+  std::string processed_source;
+  minify_cuda_source(tokens.begin(), tokens.end(), cxx_standard_year,
+                     &processed_source);
+  EXPECT_EQ(processed_source, minified_source);
+}
+
+TEST(Jitify2ParserTest, ProcessCudaSource) {
+  using namespace jitify2::parser;
+  static const char* const source = R"~(
+# /*blah*/pragma /*blah*/once  // blah
+const char* include = "#include <x.h>";
+#pragma once
+#pragma once
+// A comment.
+//using std::array;
+using std::array;
+using ::std::array;
+# /*blah*/ inclu\
+de /*blah*/ <a.h> /*blah*/ // blah
+#line 1
+const char* bar = "#include \"y.h\"";
+# /*blah*/ include /*blah*/ "b.h" /*blah*/ // blah
+#include "foo/c.h"
+#include <foo/c.h>
+const char* cat = R"blah(#include "z.h")blah" "dog";
+int i = cat[0 + 1];
+)~";
+  static const char* const expected =
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+#define JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+#ifdef JITIFY_USED_HEADER_WARNINGS
+#warning JITIFY_USED_HEADER "./my_header.cuh"
+#endif
+#line 1
+
+const char* include = "#include <x.h>";
+// A comment.
+//using std::array;
+using cuda::std::array;
+using ::cuda::std::array;
+# /*blah*/ inclu\
+de /*blah*/ <a.h> /*blah*/ // blah
+#line 1
+const char* bar = "#include \"y.h\"";
+# /*blah*/ include /*blah*/ <__jitify_rel_inc:.:__jitify_name:b.h> /*blah*/ // blah
+#include <__jitify_rel_inc:.:__jitify_name:foo/c.h>
+#include <foo/c.h>
+const char* cat = R"blah(#include "z.h")blah" "dog";
+int i = cat[0 + 1];
+#endif // JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+)~";
+  static const char* const expected_minified =
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+#define JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+#ifdef JITIFY_USED_HEADER_WARNINGS
+#warning JITIFY_USED_HEADER "./my_header.cuh"
+#endif
+#line 1
+const char*include="#include <x.h>";using cuda::std::array;using::cuda::std::array;
+#include<a.h>
+#line 1
+const char*bar="#include \"y.h\"";
+#include<__jitify_rel_inc:.:__jitify_name:b.h>
+#include<__jitify_rel_inc:.:__jitify_name:foo/c.h>
+#include<foo/c.h>
+const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
+#endif
+)~";
+  const int cxx_standard_year = -1;
+  std::string processed_source;
+  std::vector<IncludeName> includes;
+  std::string include_name = "my_header.cuh";
+  std::string current_dir = ".";
+  std::string include_fullpath = current_dir + "/" + include_name;
+  EXPECT_TRUE(process_cuda_source(
+                  source, include_fullpath,
+                  ProcessFlags::kReplacePragmaOnce | ProcessFlags::kReplaceStd |
+                      ProcessFlags::kAddUsedHeaderWarning,
+                  cxx_standard_year, &processed_source,
+                  [&](IncludeName include) { includes.push_back(include); })
+                  .empty());
+  std::vector<IncludeName> expected_includes = {
+      IncludeName("a.h"), IncludeName("b.h", current_dir),
+      IncludeName("foo/c.h", "."), IncludeName("foo/c.h")};
+  ASSERT_EQ(includes, expected_includes);
+  EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[0].location().line(), 11);
+  EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[2].location().line(), 3);
+  EXPECT_EQ(processed_source, expected);
+  includes.clear();
+  EXPECT_TRUE(process_cuda_source(
+                  source, include_fullpath,
+                  ProcessFlags::kReplacePragmaOnce | ProcessFlags::kReplaceStd |
+                      ProcessFlags::kAddUsedHeaderWarning |
+                      ProcessFlags::kMinify,
+                  cxx_standard_year, &processed_source,
+                  [&](IncludeName include) { includes.push_back(include); })
+                  .empty());
+  ASSERT_EQ(includes, expected_includes);
+  EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[0].location().line(), 11);
+  EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[2].location().line(), 3);
+  EXPECT_EQ(processed_source, expected_minified);
+}
+
+TEST(Jitify2ParserTest, CppParserIterator) {
+  static const char* const source =
+      R"(
+#/*blah*/incl\
+ude/*blah*/<foo> //blah
+
+
+#/*blah*/line/*blah*/10
+#/*blah*/include/*blah*/"bar" //blah
+#/*blah*/li\
+ne/*blah*/20 "newfilename"
+# include "cat"
+)";
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  auto tokens = CppLexer::tokenize<TokenSequence>(source);
+  auto iter = make_cpp_parser_iterator(tokens.begin(), tokens.end());
+  EXPECT_EQ(iter.line_number(), 2);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 2);
+  ASSERT_TRUE(iter.match_identifier("include"));
+  EXPECT_EQ(iter.line_number(), 3);
+  ASSERT_TRUE(iter.match(Tt::kString));
+  EXPECT_EQ(iter.line_number(), 3);
+  ASSERT_EQ(iter.previous_token().token_string(), "<foo>");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_TRUE(iter.match_identifier("line"));
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_TRUE(iter.match(Tt::kNumber));
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_EQ(iter.previous_token().token_string(), "10");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_TRUE(iter.match_identifier("include"));
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_TRUE(iter.match(Tt::kString));
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_EQ(iter.previous_token().token_string(), "\"bar\"");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 11);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 11);
+  ASSERT_TRUE(iter.match_identifier("line"));
+  EXPECT_EQ(iter.line_number(), 12);
+  ASSERT_TRUE(iter.match(Tt::kNumber));
+  EXPECT_EQ(iter.line_number(), 12);
+  ASSERT_EQ(iter.previous_token().token_string(), "20");
+  ASSERT_TRUE(iter.match(Tt::kString));
+  ASSERT_EQ(iter.previous_token().token_string(), "\"newfilename\"");
+  EXPECT_EQ(iter.line_number(), 12);
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_TRUE(iter.match_identifier("include"));
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_TRUE(iter.match(Tt::kString));
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_EQ(iter.previous_token().token_string(), "\"cat\"");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
 }
 
 int main(int argc, char** argv) {
