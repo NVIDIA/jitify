@@ -2091,7 +2091,7 @@ inline bool endswith(StringRef str, StringRef suffix) {
 
 inline bool is_true_value(std::string str) {
   std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
+                 [](unsigned char c) { return static_cast<unsigned char>(std::tolower(c)); });
   return !(str == "false" || str == "off" || str == "no" || str == "0");
 }
 
@@ -2954,7 +2954,7 @@ inline int parse_arch_flag(const StringVec& options, bool* is_virtual,
 // capability such as 61 for sm_61.
 inline int get_current_device_compute_capability(std::string* error = nullptr) {
   CUdevice device;
-  int cc_major, cc_minor;
+  int cc_major = 0, cc_minor = 0;
   CUresult ret;
   if (!cuda()) {
     if (error) *error = cuda().error();
