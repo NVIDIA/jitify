@@ -2110,9 +2110,7 @@ class ConfiguredKernelData {
   /*! Launch the configured kernel.
    *  \return An empty string on success, otherwise an error message.
    */
-  ErrorMsg launch() const {
-    return this->launch_raw(nullptr);
-  }
+  ErrorMsg launch() const { return this->launch_raw(nullptr); }
 };
 
 class ConfiguredKernel
@@ -7555,7 +7553,7 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     assert(include_to_fullpath.count(include_name));
     const std::string& fullpath = include_to_fullpath.at(include_name);
     if (!used_header_fullpaths.count(fullpath) &&
-        // // WAR for CUB header that is full of host-only code.
+        // WAR for CUB header that is full of host-only code.
         !detail::endswith(fullpath, "cub/util_device.cuh")) {
       it = header_sources.erase(it);
     } else {
