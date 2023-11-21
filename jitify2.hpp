@@ -8675,18 +8675,23 @@ class ProgramCache {
 
 }  // namespace jitify2
 
+#undef JITIFY_DEFINE_SERIALIZABLE_MEMBERS
+
 #ifndef JITIFY_SERIALIZATION_ONLY
 
 #undef JITIFY_PATH_MAX
-#undef JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR
-#undef JITIFY_THROW_OR_RETURN
-#undef JITIFY_THROW_OR_TERMINATE
+#undef JITIFY_DEPRECATED
+#undef JITIFY_IF_THREAD_SAFE
 
 #if defined(_WIN32) || defined(_WIN64)
 #pragma pop_macro("max")
 #pragma pop_macro("min")
 #pragma pop_macro("strtok_r")
 #endif
+
+#undef JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR
+#undef JITIFY_THROW_OR_RETURN
+#undef JITIFY_THROW_OR_TERMINATE
 
 #endif  // not JITIFY_SERIALIZATION_ONLY
 
