@@ -4013,9 +4013,8 @@ using parser::IncludeName;  // Pull into main namespace
 using HeaderCallback =
     std::function<bool(const parser::IncludeName&, std::string*)>;
 
-// TODO: Mark with deprecated attribute.
-// Deprecated, use HeaderCallback instead.
-using FileCallback = HeaderCallback;
+using FileCallback JITIFY_DEPRECATED("Use HeaderCallback instead") =
+    HeaderCallback;
 
 class PreprocessedProgram
     : public detail::FallibleObjectBase<PreprocessedProgram,
