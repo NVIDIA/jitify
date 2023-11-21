@@ -7217,14 +7217,12 @@ inline bool extract_used_header_warnings(
       start = (size_t)-1;
     }
     ++start;
-    // Each full warning message is 4 lines.
-    for (int i = 0; i < 4; ++i) {
-      size_t new_end = compile_log->find_first_of('\n', end + 1);
-      if (new_end == std::string::npos) break;  // End of log
-      end = new_end;
+    std::string tail;
+    // Log messages are separated by a blank line.
+    end = compile_log->find("\n\n", end + 1);
+    if (end != std::string::npos) {
+      tail = compile_log->substr(end + 2);
     }
-    ++end;
-    std::string tail = compile_log->substr(end);
     compile_log->resize(start);
     *compile_log += tail;
   }
@@ -7239,14 +7237,11 @@ inline bool extract_used_header_warnings(
         start = (size_t)-1;
       }
       ++start;
-      size_t end =
-          compile_log->find_first_of('\n', pos + std::strlen("-diag-suppress"));
-      assert(end != std::string::npos);
-      end = compile_log->find_first_of('\n', end + 1);
       std::string tail;
+      size_t end =
+          compile_log->find("\n\n", pos + std::strlen("-diag-suppress"));
       if (end != std::string::npos) {
-        ++end;
-        tail = compile_log->substr(end);
+        tail = compile_log->substr(end + 2);
       }
       compile_log->resize(start);
       *compile_log += tail;
