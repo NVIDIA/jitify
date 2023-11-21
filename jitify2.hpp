@@ -2295,7 +2295,7 @@ inline std::string path_base(const std::string& p) {
   }
 }
 
-inline bool path_is_absolute(const std::string& p) {
+inline bool path_is_absolute(StringRef p) {
 #if defined _WIN32 || defined _WIN64
   return (p.size() >= 1 && (p[0] == '\\' || p[0] == '/')) ||
          (p.size() >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/'));
@@ -3737,7 +3737,7 @@ inline void copy_compiler_flag_for_linker_ptxas(
     const Option linker_option =
         output_key.empty()
             ? compiler_option
-            : Option(std::string{output_key}, compiler_option.value());
+            : Option(std::string(output_key), compiler_option.value());
     linker_options->push_back(linker_option);
   }
 }
