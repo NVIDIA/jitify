@@ -1775,6 +1775,20 @@ __global__ void my_kernel() {}
                     "-no-system-headers-workaround", "-no-replace-pragma-once"})
       ->get_kernel("my_kernel");
 }
+
+// See GitHub issue #107.
+TEST(Jitify2Test, LibCudaCxxAndBuiltinLimits) {
+  static const char* const source = R"(
+#include <limits>
+#include <cuda/std/limits>
+)";
+
+  PreprocessedProgram preprog =
+    Program("limits_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  ASSERT_EQ(get_error(preprog), "");
+  CompiledProgram compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+}
 #endif  // CUDA_VERSION >= 11000
 
 TEST(Jitify2Test, AssertHeader) {
