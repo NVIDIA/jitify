@@ -42,10 +42,12 @@
 #define JITIFY2_HPP_INCLUDE_GUARD
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <climits>
 #include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <streambuf>
 #include <string>
@@ -6189,7 +6191,9 @@ class CppLexer {
       case '"': return in_include_directive_ ? quote_include() : string();
       case 'u': match('8');
         // fall-through
+#ifdef __GNUC__
         [[gnu::fallthrough]];  // Not sure why gcc complains here without this
+#endif
       case 'L':
         // fall-through
       case 'U':
@@ -6874,13 +6878,14 @@ inline Iterator insert_directive_impl(TokenSequence* tokens, Iterator where,
   constexpr int kMaxNewTokens = 1 + 1 + (2 * N - 1) + 1;
   Token new_tokens[kMaxNewTokens];
   int j = 0;
-  Iterator before_where = where;
-  --before_where;
-  if (where != tokens->begin() && before_where->type() != Tt::kEndOfDirective &&
-      (before_where->type() != Tt::kWhitespace ||
-       before_where->num_unescaped_newlines() == 0)) {
-    // Must add newline before new directive.
-    new_tokens[j++] = Token(Tt::kWhitespace, "\n");
+  if (where != tokens->begin()) {
+    const Iterator before_where = std::prev(where);
+    if (before_where->type() != Tt::kEndOfDirective &&
+        (before_where->type() != Tt::kWhitespace ||
+         before_where->num_unescaped_newlines() == 0)) {
+      // Must add newline before new directive.
+      new_tokens[j++] = Token(Tt::kWhitespace, "\n");
+    }
   }
   new_tokens[j++] = Token(Tt::kHash, "#");
   for (int i = 0; i < N; ++i) {
@@ -7144,7 +7149,7 @@ HeaderLoadStatus load_header(const parser::IncludeName& include,
   *full_path = include.nonlocal_full_path(kJitifyCallbackHeaderPrefix);
   *full_path = path_simplify(*full_path);
   if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
-  if (header_callback and header_callback(include, &source)) {
+  if (header_callback && header_callback(include, &source)) {
     return newly_loaded(std::move(source));
   }
   // Try loading from current directory.
