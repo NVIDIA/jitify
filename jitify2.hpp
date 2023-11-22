@@ -7377,6 +7377,13 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   StringVec include_paths;
   detail::extract_include_paths(&compiler_options, &include_paths);
 
+  // Process preincludes as if they are <> includes.
+  for (int idx : compiler_options.find({"--pre-include", "-include"})) {
+    const std::string& preinclude = compiler_options[idx].value();
+    if (preinclude == "jitify_preinclude.h") continue;
+    include_queue.push(IncludeName(preinclude));
+  }
+
   // Recursively load and process all includes, putting them into the
   // include_to_fullpath and fullpath_to_source maps.
   std::string header_log;
