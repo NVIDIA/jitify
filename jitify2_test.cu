@@ -811,6 +811,24 @@ TEST(Jitify2Test, ExplicitHeaderSources) {
   ASSERT_EQ(get_error(preprog), "");
 }
 
+TEST(Jitify2Test, Preincludes) {
+  // This tests that preincludes get preprocessed and that absolute paths are
+  // handled correctly. Note that cuda.h includes <stdlib.h>, so it must be
+  // preprocessed by Jitify (not simply loaded directly by NVRTC) to work.
+  static const std::string source = R"(
+#ifndef CUDA_VERSION
+#error TEST FAILED
+#endif
+)";
+  PreprocessedProgram preprog;
+  preprog = Program("my_program", source)
+                ->preprocess({"--pre-include=" CUDA_INC_DIR "/cuda.h"});
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", source)
+                ->preprocess({"-include=" CUDA_INC_DIR "/cuda.h"});
+  ASSERT_EQ(get_error(preprog), "");
+}
+
 TEST(Jitify2Test, CurrentExeIncludePath) {
   static const std::string source = R"(
 #include <example_headers/my_header1.cuh>
