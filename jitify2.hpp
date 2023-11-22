@@ -5656,15 +5656,13 @@ inline bool read_text_file(const std::string& fullpath, std::string* content) {
   if (::fseek(file, 0, SEEK_SET)) return false;
   content->resize(size);
   // Note: This supports empty (size=0) files.
-  if ((long)::fread(&(*content)[0], 1, size, file) != size) return false;
-  // Crop off trailing null characters that may arise due to multi-character
-  // newline conversions (e.g., on Windows).
-  const size_t last_char_pos = content->find_last_not_of("\0");
-  if (last_char_pos == std::string::npos) {
-    content->resize(0);
-  } else {
-    content->resize(last_char_pos + 1);
+  const long bytes_read = (long)::fread(&(*content)[0], 1, size, file);
+  // Note: Newline conversions (e.g., on Windows) may cause ::fread to return
+  // < size on success, so we must use ::ferror to check for failure.
+  if (bytes_read != size && ::ferror(file)) {
+    return false;
   }
+  content->resize(bytes_read);
   return true;
 }
 
