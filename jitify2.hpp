@@ -7145,6 +7145,18 @@ HeaderLoadStatus load_header(const parser::IncludeName& include,
     return HeaderLoadStatus::kNewlyLoaded;
   };
   std::string source;
+  if (path_is_absolute(include.name())) {
+    // Handle absolute filename.
+    *full_path = include.name();
+    *full_path = path_simplify(*full_path);
+    if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
+    // Try loading via callback or from the filesystem.
+    if ((header_callback && header_callback(include, &source)) ||
+        read_text_file(*full_path, &source)) {
+      return newly_loaded(std::move(source));
+    }
+    return HeaderLoadStatus::kFailed;
+  }
   // Try loading via callback.
   *full_path = include.nonlocal_full_path(kJitifyCallbackHeaderPrefix);
   *full_path = path_simplify(*full_path);
