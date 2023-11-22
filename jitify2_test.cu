@@ -773,6 +773,22 @@ TEST(Jitify2Test, ExplicitHeaderSources) {
                      {"/foo/bar", bad_header}})
                 ->preprocess();
   ASSERT_EQ(get_error(preprog), "");
+  // Relative include takes precedence over -I path.
+  preprog = Program("my_program", R"(#include <foo/quote>)",
+                    {{"foo/quote", quote_header},
+                     {"foo/bar", good_header},
+                     {"bar", bad_header},
+                     {"/foo/bar", bad_header}})
+                ->preprocess({"-I."});
+  ASSERT_EQ(get_error(preprog), "");
+  // Finding a header at the root from a quote-include in a subdir requires
+  // explicitly passing the current dir as an include path ("-I.").
+  preprog = Program("my_program", R"(#include <foo/quote>)",
+                    {{"foo/quote", quote_header},
+                     {"bar", good_header},
+                     {"/foo/bar", bad_header}})
+                ->preprocess({"-I."});
+  ASSERT_EQ(get_error(preprog), "");
   preprog = Program("my_program", R"(#include </foo/bar>)",
                     {{"/foo/bar", good_header},
                      {"foo/bar", bad_header},
