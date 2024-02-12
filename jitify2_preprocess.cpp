@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2024, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -104,25 +104,15 @@ void write_serialized_headers_as_cpp_source(std::istream& istream,
 // begins with a digit.
 std::string sanitize_varname(const std::string& s) {
   std::string r = s;
-  if (std::isdigit(r[0])) {
+  if (std::isdigit((unsigned char)r[0])) {
     r = '_' + r;
   }
   for (std::string::iterator it = r.begin(); it != r.end(); ++it) {
-    if (!std::isalnum(*it)) {
+    if (!std::isalnum((unsigned char)*it)) {
       *it = '_';
     }
   }
   return r;
-}
-
-bool read_file(const std::string& fullpath, std::string* content) {
-  std::ifstream file(fullpath.c_str(), std::ios::binary | std::ios::ate);
-  if (!file) return false;
-  std::streamsize size = file.tellg();
-  file.seekg(0, std::ios::beg);
-  content->resize(size);
-  file.read(&(*content)[0], size);
-  return true;
 }
 
 bool make_directories_for(const std::string& filename) {
@@ -149,6 +139,7 @@ jitify2_preprocess \
   [-o / --output-directory <dir>]     Write output files to the specified dir.
   [-p / --variable-prefix <prefix>]   Prefix to add to variable names (see -i).
   [-s / --shared-headers <filename>]  Write headers to a separate file.
+  [-n / --dry-run]                    Don't write any output files.
   [-v / --verbose]                    Print header locations.
   [-h / --help]                       Show this help.
 
@@ -190,6 +181,7 @@ int main(int argc, char* argv[]) {
   StringVec source_filenames;
   bool write_as_cpp_headers = false;
   bool verbose = false;
+  bool dry_run = false;
   const char* arg_c;
   while ((arg_c = *++argv)) {
     std::string arg = arg_c;
@@ -200,7 +192,8 @@ int main(int argc, char* argv[]) {
       } else if (arg == "-s" || arg == "--shared-headers") {
         arg_c = *++argv;
         if (!arg_c) {
-          std::cerr << "Expected filename after -s" << std::endl;
+          std::cerr << "Expected filename after -s / --shared-headers"
+                    << std::endl;
           return EXIT_FAILURE;
         }
         shared_headers_filename = arg_c;
@@ -222,6 +215,8 @@ int main(int argc, char* argv[]) {
         varname_prefix = arg_c;
       } else if (arg == "-i" || arg == "--include-style") {
         write_as_cpp_headers = true;
+      } else if (arg == "-n" || arg == "--dry-run") {
+        dry_run = true;
       } else if (arg == "-v" || arg == "--verbose") {
         verbose = true;
       } else {
@@ -244,7 +239,7 @@ int main(int argc, char* argv[]) {
   StringMap all_header_sources;
   for (const std::string& source_filename : source_filenames) {
     std::string source;
-    if (!read_file(source_filename, &source)) {
+    if (!jitify2::detail::read_text_file(source_filename, &source)) {
       std::cerr << "Error reading source file " << source_filename << std::endl;
       return EXIT_FAILURE;
     }
@@ -270,6 +265,8 @@ int main(int argc, char* argv[]) {
                                 preprocessed->header_sources().end());
     }
 
+    if (dry_run) continue;  // Skip writing output files
+
     if (write_as_cpp_headers) {
       std::stringstream ss(std::stringstream::in | std::stringstream::out |
                            std::stringstream::binary);
@@ -279,7 +276,8 @@ int main(int argc, char* argv[]) {
       std::string output_filename =
           path_join(output_dir, source_filename + ".jit.hpp");
       if (!make_directories_for(output_filename)) return EXIT_FAILURE;
-      std::ofstream file(output_filename, std::ios::binary);
+      std::ofstream file(output_filename);
+      file.imbue(std::locale::classic());
       write_serialized_program_as_cpp_header(ss, file, source_varname,
                                              shared_headers_varname);
       if (!file) {
@@ -298,6 +296,7 @@ int main(int argc, char* argv[]) {
       }
     }
   }
+  if (dry_run) return EXIT_SUCCESS;  // Skip writing output file
   if (share_headers) {
     if (write_as_cpp_headers) {
       std::stringstream ss(std::stringstream::in | std::stringstream::out |
@@ -306,7 +305,8 @@ int main(int argc, char* argv[]) {
       std::string output_filename =
           path_join(output_dir, shared_headers_filename + ".jit.cpp");
       if (!make_directories_for(output_filename)) return EXIT_FAILURE;
-      std::ofstream file(output_filename, std::ios::binary);
+      std::ofstream file(output_filename);
+      file.imbue(std::locale::classic());
       write_serialized_headers_as_cpp_source(ss, file, shared_headers_varname);
       if (!file) {
         std::cerr << "Error writing output to " << output_filename << std::endl;

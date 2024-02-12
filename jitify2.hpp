@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2024, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -125,6 +125,12 @@
 #define JITIFY_IF_THREAD_SAFE(x) x
 #else
 #define JITIFY_IF_THREAD_SAFE(x)
+#endif
+
+#if __cplusplus >= 201402L
+#define JITIFY_DEPRECATED(msg) [[deprecated(msg)]]
+#else
+#define JITIFY_DEPRECATED(msg)
 #endif
 
 #ifdef __linux__
@@ -1411,6 +1417,9 @@ class LibNvJitLink
     case NVJITLINK_ERROR_PTX_COMPILE: return "NVJITLINK_ERROR_PTX_COMPILE";
     case NVJITLINK_ERROR_NVVM_COMPILE: return "NVJITLINK_ERROR_NVVM_COMPILE";
     case NVJITLINK_ERROR_INTERNAL: return "NVJITLINK_ERROR_INTERNAL";
+#if CUDA_VERSION >= 12030
+    case NVJITLINK_ERROR_THREADPOOL: return "NVJITLINK_ERROR_THREADPOOL";
+#endif
     }
     // clang-format on
     return "(unknown nvJitLink error)";
@@ -1787,13 +1796,30 @@ class ConfiguredKernelData {
   /*! Get the configured CUDA stream. */
   CUstream stream() const { return stream_; }
 
-  // TODO: Taking void** here is dangerous due to ambiguity with the variadic
   // overload below. E.g., passing void*const* silently fails.
   /*! Launch the configured kernel.
    *  \param arg_ptrs Array of pointers to kernel arguments.
    *  \return An empty string on success, otherwise an error message.
+   *  \deprecated Use \p launch_raw instead.
    */
-  ErrorMsg launch(void** arg_ptrs) const {
+  JITIFY_DEPRECATED("Use launch_raw instead")
+  ErrorMsg launch(void** arg_ptrs) const { return launch_raw(arg_ptrs); }
+
+  /*! Launch the configured kernel.
+   *  \param arg_ptrs Vector of pointers to kernel arguments.
+   *  \return An empty string on success, otherwise an error message.
+   *  \deprecated Use \p launch_raw instead.
+   */
+  JITIFY_DEPRECATED("Use launch_raw instead")
+  ErrorMsg launch(const std::vector<void*>& arg_ptrs) const {
+    return launch_raw(arg_ptrs);
+  }
+
+  /*! Launch the configured kernel.
+   *  \param arg_ptrs Array of pointers to kernel arguments.
+   *  \return An empty string on success, otherwise an error message.
+   */
+  ErrorMsg launch_raw(void** arg_ptrs) const {
     if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
         kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
@@ -1805,8 +1831,8 @@ class ConfiguredKernelData {
    *  \param arg_ptrs Vector of pointers to kernel arguments.
    *  \return An empty string on success, otherwise an error message.
    */
-  ErrorMsg launch(const std::vector<void*>& arg_ptrs = {}) const {
-    return launch(const_cast<void**>(arg_ptrs.data()));
+  ErrorMsg launch_raw(const std::vector<void*>& arg_ptrs) const {
+    return launch_raw(const_cast<void**>(arg_ptrs.data()));
   }
 
   /*! Launch the configured kernel.
@@ -1814,10 +1840,17 @@ class ConfiguredKernelData {
    *    be passed as pointers.
    *  \return An empty string on success, otherwise an error message.
    */
-  template <typename... Args>
-  ErrorMsg launch(const Args&... args) const {
-    void* arg_ptrs[] = {(void*)&args...};
-    return this->launch(arg_ptrs);
+  template <typename Arg, typename... Args>
+  ErrorMsg launch(const Arg& arg, const Args&... args) const {
+    void* arg_ptrs[] = {(void*)&arg, (void*)&args...};
+    return this->launch_raw(arg_ptrs);
+  }
+
+  /*! Launch the configured kernel.
+   *  \return An empty string on success, otherwise an error message.
+   */
+  ErrorMsg launch() const {
+    return this->launch_raw(nullptr);
   }
 };
 
@@ -2596,6 +2629,7 @@ class CompiledProgramData
    * "-dlto" compiler option.
    * \deprecated Use lto_ir() instead.
    */
+  JITIFY_DEPRECATED("Use lto_ir() instead")
   const std::string& nvvm() const { return nvvm_; }
   /*! Get the Link-Time Optimization (LTO) IR of the compiled program.
    * \note The LTO IR is only available here with NVRTC version >= 11.4 and the
@@ -2682,25 +2716,25 @@ inline LinkedProgram LinkedProgram::link(
   program_types.reserve(num_programs);
   for (size_t i = 0; i < num_programs; ++i) {
     const CompiledProgramData& compiled_program = *compiled_programs[i];
-    if (!compiled_program.nvvm().empty()) {
+    if (!compiled_program.lto_ir().empty()) {
       if (!cuda()) return Error(cuda().error());
       const int min_cuda_version = std::min(CUDA_VERSION, cuda().get_version());
       if (min_cuda_version < 11040) {
         return Error("Linking LTO IR is not supported with CUDA < 11.4");
       }
     }
-    const std::string& program = !compiled_program.nvvm().empty()
-                                     ? compiled_program.nvvm()
+    const std::string& program = !compiled_program.lto_ir().empty()
+                                     ? compiled_program.lto_ir()
                                      : !compiled_program.cubin().empty()
                                            ? compiled_program.cubin()
                                            : compiled_program.ptx();
     CUjitInputType program_type =
 #if CUDA_VERSION >= 11040
-        !compiled_program.nvvm().empty() ? CU_JIT_INPUT_NVVM :
+        !compiled_program.lto_ir().empty() ? CU_JIT_INPUT_NVVM :
 #endif
-                                         !compiled_program.cubin().empty()
-                                             ? CU_JIT_INPUT_CUBIN
-                                             : CU_JIT_INPUT_PTX;
+                                           !compiled_program.cubin().empty()
+                                               ? CU_JIT_INPUT_CUBIN
+                                               : CU_JIT_INPUT_PTX;
     programs.emplace_back(&program);
     program_types.emplace_back(program_type);
   }
@@ -3438,6 +3472,10 @@ inline bool ptx_parse_decl_name(const std::string& line, std::string* name) {
   return true;
 }
 
+inline bool is_alpha(char c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
 inline bool ptx_remove_unused_globals(std::string* ptx) {
   std::istringstream iss(*ptx);
   StringVec lines;
@@ -3465,7 +3503,7 @@ inline bool ptx_remove_unused_globals(std::string* ptx) {
       const char* token_delims = " \t()[]{},;+-*/~&|^?:=!<>\"'\\";
       for (auto token : split_string(terms[i], -1, token_delims)) {
         if (  // Ignore non-names
-            !(std::isalpha(token[0]) || token[0] == '_' || token[0] == '$') ||
+            !(is_alpha(token[0]) || token[0] == '_' || token[0] == '$') ||
             token.find('.') != std::string::npos ||
             // Ignore variable/parameter declarations
             terms[i - 1][0] == '.' ||
@@ -3909,11 +3947,14 @@ JITIFY_DEFINE_C_AND_CXX_HEADERS(limits, R"(
 #define SCHAR_MIN   (-128)
 #define SCHAR_MAX   127
 #define UCHAR_MAX   255
-enum {
-    _JITIFY_CHAR_IS_UNSIGNED = ((char)-1 >= 0),
-    CHAR_MIN = (_JITIFY_CHAR_IS_UNSIGNED ? 0 : SCHAR_MIN),
-    CHAR_MAX = (_JITIFY_CHAR_IS_UNSIGNED ? UCHAR_MAX : SCHAR_MAX),
-};
+#define _JITIFY_CHAR_IS_UNSIGNED ('\xff' > 0)
+#if _JITIFY_CHAR_IS_UNSIGNED
+#define CHAR_MIN 0
+#define CHAR_MAX UCHAR_MAX
+#else
+#define CHAR_MIN SCHAR_MIN
+#define CHAR_MAX SCHAR_MAX
+#endif
 #define SHRT_MIN    (-SHRT_MAX - 1)
 #define SHRT_MAX    0x7fff
 #define USHRT_MAX   0xffff
@@ -4126,7 +4167,6 @@ typedef signed short int_least16_t;
 typedef signed int int_least32_t;
 typedef signed long long int_least64_t;
 typedef signed long long intmax_t;
-typedef signed long intptr_t;  // optional
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
@@ -4140,11 +4180,8 @@ typedef unsigned short uint_least16_t;
 typedef unsigned int uint_least32_t;
 typedef unsigned long long uint_least64_t;
 typedef unsigned long long uintmax_t;
-#if defined _WIN32 || defined _WIN64
-typedef unsigned long long uintptr_t;  // optional
-#else  // not Windows
-typedef unsigned long uintptr_t;  // optional
-#endif
+typedef int64_t intptr_t;  // optional
+typedef uint64_t uintptr_t;  // optional
 )");
 
 JITIFY_DEFINE_C_AND_CXX_HEADERS_EX(stdio, "#include <cstddef>", R"(
@@ -5528,12 +5565,31 @@ inline std::string path_simplify(StringRef path) {
   return ss.str();
 }
 
+// Reads a whole text file into *content. Returns false on failure.
 inline bool read_text_file(const std::string& fullpath, std::string* content) {
-  std::ifstream file(fullpath.c_str());
+  FILE* file = ::fopen(fullpath.c_str(), "r");
   if (!file) return false;
-  std::stringstream buf;
-  buf << file.rdbuf();
-  *content = buf.str();
+  std::unique_ptr<FILE, std::integral_constant<decltype(::fclose)*, ::fclose>>
+      unique_file(file);
+#ifdef POSIX_FADV_WILLNEED
+  // Hints to potentially improve read performance.
+  ::posix_fadvise(::fileno(file), 0, 0, POSIX_FADV_SEQUENTIAL);
+  ::posix_fadvise(::fileno(file), 0, 0, POSIX_FADV_WILLNEED);
+#endif
+  if (::fseek(file, 0, SEEK_END)) return false;
+  const long size = ::ftell(file);
+  if (::fseek(file, 0, SEEK_SET)) return false;
+  content->resize(size);
+  // Note: This supports empty (size=0) files.
+  if ((long)::fread(&(*content)[0], 1, size, file) != size) return false;
+  // Crop off trailing null characters that may arise due to multi-character
+  // newline conversions (e.g., on Windows).
+  const size_t last_char_pos = content->find_last_not_of("\0");
+  if (last_char_pos == std::string::npos) {
+    content->resize(0);
+  } else {
+    content->resize(last_char_pos + 1);
+  }
   return true;
 }
 
@@ -6336,6 +6392,9 @@ class NewFile {
 #if defined _WIN32 || defined _WIN64
     bool success = ::_locking(fd_, _LK_LOCK, 1) == 0;
 #else
+#ifndef F_OFD_SETLKW
+#error F_OFD_SETLKW is not defined; try building with -D_FILE_OFFSET_BITS=64
+#endif  // F_OFD_SETLKW
     flock fl = {};
     fl.l_type = F_WRLCK;     // Exclusive lock for writing
     fl.l_whence = SEEK_SET;  // Start at beginning of file
