@@ -243,7 +243,7 @@ struct imemstream : virtual membuf, std::istream {
 
 // This should be incremented whenever the serialization format changes in any
 // incompatible way.
-static constexpr const size_t kSerializationVersion = 0x10;
+static constexpr const size_t kSerializationVersion = 0x11;
 
 namespace detail {
 
@@ -408,7 +408,10 @@ class Serializable {
     DeserializeImpl(std::istream& stream) : stream_(stream) {}
     template <typename... Values>
     bool operator()(Values&... values) const {
-      return serialization::deserialize(stream_, &values...);
+      // Note: We return failure if there are still bytes left in the stream at
+      // the end of deserialization, which helps to avoid serialization bugs.
+      return serialization::deserialize(stream_, &values...) &&
+             stream_.peek() == std::istream::traits_type::eof();
     }
   };
 
@@ -923,7 +926,10 @@ class FallibleObjectBase : public detail::FallibleValue<ValueType, ErrorType> {
   static Subclass deserialize(std::istream& stream) {
     ValueType impl;
     if (!ValueType::deserialize(stream, &impl)) {
-      return Subclass(typename super_type::Error("Deserialization failed"));
+      return Subclass(typename super_type::Error(
+          "Deserialization failed. This could be due to corrupted cache files "
+          "or a bug in Jitify. If you are using a file cache for Jitify "
+          "programs, try clearing it."));
     }
     return Subclass(impl);
   }
@@ -1947,6 +1953,8 @@ class LinkedProgramData
   std::string log_;           // Linker log
   StringVec linker_options_;  // Linker options that were used
 
+  // **WARNING**: If you change this in any way (add, remove, or reorder
+  // arguments), you MUST bump kSerializationVersion.
   JITIFY_DEFINE_SERIALIZABLE_MEMBERS(LinkedProgramData, cubin_,
                                      lowered_name_map_)
 
@@ -2598,6 +2606,8 @@ class CompiledProgramData
   std::string log_;                     // Compilation log
   StringVec compiler_options_;          // Compiler options that were used.
 
+  // **WARNING**: If you change this in any way (add, remove, or reorder
+  // arguments), you MUST bump kSerializationVersion.
   JITIFY_DEFINE_SERIALIZABLE_MEMBERS(CompiledProgramData, ptx_, cubin_, nvvm_,
                                      lowered_name_map_,
                                      remaining_linker_options_)
@@ -3687,6 +3697,8 @@ class PreprocessedProgramData
   std::string header_log_;
   std::string compile_log_;
 
+  // **WARNING**: If you change this in any way (add, remove, or reorder
+  // arguments), you MUST bump kSerializationVersion.
   JITIFY_DEFINE_SERIALIZABLE_MEMBERS(PreprocessedProgramData, name_, source_,
                                      header_sources_,
                                      remaining_compiler_options_,
@@ -6231,6 +6243,8 @@ class ProgramData : public serialization::Serializable<ProgramData> {
   std::string source_;
   StringMap header_sources_;
 
+  // **WARNING**: If you change this in any way (add, remove, or reorder
+  // arguments), you MUST bump kSerializationVersion.
   JITIFY_DEFINE_SERIALIZABLE_MEMBERS(ProgramData, name_, source_,
                                      header_sources_)
 
