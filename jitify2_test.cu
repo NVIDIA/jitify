@@ -1720,6 +1720,97 @@ __global__ void my_kernel() {}
   ASSERT_EQ(compiled->ptx(), orig_ptx);
 }
 
+bool read_binary_file(const char* filename, std::string* contents) {
+  std::ifstream file(filename, std::ios::binary | std::ios::ate);
+  if (!file) return false;
+  const std::streamsize size = file.tellg();
+  file.seekg(0, std::ios::beg);
+  contents->resize(size);
+  return static_cast<bool>(file.read(&(*contents)[0], size));
+}
+
+// If kSerializationVersion hasn't changed, this checks that the existing golden
+// files can still be deserialized correctly (i.e., that the serialization
+// format wasn't inadvertently changed). If the version number has changed, this
+// generates new golden files and adds them to git.
+template <class JitifyObjectMaker>
+void check_or_update_serialization_goldens(
+    JitifyObjectMaker make_jitify_object) {
+  using JitifyObject = typename std::result_of<JitifyObjectMaker()>::type;
+  constexpr size_t version = jitify2::serialization::kSerializationVersion;
+  std::string object_type_name = jitify2::reflection::reflect<JitifyObject>();
+  // Remove namespace prefix from type name.
+  object_type_name = object_type_name.substr(object_type_name.rfind("::") + 2);
+  const std::string filename = "../serialization_goldens/" + object_type_name +
+                               "." + std::to_string(version) + ".jitify";
+  std::string serialized;
+  if (read_binary_file(filename.c_str(), &serialized)) {
+    JitifyObject object = JitifyObject::deserialize(serialized);
+    ASSERT_TRUE(object) << "Failed to deserialize \"" << filename
+                        << "\".\nIf you have changed any "
+                           "serialization code, you need to bump "
+                           "jitify2::serialization::kSerializationVersion.";
+    ASSERT_EQ(make_jitify_object()->serialize(), serialized)
+        << "Serialized object does not match golden in \"" << filename << "\"";
+  } else {
+    std::ofstream file(filename.c_str(), std::ios::binary);
+    ASSERT_TRUE(file) << "Failed to open file for writing: " << filename;
+    JitifyObject object = make_jitify_object();
+    serialized = object->serialize();
+    file.write(serialized.data(), serialized.size());
+    ASSERT_TRUE(file) << "Failed to write to " << filename;
+    file.close();
+    std::cout << "Generated new golden file \"" << filename
+              << "\". This should be committed alongside the changes to the "
+                 "serialization format."
+              << std::endl;
+    if (std::system(("git add " + filename).c_str())) {
+      std::cerr << "WARNING: Failed to `git add " << filename << "`"
+                << std::endl;
+    }
+  }
+}
+
+TEST(Jitify2Test, SerializationGoldensProgram) {
+  static const char* const source = R"(
+#include "header1.cuh"
+__global__ void kernel1(dtype*) {}
+)";
+  check_or_update_serialization_goldens([&] {
+    return Program("program1", source,
+                   {{"header1.cuh", "using dtype = float;"}});
+  });
+}
+
+TEST(Jitify2Test, SerializationGoldensPreprocessedProgram) {
+  static const char* const source = R"(
+#include "header1.cuh"
+__global__ void kernel1(dtype*) {}
+)";
+  check_or_update_serialization_goldens([&] {
+    return PreprocessedProgram(PreprocessedProgramData(
+        "program1", source, {{"header1.cuh", "using dtype = float;"}},
+        {"-std=c++14"}, {"-lfoo"}, "header log", "compile log"));
+  });
+}
+
+TEST(Jitify2Test, SerializationGoldensCompiledProgram) {
+  check_or_update_serialization_goldens([&] {
+    // Note: It doesn't matter what values we put in here, it's only testing the
+    // de/serialization of them.
+    return CompiledProgram(CompiledProgramData(
+        "some ptx", "some cubin", "some nvvm", {{"name", "lowered_name"}},
+        {"-lfoo"}, "log", {"-std=c++14"}));
+  });
+}
+
+TEST(Jitify2Test, SerializationGoldensLinkedProgram) {
+  check_or_update_serialization_goldens([&] {
+    return LinkedProgram(LinkedProgramData(
+        "some cubin", {{"name", "lowered_name"}}, "log", {"-lfoo"}));
+  });
+}
+
 int main(int argc, char** argv) {
   cudaSetDevice(0);
   // Initialize the driver context (avoids "initialization error"/"context is
