@@ -2110,6 +2110,8 @@ TEST(Jitify2ParserTest, SingleTokens) {
   expect_tokenization("0b10", {Tt::kNumber}, {"0b10"});
   expect_tokenization("123u", {Tt::kNumber}, {"123u"});
   expect_tokenization("123LLu", {Tt::kNumber}, {"123LLu"});
+  expect_tokenization("123'45'6", {Tt::kNumber}, {"123'45'6"});
+  expect_tokenization("0x12'34'56", {Tt::kNumber}, {"0x12'34'56"});
   expect_tokenization("\"str\"", {Tt::kString}, {"\"str\""});
   expect_tokenization("u\"str\"", {Tt::kString}, {"u\"str\""});
   expect_tokenization("u8\"str\"", {Tt::kString}, {"u8\"str\""});
