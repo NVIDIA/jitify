@@ -2109,9 +2109,7 @@ class ConfiguredKernelData {
   /*! Launch the configured kernel.
    *  \return An empty string on success, otherwise an error message.
    */
-  ErrorMsg launch() const {
-    return this->launch_raw(nullptr);
-  }
+  ErrorMsg launch() const { return this->launch_raw(nullptr); }
 };
 
 class ConfiguredKernel
@@ -2347,8 +2345,9 @@ inline bool endswith(StringRef str, StringRef suffix) {
 }
 
 inline bool is_true_value(std::string str) {
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return static_cast<unsigned char>(std::tolower(c)); });
+  std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
+    return static_cast<unsigned char>(std::tolower(c));
+  });
   return !(str == "false" || str == "off" || str == "no" || str == "0");
 }
 

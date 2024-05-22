@@ -635,10 +635,10 @@ TEST(Jitify2Test, PathSimplify) {
   EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/"), "/foo/bar/");
   EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar/"), "bar/");
   EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar/"), "/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/../foo"), "");  // Invalid path
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../../bar"), // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/../foo"), "");    // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../../bar"),  // Invalid path
             "");
-  EXPECT_EQ(jitify2::detail::path_simplify("/.."), "");  // Invalid path
+  EXPECT_EQ(jitify2::detail::path_simplify("/.."), "");         // Invalid path
   EXPECT_EQ(jitify2::detail::path_simplify("/foo/../.."), "");  // Invalid path
 #if defined _WIN32 || defined _WIN64
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\)"), R"(\)");
@@ -650,8 +650,7 @@ TEST(Jitify2Test, PathSimplify) {
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\..\bar)"), R"(\bar)");
   EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\..\bar)"), R"(bar)");
 
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar)"),
-            R"(\foo/bar)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar)"), R"(\foo/bar)");
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\./cat)"),
             R"(\foo/bar\cat)");
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)"),
