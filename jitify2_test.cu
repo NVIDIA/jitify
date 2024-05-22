@@ -736,9 +736,11 @@ __global__ void my_kernel() {}
   EXPECT_EQ(compiled->lowered_name_map().size(), size_t(1));
   ASSERT_EQ(compiled->lowered_name_map().count(instantiation), size_t(1));
   EXPECT_EQ(compiled->lowered_name_map().at(instantiation), lowered_name);
+  std::vector<std::string> serialized_linker_options =
+      compiled->remaining_linker_options().serialize();
   std::unordered_multiset<std::string> linker_options;
-  linker_options.insert(compiled->remaining_linker_options().begin(),
-                        compiled->remaining_linker_options().end());
+  linker_options.insert(serialized_linker_options.begin(),
+                        serialized_linker_options.end());
   EXPECT_EQ(linker_options.count("-lfoo"), 1);
   EXPECT_EQ(compiled->log(), "");
 }
@@ -1255,6 +1257,70 @@ __global__ void foo_kernel(int* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+TEST(Jitify2Test, OptionsVec) {
+  OptionsVec options0;
+  EXPECT_TRUE(options0.ok());
+  OptionsVec options1({Option("-arch", "sm_50"), Option("-G")});
+  EXPECT_TRUE(options1.ok());
+  StringVec options_sv({"-arch", "sm_50", "-G"});
+  OptionsVec options2(options_sv);
+  EXPECT_TRUE(options2.ok());
+  OptionsVec options3({"-arch", "sm_50", "-G"});
+  EXPECT_TRUE(options3.ok());
+
+  OptionsVec options({"--gpu-architecture", "compute_50", "-arch", "sm_50",
+                      "-maxrregcount=100", "-Ifoo", "-I=foo2", "--device-debug",
+                      "-G", "--restrict", "-restrict", "-lbar", "-l=bar2",
+                      "-lineinfo"});
+  EXPECT_TRUE(options.ok());
+
+  EXPECT_EQ(options.size(), 12);
+  EXPECT_EQ(options.serialize(),
+            StringVec({"--gpu-architecture", "compute_50", "-arch", "sm_50",
+                       "-maxrregcount=100", "-Ifoo", "-I=foo2",
+                       "--device-debug", "-G", "--restrict", "-restrict",
+                       "-lbar", "-l=bar2", "-lineinfo"}));
+  EXPECT_EQ(options.serialize_canonical(),
+            StringVec({"--gpu-architecture=compute_50", "-arch=sm_50",
+                       "-maxrregcount=100", "-I=foo", "-I=foo2",
+                       "--device-debug", "-G", "--restrict", "-restrict",
+                       "-l=bar", "-l=bar2", "-lineinfo"}));
+  StringVec implicit_conversion = options;
+  EXPECT_EQ(implicit_conversion, options.serialize());
+  EXPECT_TRUE(options.pop({"--gpu-architecture", "-arch"}));
+  EXPECT_EQ(options.serialize(),
+            StringVec({"-maxrregcount=100", "-Ifoo", "-I=foo2",
+                       "--device-debug", "-G", "--restrict", "-restrict",
+                       "-lbar", "-l=bar2", "-lineinfo"}));
+  options.push_back(Option("-foo=bar"));
+  EXPECT_EQ(options.serialize(),
+            StringVec({"-maxrregcount=100", "-Ifoo", "-I=foo2",
+                       "--device-debug", "-G", "--restrict", "-restrict",
+                       "-lbar", "-l=bar2", "-lineinfo", "-foo=bar"}));
+  options.pop_back();
+  EXPECT_EQ(options.serialize(),
+            StringVec({"-maxrregcount=100", "-Ifoo", "-I=foo2",
+                       "--device-debug", "-G", "--restrict", "-restrict",
+                       "-lbar", "-l=bar2", "-lineinfo"}));
+  options.erase(1);
+  options.erase(1);
+  EXPECT_EQ(
+      options.serialize(),
+      StringVec({"-maxrregcount=100", "--device-debug", "-G", "--restrict",
+                 "-restrict", "-lbar", "-l=bar2", "-lineinfo"}));
+  OptionsVec extra({"-Ifoo", "-I=foo2"});
+  options.insert(options.begin() + 1, extra.begin(), extra.end());
+  EXPECT_EQ(options.serialize(),
+            StringVec({"-maxrregcount=100", "-Ifoo", "-I=foo2",
+                       "--device-debug", "-G", "--restrict", "-restrict",
+                       "-lbar", "-l=bar2", "-lineinfo"}));
+  EXPECT_EQ(options[2], Option("-I", "foo2"));
+  EXPECT_EQ(options, options);
+  EXPECT_NE(options, extra);
+  std::vector<int> inds = options.find({"--restrict", "-l"});
+  EXPECT_EQ(inds, std::vector<int>({5, 7, 8}));
+}
+
 TEST(Jitify2Test, ArchFlags) {
   static const char* const source = R"(
 const int arch = __CUDA_ARCH__ / 10;
@@ -1334,9 +1400,11 @@ const int arch = __CUDA_ARCH__ / 10;
           ->compile()
           ->link();
   ASSERT_EQ(get_error(linked), "");
+  std::vector<std::string> serialized_linker_options =
+      linked->linker_options().serialize();
   std::unordered_multiset<std::string> linker_options(
-      linked->linker_options().begin(), linked->linker_options().end());
-  EXPECT_EQ(linker_options.count("-maxrregcount=100"), 1);
+      serialized_linker_options.begin(), serialized_linker_options.end());
+  ASSERT_EQ(linker_options.count("-maxrregcount=100"), 1);
   EXPECT_EQ(linker_options.count("--generate-line-info"), 1);
   EXPECT_EQ(linker_options.count("-G"), 1);
 
@@ -1347,9 +1415,10 @@ const int arch = __CUDA_ARCH__ / 10;
                ->compile()
                ->link();
   ASSERT_EQ(get_error(linked), "");
+  serialized_linker_options = linked->linker_options().serialize_canonical();
   linker_options.clear();
-  linker_options.insert(linked->linker_options().begin(),
-                        linked->linker_options().end());
+  linker_options.insert(serialized_linker_options.begin(),
+                        serialized_linker_options.end());
   EXPECT_EQ(linker_options.count("--maxrregcount=100"), 1);
   EXPECT_EQ(linker_options.count("--generate-line-info"), 1);
   EXPECT_EQ(linker_options.count("--device-debug"), 1);
