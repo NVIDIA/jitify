@@ -1680,6 +1680,22 @@ class LibNvJitLink
 #if CUDA_VERSION >= 12030
     case NVJITLINK_ERROR_THREADPOOL: return "NVJITLINK_ERROR_THREADPOOL";
 #endif
+#if CUDA_VERSION >= 12040
+    case NVJITLINK_ERROR_UNRECOGNIZED_INPUT:
+        return "NVJITLINK_ERROR_UNRECOGNIZED_INPUT";
+#endif
+    // TODO: According to the header, these will be added in a future CUDA release.
+    //case NVJITLINK_ERROR_NULL_INPUT: return "NVJITLINK_ERROR_NULL_INPUT";
+    //case NVJITLINK_ERROR_INCOMPATIBLE_OPTIONS:
+    //    return "NVJITLINK_ERROR_INCOMPATIBLE_OPTIONS";
+    //case NVJITLINK_ERROR_INCORRECT_INPUT_TYPE:
+    //    return "NVJITLINK_ERROR_INCORRECT_INPUT_TYPE";
+    //case NVJITLINK_ERROR_ARCH_MISMATCH:
+    //    return "NVJITLINK_ERROR_ARCH_MISMATCH";
+    //case NVJITLINK_ERROR_OUTDATED_LIBRARY:
+    //    return "NVJITLINK_ERROR_OUTDATED_LIBRARY";
+    //case NVJITLINK_ERROR_MISSING_FATBIN:
+    //    return "NVJITLINK_ERROR_MISSING_FATBIN";
     }
     // clang-format on
     return "(unknown nvJitLink error)";
