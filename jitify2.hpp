@@ -1477,7 +1477,7 @@ class LibCuda
 #if defined(_WIN32) || defined(_WIN64)
         "nvcuda.dll";
 #else
-        "libcuda.so";
+        "libcuda.so.1";
 #endif
     this->open(libname.c_str());
 #endif  // !JITIFY_LINK_CUDA_STATIC
