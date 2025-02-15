@@ -1694,12 +1694,12 @@ TEST(Jitify2Test, CubBlockPrimitives) {
 #define ProcessFloatMinusZero BaseDigitExtractor<KeyT>::ProcessFloatMinusZero
 #endif
 
-// WAR for header include issue (note: order of includes matters):
-//   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
-#include <cuda/std/cstdint>
-#include <cuda/std/cstddef>
-#include <cuda/std/type_traits>
-#include <cuda/std/limits>
+// WAR for issue in CUB shipped with CUDA 12.4-<12.8.
+// TODO(benbarsdell): Check exactly when this issue was fixed in CUB,
+// this is an upper-bound.
+#if CUB_VERSION < 200700
+#include <type_traits>
+#endif
 
 #include <cub/block/block_load.cuh>
 #include <cub/block/block_radix_sort.cuh>
