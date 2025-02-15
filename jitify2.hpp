@@ -1683,6 +1683,12 @@ class LibNvJitLink
 #if CUDA_VERSION >= 12030
     case NVJITLINK_ERROR_THREADPOOL: return "NVJITLINK_ERROR_THREADPOOL";
 #endif
+#if CUDA_VERSION >= 12040
+    case NVJITLINK_ERROR_UNRECOGNIZED_INPUT: return "NVJITLINK_ERROR_UNRECOGNIZED_INPUT";
+#endif
+#if CUDA_VERSION >= 12060
+    case NVJITLINK_ERROR_FINALIZE: return "NVJITLINK_ERROR_FINALIZE";
+#endif
     }
     // clang-format on
     return "(unknown nvJitLink error)";
