@@ -1657,7 +1657,15 @@ __global__ void my_kernel() {}
 TEST(Jitify2Test, Thrust) {
   // clang-format off
   static const char* const source = R"(
+// WAR for NVRTC issue causing compilation error:
+//   `namespace "thrust" has no actual member "iterator_core_access"`.
+#define THRUST_WRAPPED_NAMESPACE jitify_thrust_ns_war
+#define THRUST_DISABLE_ABI_NAMESPACE
+
 #include <thrust/iterator/counting_iterator.h>
+
+using namespace jitify_thrust_ns_war;  // Part of WAR above
+
 __global__ void my_kernel(thrust::counting_iterator<int> begin,
                           thrust::counting_iterator<int> end) {
 })";
