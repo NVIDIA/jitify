@@ -204,7 +204,28 @@
 
 #endif  // not JITIFY_SERIALIZATION_ONLY
 
+#ifndef JITIFY_ENABLE_NVTX
+#define JITIFY_ENABLE_NVTX 0
+#endif
+
+#if JITIFY_ENABLE_NVTX
+#include <nvtx3/nvtx3.hpp>
+#define JITIFY_NVTX_FUNC_RANGE() NVTX3_FUNC_RANGE_IN(JitifyNvtxDomain)
+#else
+#define JITIFY_NVTX_FUNC_RANGE()
+#endif  // JITIFY_ENABLE_NVTX
+
 namespace jitify2 {
+
+#if JITIFY_ENABLE_NVTX
+struct JitifyNvtxDomain {
+  static constexpr char const* name{"jitify"};
+};
+
+using nvtx_scoped_range = nvtx3::scoped_range_in<JitifyNvtxDomain>;
+#else
+using nvtx_scoped_range = std::string;
+#endif
 
 // Convenience aliases.
 using StringVec = std::vector<std::string>;
@@ -706,6 +727,7 @@ class Serializable {
    *  \param stream The stream to output serialized data to.
    */
   void serialize(std::ostream& stream) const {
+    JITIFY_NVTX_FUNC_RANGE();
     const auto* subclass = static_cast<const Subclass*>(this);
     subclass->serialize_members(SerializeImpl(stream));
   }
@@ -718,9 +740,11 @@ class Serializable {
     return ss.str();
   }
   static bool deserialize(std::istream& stream, Subclass* subclass) {
+    JITIFY_NVTX_FUNC_RANGE();
     return subclass->deserialize_members(DeserializeImpl(stream));
   }
   static bool deserialize(StringRef serialized, Subclass* subclass) {
+    JITIFY_NVTX_FUNC_RANGE();
     imemstream ms(serialized);
     return subclass->deserialize_members(DeserializeImpl(ms));
   }
@@ -2012,6 +2036,7 @@ class Kernel : public detail::FallibleObjectBase<Kernel, KernelData> {
 };
 
 inline Kernel Kernel::get_kernel(LoadedProgramData program, std::string name) {
+  JITIFY_NVTX_FUNC_RANGE();
   name = detail::normalize_cuda_symbol_name(name);
   auto iter = program.lowered_name_map().find(name);
   if (iter != program.lowered_name_map().end()) {
@@ -2196,6 +2221,7 @@ class LoadedProgram
 
 inline LoadedProgram LoadedProgram::load(StringRef cubin,
                                          StringMap lowered_name_map) {
+  JITIFY_NVTX_FUNC_RANGE();
   CUmodule module;
   if (!cuda()) return Error(cuda().error());
   CUresult ret = cuda().ModuleLoadData()(&module, cubin.data());
@@ -2920,6 +2946,7 @@ class CompiledProgram
 inline LinkedProgram LinkedProgram::link(
     size_t num_programs, const CompiledProgramData* compiled_programs[],
     OptionsVec options) {
+  JITIFY_NVTX_FUNC_RANGE();
   if (num_programs == 0) return Error("Must have at least one program to link");
   const OptionsVec& prog_linker_options =
       compiled_programs[0]->remaining_linker_options();
@@ -3754,6 +3781,7 @@ inline CompiledProgram CompiledProgram::compile(
     const std::string& name, const std::string& source,
     const StringMap& header_sources, const StringVec& name_expressions,
     OptionsVec compiler_options, OptionsVec linker_options) {
+  JITIFY_NVTX_FUNC_RANGE();
   if (!compiler_options) return Error("Failed to parse compiler options");
   if (!linker_options) return Error("Failed to parse linker options");
   std::string error;
@@ -7279,6 +7307,7 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     std::string program_name, std::string program_source,
     StringMap header_sources, OptionsVec compiler_options,
     OptionsVec linker_options, HeaderCallback header_callback) {
+  JITIFY_NVTX_FUNC_RANGE();
   // Add pre-include built-in JIT-safe headers.
   bool use_system_headers_war = !compiler_options.pop(
       {"-no-system-headers-workaround", "--no-system-headers-workaround"});
@@ -8014,9 +8043,10 @@ class LRUFileCache {
   std::string get(const std::string& name,
                   typename std::result_of<Construct()>::type* result,
                   Construct construct, Serialize serialize,
-                  Deserialize deserialize) const {
+                  Deserialize deserialize, bool* hit = nullptr) const {
     if (path_.empty() || max_size_ == 0) {
       *result = construct();
+      if (hit) *hit = false;
     } else {
       bool is_dir;
       // Create the cache directory if necessary.
@@ -8035,6 +8065,7 @@ class LRUFileCache {
       if (istream) {
         // Found in cache, load it.
         *result = deserialize(istream);
+        if (hit) *hit = true;
       } else {
         // Not found in cache, acquire a file lock for exclusive access.
         FileLock file_lock(lock_file_name_.c_str());
@@ -8046,6 +8077,7 @@ class LRUFileCache {
           // Found in cache now, just load it.
           file_lock.close();
           *result = deserialize(istream);
+          if (hit) *hit = true;
         } else {
           // We must construct the object and write it to the cache.
           auto result_tmp = construct();
@@ -8067,6 +8099,7 @@ class LRUFileCache {
           // Atomically make the new cache file visible to readers.
           std::rename(temp_filename.c_str(), filename.c_str());
           *result = std::move(result_tmp);
+          if (hit) *hit = false;
         }
       }
     }
@@ -8384,6 +8417,8 @@ class ProgramCache {
   JITIFY_IF_THREAD_SAFE(mutable std::mutex mutex_;)
   size_t num_hits_ = 0;
   size_t num_misses_ = 0;
+  size_t num_file_hits_ = 0;
+  size_t num_file_misses_ = 0;
 
   OptionsVec merge_compiler_options(OptionsVec extra_compiler_options) const {
     extra_compiler_options.insert(extra_compiler_options.begin(),
@@ -8494,6 +8529,7 @@ class ProgramCache {
                             const StringMap& extra_header_sources = {},
                             OptionsVec extra_compiler_options = {},
                             OptionsVec extra_linker_options = {}) {
+    JITIFY_NVTX_FUNC_RANGE();
     // Add the current CUDA context to the key, as modules are context-specific.
     CUcontext context;
     if (!cuda()) return LoadedProgram::Error(cuda().error());
@@ -8510,8 +8546,12 @@ class ProgramCache {
     bool found = value_and_found.second;
     if (found) {
       ++num_hits_;
+      // Note: We use ranges instead of marks here so that they conveniently
+      // show up in the output of `nsys profile --stat=true`.
+      nvtx_scoped_range("mem_cache_hit");
     } else {
       ++num_misses_;
+      nvtx_scoped_range("mem_cache_miss");
       // Add the SM architecture to the key, as cubins are arch-specific.
       OptionsVec all_compiler_options =
           merge_compiler_options(extra_compiler_options);
@@ -8539,6 +8579,7 @@ class ProgramCache {
       filename_ss << to_filename_(key) << ".sm" << compute_capability << ".v"
                   << std::hex << serialization::kSerializationVersion;
       LinkedProgram linked;
+      bool hit = false;
       error = file_cache_.get(
           filename_ss.str(), &linked,
           [&] {
@@ -8551,8 +8592,16 @@ class ProgramCache {
           },
           [&](std::istream& istream) {
             return LinkedProgram::deserialize(istream);
-          });
+          },
+          &hit);
       if (!error.empty()) return LoadedProgram::Error(error);
+      if (hit) {
+        ++num_file_hits_;
+        nvtx_scoped_range("file_cache_hit");
+      } else {
+        ++num_file_misses_;
+        nvtx_scoped_range("file_cache_miss");
+      }
       if (!linked) return LoadedProgram::Error(linked.error());
       *value = linked->load();
       if (!*value) return LoadedProgram::Error(value->error());
@@ -8682,10 +8731,14 @@ class ProgramCache {
    *    will be stored.
    *  \see reset_stats
    */
-  void get_stats(size_t* num_hits, size_t* num_misses) const {
+  void get_stats(size_t* num_hits, size_t* num_misses,
+                 size_t* num_file_hits = nullptr,
+                 size_t* num_file_misses = nullptr) const {
     JITIFY_IF_THREAD_SAFE(std::lock_guard<std::mutex> lock(mutex_);)
     *num_hits = num_hits_;
     *num_misses = num_misses_;
+    if (num_file_hits) *num_file_hits = num_file_hits_;
+    if (num_file_misses) *num_file_misses = num_file_misses_;
   }
 
   /*! Reset the cache hit and miss statistics to zero.
@@ -8695,6 +8748,8 @@ class ProgramCache {
     JITIFY_IF_THREAD_SAFE(std::lock_guard<std::mutex> lock(mutex_);)
     num_hits_ = 0;
     num_misses_ = 0;
+    num_file_hits_ = 0;
+    num_file_misses_ = 0;
   }
 };
 

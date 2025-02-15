@@ -342,6 +342,17 @@ inline bool remove_empty_dir(const char* path) {
 #endif
 }
 
+#define JITIFY_TEST_CHECK_HITS(expected_hits, expected_misses,                 \
+                               expected_file_hits, expected_file_misses)       \
+  {                                                                            \
+    size_t num_hits, num_misses, num_file_hits, num_file_misses;               \
+    cache.get_stats(&num_hits, &num_misses, &num_file_hits, &num_file_misses); \
+    EXPECT_EQ(num_hits, expected_hits);                                        \
+    EXPECT_EQ(num_misses, expected_misses);                                    \
+    EXPECT_EQ(num_file_hits, expected_file_hits);                              \
+    EXPECT_EQ(num_file_misses, expected_file_misses);                          \
+  }
+
 TEST(Jitify2Test, ProgramCache) {
   static const char* const source = R"(
 template <typename T>
@@ -353,53 +364,49 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   static const char* const cache_path = "jitify2_test_cache/subdir";
   ProgramCache<key_type> cache(max_size,
                                *Program("my_program", source)->preprocess(),
-                               nullptr, cache_path);
+                               nullptr, cache_path, /*max_files=*/max_size + 1);
   ScopeGuard scoped_cleanup_files([&] {
     cache.clear();
     remove_empty_dir(cache_path);
     remove_empty_dir(cache_path0);
   });
 
-  auto check_hits = [&](size_t expected_hits, size_t expected_misses) {
-    size_t num_hits, num_misses;
-    cache.get_stats(&num_hits, &num_misses);
-    EXPECT_EQ(num_hits, expected_hits);
-    EXPECT_EQ(num_misses, expected_misses);
-  };
-
   Kernel kernel;
   Template my_kernel("my_kernel");
 
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   ASSERT_EQ(kernel->configure(1, 1)->launch(nullptr, nullptr), "");
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 0, 1);
   kernel = cache.get_kernel(/* key = */ 1, my_kernel.instantiate<double>());
   ASSERT_EQ(get_error(kernel), "");
-  check_hits(0, 2);
+  JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_int = kernel->function();
-  check_hits(0, 3);
+  JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_float = kernel->function();
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_int);
-  check_hits(1, 1);
+  JITIFY_TEST_CHECK_HITS(1, 1, 1, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_float);
-  check_hits(2, 1);
+  JITIFY_TEST_CHECK_HITS(2, 1, 1, 0);
   LoadedProgram program =
       cache.get_program(/* key = */ 2, {my_kernel.instantiate<int>()});
   ASSERT_EQ(get_error(program), "");
-  check_hits(3, 1);
+  JITIFY_TEST_CHECK_HITS(3, 1, 1, 0);
+  kernel = cache.get_kernel(/* key = */ 1, my_kernel.instantiate<double>());
+  ASSERT_EQ(get_error(kernel), "");
+  JITIFY_TEST_CHECK_HITS(3, 2, 2, 0);
 
   // Make sure cache dir was created.
   bool cache_path_is_dir;
@@ -410,7 +417,7 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   // Now clear the cache.
   ASSERT_TRUE(cache.clear());
   EXPECT_EQ(cache.max_in_mem(), max_size);
-  EXPECT_EQ(cache.max_files(), max_size);
+  EXPECT_EQ(cache.max_files(), max_size + 1);
   // Make sure cache dir still exists.
   ASSERT_TRUE(jitify2::detail::path_exists(cache_path, &cache_path_is_dir));
   ASSERT_TRUE(cache_path_is_dir);
@@ -436,52 +443,48 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   static const char* const cache_path0 = "jitify2_test_cache";
   static const char* const cache_path = "jitify2_test_cache/subdir";
   ProgramCache<> cache(max_size, *Program("my_program", source)->preprocess(),
-                       nullptr, cache_path);
+                       nullptr, cache_path, /*max_files=*/max_size + 1);
   ScopeGuard scoped_cleanup_files([&] {
     cache.clear();
     remove_empty_dir(cache_path);
     remove_empty_dir(cache_path0);
   });
 
-  auto check_hits = [&](size_t expected_hits, size_t expected_misses) {
-    size_t num_hits, num_misses;
-    cache.get_stats(&num_hits, &num_misses);
-    EXPECT_EQ(num_hits, expected_hits);
-    EXPECT_EQ(num_misses, expected_misses);
-  };
-
   Kernel kernel;
   Template my_kernel("my_kernel");
 
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   ASSERT_EQ(kernel->configure(1, 1)->launch(nullptr, nullptr), "");
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 0, 1);
   kernel = cache.get_kernel(my_kernel.instantiate<double>());
   ASSERT_EQ(get_error(kernel), "");
-  check_hits(0, 2);
+  JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_int = kernel->function();
-  check_hits(0, 3);
+  JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_float = kernel->function();
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_int);
-  check_hits(1, 1);
+  JITIFY_TEST_CHECK_HITS(1, 1, 1, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_float);
-  check_hits(2, 1);
+  JITIFY_TEST_CHECK_HITS(2, 1, 1, 0);
   LoadedProgram program = cache.get_program({my_kernel.instantiate<int>()});
   ASSERT_EQ(get_error(program), "");
-  check_hits(3, 1);
+  JITIFY_TEST_CHECK_HITS(3, 1, 1, 0);
+  kernel = cache.get_kernel(my_kernel.instantiate<double>());
+  ASSERT_EQ(get_error(kernel), "");
+  JITIFY_TEST_CHECK_HITS(3, 2, 2, 0);
 
   // Make sure cache dir was created.
   bool cache_path_is_dir;
@@ -492,7 +495,7 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   // Now clear the cache.
   ASSERT_TRUE(cache.clear());
   EXPECT_EQ(cache.max_in_mem(), max_size);
-  EXPECT_EQ(cache.max_files(), max_size);
+  EXPECT_EQ(cache.max_files(), max_size + 1);
   // Make sure cache dir still exists.
   ASSERT_TRUE(jitify2::detail::path_exists(cache_path, &cache_path_is_dir));
   ASSERT_TRUE(cache_path_is_dir);
@@ -508,6 +511,8 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   EXPECT_EQ(cache.max_in_mem(), max_size + 1);
   EXPECT_EQ(cache.max_files(), max_size + 2);
 }
+
+#undef JITIFY_TEST_CHECK_HITS
 
 TEST(Jitify2Test, ProgramCacheFilenameSanitization) {
   static const char* const source = R"(__global__ void my_kernel() {})";
@@ -2458,6 +2463,8 @@ ne/*blah*/20 "newfilename"
   ASSERT_EQ(iter.previous_token().token_string(), "\"cat\"");
   ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
 }
+
+// TODO(benbarsdell): Add tests for nvtx ranges (using cuPTI).
 
 int main(int argc, char** argv) {
   cudaSetDevice(0);
