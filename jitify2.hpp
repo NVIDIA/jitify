@@ -1680,9 +1680,9 @@ class LibNvJitLink
 #if CUDA_VERSION >= 12030
     case NVJITLINK_ERROR_THREADPOOL: return "NVJITLINK_ERROR_THREADPOOL";
 #endif
-    default: return "(unknown nvJitLink error)";
     }
     // clang-format on
+    return "(unknown nvJitLink error)";
   }
 
   nvJitLinkInputType get_input_type(CUjitInputType cuda_input_type) const {
