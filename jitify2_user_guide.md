@@ -97,6 +97,26 @@ call or when a method such as `launch()` fails:
   }
 ```
 
+Most errors are simple strings, but compilation errors contain
+additional info that can be accessed via the `extra()` method:
+
+```
+  jitify2::PreprocessedProgram preprocessed =
+      jitify2::Program("bad_program", "NOT CUDA C!")->preprocess();
+  assert(!preprocessed.ok());
+  const jitify2::ErrorMsg error = preprocessed.error();
+  std::cerr << error << std::endl;                   // Full error message
+  std::cerr << error.extra("error") << std::endl;    // "NVRTC_ERROR_COMPILATION"
+  std::cerr << error.extra("log") << std::endl;      // "error: identifier "NOT" is undefined..."
+  std::cerr << error.extra("options") << std::endl;  // "-include=jitify_preinclude.h ..."
+  std::cerr << error.extra("headers") << std::endl;  // (empty)
+```
+
+By default, the full error message only includes the error name
+and compile log. To also include compiler options and headers
+in this message, define the macro `JITIFY_VERBOSE_ERRORS=1` before
+including `jitify2.hpp`.
+
 <a name="basic_workflow"/>
 
 ## Basic workflow example
@@ -211,6 +231,9 @@ $ mkdir build && cd build && cmake ..
 $ make check
 ```
 
+Note that the tests in `jitify2_test.cu` may also be useful as a form of
+documentation for many jitify features.
+
 <a name="build_options"/>
 
 ## Build options
@@ -260,6 +283,13 @@ $ make check
   built-in demangler implementation. This requires at least CUDA
   version 11.4, and the application must be linked with the
   libcufilt.a static library.
+
+- `JITIFY_VERBOSE_ERRORS=0`
+
+  Defining this macro to 1 before including the jitify header causes
+  compilation errors to include options and header info in the error
+  message. Note that this info can always be accessed manually via
+  the `extra()` method of the error object.
 
 <a name="compiler_options"/>
 

@@ -27,6 +27,7 @@
  */
 
 #define JITIFY_ENABLE_EXCEPTIONS 1
+#define JITIFY_VERBOSE_ERRORS 1
 #include "jitify2.hpp"
 
 #include "example_headers/class_arg_kernel.cuh"
@@ -1001,6 +1002,20 @@ TEST(Jitify2Test, InvalidPrograms) {
       "");
   // Not OK.
   EXPECT_NE(get_error(Program("bad_program", "NOT CUDA C!")->preprocess()), "");
+
+  // Check that the returned error object contains correct extra info.
+  PreprocessedProgram preprocessed =
+      Program("bad_program", "NOT CUDA C!")->preprocess();
+  EXPECT_FALSE(preprocessed.ok());
+  const ErrorMsg error = preprocessed.error();
+  EXPECT_THROW(error.extra("foo"), std::runtime_error);
+  EXPECT_EQ(error.extra("error"), "NVRTC_ERROR_COMPILATION");
+  EXPECT_TRUE(error.extra("log").find("identifier \"NOT\" is undefined") !=
+              std::string::npos);
+  EXPECT_TRUE(error.extra("options").find("-default-device") !=
+              std::string::npos);
+  EXPECT_EQ(error.extra("headers"), "");
+  EXPECT_TRUE(error.find("Compilation failed:") != std::string::npos);
 }
 
 TEST(Jitify2Test, CompileLTO_IR) {

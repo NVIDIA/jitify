@@ -96,6 +96,11 @@
 #define JITIFY_FAIL_IMMEDIATELY 0
 #endif
 
+// Adds options and headers logging to compilation error messages.
+#ifndef JITIFY_VERBOSE_ERRORS
+#define JITIFY_VERBOSE_ERRORS 0
+#endif
+
 #ifndef JITIFY_USE_LIBCUFILT
 #define JITIFY_USE_LIBCUFILT 0  // Use Jitify's builtin demangler by default
 #endif
@@ -1076,13 +1081,26 @@ class Template {
 class ErrorMsg : public std::string {
  public:
   using std::string::string;
-  ErrorMsg(const std::string& str) : std::string(str) {}
-  ErrorMsg(std::string&& str) : std::string(std::move(str)) {}
+  ErrorMsg(const std::string& str, StringMap _extra = {})
+      : std::string(str), extra_(std::move(_extra)) {}
+  ErrorMsg(std::string&& str, StringMap _extra = {})
+      : std::string(std::move(str)), extra_(std::move(_extra)) {}
 
   /*! Returns true if the error message is empty. */
   bool ok() const { return this->empty(); }
   /*! Returns true if the error message is non-empty. */
   explicit operator bool() const { return !this->empty(); }
+
+  const std::string& extra(const std::string& key) const {
+    auto iter = extra_.find(key);
+    if (iter == extra_.end()) {
+      JITIFY_THROW_OR_RETURN("Extra error info key '" + key + "' not found");
+    }
+    return iter->second;
+  }
+
+ private:
+  StringMap extra_;
 };
 
 namespace detail {
@@ -3776,6 +3794,24 @@ inline void copy_compiler_flag_for_linker_ptxas(
   }
 }
 
+inline ErrorMsg make_compilation_error_msg(const std::string& compile_error,
+                                           const std::string& compile_log,
+                                           const OptionsVec& compiler_options,
+                                           const std::string& header_log) {
+  std::string options_str = string_join(compiler_options, " ");
+  std::string msg = "Compilation failed: " + compile_error + "\n";
+#if JITIFY_VERBOSE_ERRORS
+  msg += "Compiler options: \"" + options_str + "\"\nHeaders:\n" + header_log +
+         "\nCompilation log:\n" + compile_log;
+#else
+  msg += compile_log;
+#endif
+  return ErrorMsg(msg, {{"error", compile_error},
+                        {"log", compile_log},
+                        {"options", options_str},
+                        {"headers", header_log}});
+}
+
 }  // namespace detail
 
 inline CompiledProgram CompiledProgram::compile(
@@ -3800,18 +3836,15 @@ inline CompiledProgram CompiledProgram::compile(
                               &error, &log, &ptx, &cubin, &nvvm,
                               name_expressions, &lowered_name_map,
                               should_remove_unused_globals)) {
-    std::string options_str = detail::string_join(
-        compiler_options, " ", "Compiler options: \"", "\"\n");
     std::vector<std::string> header_names;
     header_names.reserve(header_sources.size());
     for (const auto& item : header_sources) {
       header_names.push_back(item.first);
     }
     std::sort(header_names.begin(), header_names.end());
-    std::string headers_str =
-        detail::string_join(header_names, "\n  ", "Header names:\n  ", "\n");
-    return Error("Compilation failed: " + error + "\n" + options_str +
-                 headers_str + "\n" + log);
+    std::string headers_str = detail::string_join(header_names, "\n  ");
+    return Error(detail::make_compilation_error_msg(
+        error, log, compiler_options, headers_str));
   }
 
   // We copy certain compiler options to linker_options so that they are used if
@@ -7574,8 +7607,6 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     }
     compiler_options.push_back(Option("-DJITIFY_PREPROCESS_ONLY"));
     compiler_options.push_back(Option("-DJITIFY_USED_HEADER_WARNINGS"));
-    std::string compiler_options_msg = detail::string_join(
-        compiler_options, " ", "Compiler options: \"", "\"\n");
     std::string compile_error;
     // Note: This should always fail, because we inserted an #error directive.
     const nvrtcResult compile_result =
@@ -7584,8 +7615,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     assert(compile_result != NVRTC_SUCCESS);
     if (compile_result != NVRTC_ERROR_COMPILATION) {
       // There was something wrong with the compilation (e.g., invalid option).
-      return Error("Compilation failed: " + compile_error + "\n" +
-                   compiler_options_msg + header_log + compile_log);
+      return Error(detail::make_compilation_error_msg(
+          compile_error, compile_log, compiler_options,
+          header_log.substr(
+              0, header_log.size() - 1)));  // Remove trailing newline
     }
     compiler_options.pop_back();  // Remove -DJITIFY_USED_HEADER_WARNINGS
     compiler_options.pop_back();  // Remove -DJITIFY_PREPROCESS_ONLY
@@ -7595,8 +7628,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     if (compile_log.find(": error: ") != std::string::npos ||
         compile_log.find(": catastrophic error: ") != std::string::npos) {
       // There were real compilation errors.
-      return Error("Compilation failed: " + compile_error + "\n" +
-                   compiler_options_msg + header_log + compile_log);
+      return Error(detail::make_compilation_error_msg(
+          compile_error, compile_log, compiler_options,
+          header_log.substr(
+              0, header_log.size() - 1)));  // Remove trailing newline
     }
 
     if (arch_flag.cc) {
