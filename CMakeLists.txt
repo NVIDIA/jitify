@@ -4,8 +4,8 @@ project(jitify LANGUAGES CXX CUDA)
 option(ASAN "Enable address sanitizer in debug build" ON)
 
 # C++ compiler options.
-set (CMAKE_CXX_STANDARD 11)
-set (CMAKE_CUDA_STANDARD 11)  # Doesn't work?
+set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CUDA_STANDARD 17)  # Doesn't work?
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ")
 if (MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
