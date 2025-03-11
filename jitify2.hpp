@@ -180,9 +180,11 @@
 #else
 // TODO: Would std::exit or std::abort be better than std::terminate?
 #include <exception>
-#define JITIFY_THROW_OR_TERMINATE(msg)                       \
-  std::cerr << "Jitify fatal error: " << (msg) << std::endl; \
-  std::terminate()
+#define JITIFY_THROW_OR_TERMINATE(msg)                         \
+  do {                                                         \
+    std::cerr << "Jitify fatal error: " << (msg) << std::endl; \
+    std::terminate();                                          \
+  } while (0)
 #endif
 
 #if JITIFY_ENABLE_EXCEPTIONS
