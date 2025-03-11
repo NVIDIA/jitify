@@ -27,6 +27,7 @@
  */
 
 #define JITIFY_ENABLE_EXCEPTIONS 1
+#define JITIFY_ENABLE_NVTX 1
 #define JITIFY_VERBOSE_ERRORS 1
 #include "jitify2.hpp"
 

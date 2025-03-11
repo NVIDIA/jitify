@@ -284,6 +284,12 @@ documentation for many jitify features.
   version 11.4, and the application must be linked with the
   libcufilt.a static library.
 
+- `JITIFY_ENABLE_NVTX=0`
+
+  Defining this macro to 1 before including the jitify header causes
+  NVTX ranges to be emitted around important functions and cache
+  hits/misses.
+
 - `JITIFY_VERBOSE_ERRORS=0`
 
   Defining this macro to 1 before including the jitify header causes
