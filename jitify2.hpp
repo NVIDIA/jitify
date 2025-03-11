@@ -2359,7 +2359,7 @@ inline std::string path_join(StringRef p1, StringRef p2) {
 inline bool path_exists(const char* filename, bool* is_dir = nullptr) {
   struct stat stats;
   bool ret = ::stat(filename, &stats) == 0;
-#define JITIFY_S_ISDIR(mode) (((mode)&S_IFMT) == S_IFDIR)
+#define JITIFY_S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
   if (is_dir) *is_dir = JITIFY_S_ISDIR(stats.st_mode);
 #undef JITIFY_S_ISDIR
   return ret;
@@ -2389,8 +2389,9 @@ inline bool endswith(StringRef str, StringRef suffix) {
 }
 
 inline bool is_true_value(std::string str) {
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return static_cast<unsigned char>(std::tolower(c)); });
+  std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) {
+    return static_cast<unsigned char>(std::tolower(c));
+  });
   return !(str == "false" || str == "off" || str == "no" || str == "0");
 }
 
@@ -2979,18 +2980,16 @@ inline LinkedProgram LinkedProgram::link(
         return Error("Linking LTO IR is not supported with CUDA < 11.4");
       }
     }
-    const std::string& program = !compiled_program.lto_ir().empty()
-                                     ? compiled_program.lto_ir()
-                                     : !compiled_program.cubin().empty()
-                                           ? compiled_program.cubin()
-                                           : compiled_program.ptx();
+    const std::string& program =
+        !compiled_program.lto_ir().empty()  ? compiled_program.lto_ir()
+        : !compiled_program.cubin().empty() ? compiled_program.cubin()
+                                            : compiled_program.ptx();
     CUjitInputType program_type =
 #if CUDA_VERSION >= 11040
         !compiled_program.lto_ir().empty() ? CU_JIT_INPUT_NVVM :
 #endif
-                                           !compiled_program.cubin().empty()
-                                               ? CU_JIT_INPUT_CUBIN
-                                               : CU_JIT_INPUT_PTX;
+        !compiled_program.cubin().empty() ? CU_JIT_INPUT_CUBIN
+                                          : CU_JIT_INPUT_PTX;
     programs.emplace_back(&program);
     program_types.emplace_back(program_type);
   }
@@ -6828,7 +6827,7 @@ class IncludeName {
 
   // Implicit conversion to string to maintain backwards compatibility with
   // FileCallback.
-  operator const std::string &() const { return name(); }
+  operator const std::string&() const { return name(); }
 
   friend std::string to_string(const IncludeName& incname) {
     using jitify2::detail::string_concat;

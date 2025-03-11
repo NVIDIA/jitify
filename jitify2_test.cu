@@ -1831,7 +1831,7 @@ TEST(Jitify2Test, LibCudaCxxAndBuiltinLimits) {
 )";
 
   PreprocessedProgram preprog =
-    Program("limits_program", source)->preprocess({"-I" CUDA_INC_DIR});
+      Program("limits_program", source)->preprocess({"-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   CompiledProgram compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
@@ -1902,10 +1902,12 @@ const char c = '\xff';
 
 // WAR for header include issue (note: order of includes matters):
 //   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
+// clang-format off
 #include <cuda/std/cstdint>
 #include <cuda/std/cstddef>
 #include <cuda/std/type_traits>
 #include <cuda/std/limits>
+// clang-format on
 
 // CUB headers can be tricky to parse.
 #include <cub/block/block_load.cuh>
