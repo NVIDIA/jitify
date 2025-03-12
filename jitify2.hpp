@@ -5759,7 +5759,9 @@ inline void extract_include_paths(OptionsVec* options,
   for (int i = (int)idxs.size() - 1; i >= 0; --i) {
     const int idx = idxs[i];
     std::string include_path = (*options)[idx].value();
-    include_path = expand_include_path(std::move(include_path));
+    // Note: Not passing the arg with std::move() here due to a "may be used
+    // uninitialized" warning with some compilers.
+    include_path = expand_include_path(include_path);
     include_paths->push_back(std::move(include_path));
     options->erase(idx);
   }
