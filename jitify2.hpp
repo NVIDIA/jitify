@@ -3717,8 +3717,9 @@ inline void copy_compiler_flag_for_linker_ptxas(
   for (int idx : idxs) {
     const Option& compiler_option = compiler_options[idx];
     const Option linker_option =
-        output_key.empty() ? compiler_option
-                           : Option(output_key, compiler_option.value());
+        output_key.empty()
+            ? compiler_option
+            : Option(std::string{output_key}, compiler_option.value());
     linker_options->push_back(linker_option);
   }
 }
