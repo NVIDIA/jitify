@@ -370,8 +370,9 @@ options), some trigger special behavior in Jitify as detailed below:
 - `-std=<std>`
 
   Unless otherwise specified, this flag is automatically passed to
-  NVRTC for all kernels and is set to `c++11` (which is the minimum
-  requirement for Jitify itself). Jitify also supports the value
+  NVRTC for all kernels and is set to the same C++ dialect as the
+  host binary is compiled for (i.e., matching
+  __cplusplus/_MSVC_LANG). Jitify also supports the value
   `-std=c++03` for explicitly selecting the `C++03` standard.
 
 - `--minify (-m)`

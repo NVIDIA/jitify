@@ -263,6 +263,54 @@ __global__ void my_kernel2(const float* indata, float* outdata) {
   EXPECT_FLOAT_EQ(inval, outval);
 }
 
+TEST(Jitify2Test, StdFlag) {
+  static const char* const source = R"(
+__global__ void my_kernel(long* cplusplus) {
+  *cplusplus = __cplusplus;
+}
+)";
+
+  long h_data = 0;
+  long* data;
+  CHECK_CUDART(cudaMalloc((void**)&data, sizeof(*data)));
+
+  ASSERT_EQ(Program("my_program", source)
+                ->preprocess()
+                ->get_kernel("my_kernel")
+                ->configure(1, 1)
+                ->launch(data),
+            "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaDeviceSynchronize());
+  // Default should be same as host binary.
+  EXPECT_EQ(h_data, JITIFY_CPLUSPLUS);
+
+  ASSERT_EQ(Program("my_program", source)
+                ->preprocess({"-std=c++03"})
+                ->get_kernel("my_kernel")
+                ->configure(1, 1)
+                ->launch(data),
+            "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaDeviceSynchronize());
+  EXPECT_EQ(h_data, 199711L);
+
+  ASSERT_EQ(Program("my_program", source)
+                ->preprocess({"-std=c++14"})
+                ->get_kernel("my_kernel")
+                ->configure(1, 1)
+                ->launch(data),
+            "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaDeviceSynchronize());
+  EXPECT_EQ(h_data, 201402L);
+
+  CHECK_CUDART(cudaFree(data));
+}
+
 TEST(Jitify2Test, LaunchLatencyBenchmark) {
   static const char* const source = R"(
 template <int N, int M, typename T, typename U>
