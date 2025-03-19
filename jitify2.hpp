@@ -385,6 +385,24 @@ class OptionsVec {
     return serialize_impl(false);
   }
 
+  friend std::string to_string(const OptionsVec& options,
+                               bool canonical = false) {
+    StringVec sv =
+        canonical ? options.serialize_canonical() : options.serialize();
+    std::string result;
+    if (sv.size() > 0) {
+      result = sv[0];
+    }
+    for (size_t i = 1; i < sv.size(); ++i) {
+      result += " " + sv[i];
+    }
+    return result;
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const OptionsVec& options) {
+    return os << to_string(options);
+  }
+
   // Allow implicit conversion (to avoid breaking the old options API).
   operator StringVec() const { return serialize(); }
 
