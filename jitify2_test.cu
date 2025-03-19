@@ -1081,6 +1081,8 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_GT(program->nvvm().size(), 0);
   EXPECT_EQ(program->nvvm().size(), program->lto_ir().size());
   int current_arch = get_current_device_arch();
+  current_arch =
+      jitify2::detail::limit_to_supported_compute_capability(current_arch);
   LinkedProgram linked_program = program->link();
   if (CUDA_VERSION < 11040) {
     ASSERT_FALSE(linked_program.ok());
@@ -1525,6 +1527,8 @@ TEST(Jitify2Test, ArchFlags) {
 const int arch = __CUDA_ARCH__ / 10;
 )";
   int current_arch = get_current_device_arch();
+  current_arch =
+      jitify2::detail::limit_to_supported_compute_capability(current_arch);
   int arch;
   // Test default behavior (automatic architecture detection).
   PreprocessedProgram preprocessed =
@@ -1544,19 +1548,20 @@ const int arch = __CUDA_ARCH__ / 10;
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, 50);
 
-  auto expect_cubin_size_if_available = [](size_t cubin_size) {
-    if (jitify2::nvrtc().GetCUBIN()) {
-      EXPECT_GT(cubin_size, 0);
-    } else {
-      EXPECT_EQ(cubin_size, 0);
-    }
-  };
+#define JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(cubin_size) \
+  do {                                                    \
+    if (jitify2::nvrtc().GetCUBIN()) {                    \
+      EXPECT_GT(cubin_size, 0);                           \
+    } else {                                              \
+      EXPECT_EQ(cubin_size, 0);                           \
+    }                                                     \
+  } while (0)
 
   // Test explicit real architecture (may compile directly to CUBIN).
   program = preprocessed->compile(
       "", {}, {"-arch", "sm_" + std::to_string(current_arch)});
   EXPECT_GT(program->ptx().size(), 0);
-  expect_cubin_size_if_available(program->cubin().size());
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
@@ -1570,7 +1575,7 @@ const int arch = __CUDA_ARCH__ / 10;
   // Test automatic real architecture (may compile directly to CUBIN).
   program = preprocessed->compile("", {}, {"-arch=sm_."});
   EXPECT_GT(program->ptx().size(), 0);
-  expect_cubin_size_if_available(program->cubin().size());
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
@@ -1579,9 +1584,11 @@ const int arch = __CUDA_ARCH__ / 10;
                 ->preprocess({"-arch=sm_50"})
                 ->compile("", {}, {"-arch=sm_."});
   EXPECT_GT(program->ptx().size(), 0);
-  expect_cubin_size_if_available(program->cubin().size());
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
+
+#undef JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE
 
   // Test that multiple architectures can be specified for preprocessing.
   program = Program("arch_flags_program", source)
@@ -1621,6 +1628,10 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_EQ(linker_options.count("--maxrregcount=100"), 1);
   EXPECT_EQ(linker_options.count("--generate-line-info"), 1);
   EXPECT_EQ(linker_options.count("--device-debug"), 1);
+
+  // TODO: Test "sm_90a/100a/120a".
+  //         Should possibly automatically add 'a' suffix when inferring arch
+  //         from current device.
 }
 
 struct Base {

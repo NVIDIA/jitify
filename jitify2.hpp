@@ -3312,6 +3312,16 @@ inline int get_current_device_compute_capability(std::string* error = nullptr) {
   return cc;
 }
 
+// Returns whether the given compute capability corresponds to a Tegra GPU.
+inline bool is_tegra(int cc) {
+  // TODO: It would be better to detect these somehow, rather than hard-coding.
+  return cc == 87 ||  // Orin
+         cc == 72 ||  // Xavier
+         cc == 62 ||  // Parker
+         cc == 53 ||  // Erista
+         cc == 32;    // Logan
+}
+
 // Returns 0 on failure and sets *error if provided. Otherwise returns a compute
 // capability that is supported by the current version of NVRTC.
 inline int limit_to_supported_compute_capability(int cc,
@@ -3321,12 +3331,7 @@ inline int limit_to_supported_compute_capability(int cc,
   // newer hardware+driver. Forward compatibility of PTX allows this to work.
   // Tegra chips do not have forwards compatibility so we need to special case
   // them.
-  // TODO: It would be better to detect these somehow, rather than hard-coding.
-  bool is_tegra = (cc == 32 ||  // Logan
-                   cc == 53 ||  // Erista
-                   cc == 62 ||  // Parker
-                   cc == 72);   // Xavier
-  if (is_tegra) return cc;
+  if (is_tegra(cc)) return cc;
 
   if (!nvrtc()) {
     if (error) *error = nvrtc().error();
@@ -3341,6 +3346,8 @@ inline int limit_to_supported_compute_capability(int cc,
       std::vector<int> supported_archs(num_supported_archs);
       nvrtc_ret = nvrtc().GetSupportedArchs()(supported_archs.data());
       if (nvrtc_ret != NVRTC_SUCCESS) return 0;
+      // Don't use tegra archs.
+      while (is_tegra(supported_archs.back())) supported_archs.pop_back();
       return supported_archs.back();
     }();
     cc = std::min(cc, max_supported_arch);
@@ -3361,6 +3368,13 @@ inline int limit_to_supported_compute_capability(int cc,
     // clang-format on
   }
   return cc;
+}
+
+inline bool is_binary_compatible_cc(int compiled_cc, int device_cc) {
+  auto get_major = [](int _cc) { return _cc / 10; };
+  auto get_minor = [](int _cc) { return _cc % 10; };
+  return get_major(compiled_cc) == get_major(device_cc) &&
+         get_minor(compiled_cc) <= get_minor(device_cc);
 }
 
 // Parses compiler_options and applies automatic architecture detection if
@@ -3439,11 +3453,14 @@ inline bool process_architecture_flags(OptionsVec* compiler_options,
     int supported_real_cc =
         limit_to_supported_compute_capability(real_cc, &error);
     if (!check_error()) return false;
-    if (!nvrtc().GetCUBIN() || supported_real_cc != real_cc) {
-      // This NVRTC version does not support compiling to a/the real arch.
+    if (!nvrtc().GetCUBIN() ||
+        !is_binary_compatible_cc(supported_real_cc, real_cc)) {
+      // This NVRTC version does not support compiling to a (compatible) real
+      // arch.
       virt_cc = supported_real_cc;
     } else {
       // Pass the real arch to NVRTC.
+      real_cc = supported_real_cc;
       virt_cc = 0;
     }
   }
