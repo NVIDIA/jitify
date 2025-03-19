@@ -1089,26 +1089,33 @@ class Template {
 class ErrorMsg : public std::string {
  public:
   using std::string::string;
-  ErrorMsg(const std::string& str, StringMap _extra = {})
-      : std::string(str), extra_(std::move(_extra)) {}
-  ErrorMsg(std::string&& str, StringMap _extra = {})
-      : std::string(std::move(str)), extra_(std::move(_extra)) {}
+  ErrorMsg(const std::string& str, StringMap _info = {})
+      : std::string(str), info_(std::move(_info)) {}
+  ErrorMsg(std::string&& str, StringMap _info = {})
+      : std::string(std::move(str)), info_(std::move(_info)) {}
 
   /*! Returns true if the error message is empty. */
   bool ok() const { return this->empty(); }
   /*! Returns true if the error message is non-empty. */
   explicit operator bool() const { return !this->empty(); }
 
-  const std::string& extra(const std::string& key) const {
-    auto iter = extra_.find(key);
-    if (iter == extra_.end()) {
-      JITIFY_THROW_OR_RETURN("Extra error info key '" + key + "' not found");
+  JITIFY_DEPRECATED("Use info() instead")
+  const std::string& extra(const std::string& key) const { return info(key); }
+
+  /*! Returns additional information about the error.
+   *  \param key The name of the information to return. See the user guide for
+   *    details. An invalid key will cause an exception or termination.
+   */
+  const std::string& info(const std::string& key) const {
+    auto iter = info_.find(key);
+    if (iter == info_.end()) {
+      JITIFY_THROW_OR_TERMINATE("Error info key '" + key + "' not found");
     }
     return iter->second;
   }
 
  private:
-  StringMap extra_;
+  StringMap info_;  // Additional information about the error
 };
 
 namespace detail {

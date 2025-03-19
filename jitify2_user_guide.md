@@ -98,18 +98,18 @@ call or when a method such as `launch()` fails:
 ```
 
 Most errors are simple strings, but compilation errors contain
-additional info that can be accessed via the `extra()` method:
+additional information that can be accessed via the `info()` method:
 
 ```
   jitify2::PreprocessedProgram preprocessed =
       jitify2::Program("bad_program", "NOT CUDA C!")->preprocess();
   assert(!preprocessed.ok());
   const jitify2::ErrorMsg error = preprocessed.error();
-  std::cerr << error << std::endl;                   // Full error message
-  std::cerr << error.extra("error") << std::endl;    // "NVRTC_ERROR_COMPILATION"
-  std::cerr << error.extra("log") << std::endl;      // "error: identifier "NOT" is undefined..."
-  std::cerr << error.extra("options") << std::endl;  // "-include=jitify_preinclude.h ..."
-  std::cerr << error.extra("headers") << std::endl;  // (empty)
+  std::cerr << error << std::endl;                  // Full error message
+  std::cerr << error.info("error") << std::endl;    // "NVRTC_ERROR_COMPILATION"
+  std::cerr << error.info("log") << std::endl;      // "error: identifier "NOT" is undefined..."
+  std::cerr << error.info("options") << std::endl;  // "-include=jitify_preinclude.h ..."
+  std::cerr << error.info("headers") << std::endl;  // (empty)
 ```
 
 By default, the full error message only includes the error name
@@ -295,7 +295,7 @@ documentation for many jitify features.
   Defining this macro to 1 before including the jitify header causes
   compilation errors to include options and header info in the error
   message. Note that this info can always be accessed manually via
-  the `extra()` method of the error object.
+  the `info()` method of the error object.
 
 <a name="compiler_options"/>
 

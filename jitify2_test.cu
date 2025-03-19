@@ -1057,14 +1057,14 @@ TEST(Jitify2Test, InvalidPrograms) {
       Program("bad_program", "NOT CUDA C!")->preprocess();
   EXPECT_FALSE(preprocessed.ok());
   const ErrorMsg error = preprocessed.error();
-  EXPECT_THROW(error.extra("foo"), std::runtime_error);
-  EXPECT_EQ(error.extra("error"), "NVRTC_ERROR_COMPILATION");
-  EXPECT_TRUE(error.extra("log").find("identifier \"NOT\" is undefined") !=
-              std::string::npos);
-  EXPECT_TRUE(error.extra("options").find("-default-device") !=
-              std::string::npos);
-  EXPECT_EQ(error.extra("headers"), "");
   EXPECT_TRUE(error.find("Compilation failed:") != std::string::npos);
+  EXPECT_THROW(error.info("foo"), std::runtime_error);
+  EXPECT_EQ(error.info("error"), "NVRTC_ERROR_COMPILATION");
+  EXPECT_TRUE(error.info("log").find("identifier \"NOT\" is undefined") !=
+              std::string::npos);
+  EXPECT_TRUE(error.info("options").find("-default-device") !=
+              std::string::npos);
+  EXPECT_EQ(error.info("headers"), "");
 }
 
 TEST(Jitify2Test, CompileLTO_IR) {
