@@ -1747,9 +1747,33 @@ class LibNvJitLink
                                   nvJitLinkHandle, size_t*)
   JITIFY_DEFINE_NVJITLINK_WRAPPER(GetInfoLog, nvJitLinkResult, nvJitLinkHandle,
                                   char*)
+#if JITIFY_LINK_NVJITLINK_STATIC && CUDA_VERSION < 12030
+  detail::function_type<nvJitLinkResult, unsigned int*, unsigned int*>*
+  Version() {
+    return nullptr;
+  }
+#else
+  JITIFY_DEFINE_NVJITLINK_WRAPPER(Version, nvJitLinkResult, unsigned int*,
+                                  unsigned int*);
+#endif
 #undef JITIFY_DEFINE_NVJITLINK_WRAPPER
 #undef JITIFY_STR_IMPL
 #undef JITIFY_STR
+
+  // Returns the runtime nvJitLink version in the same format as CUDA_VERSION.
+  int get_version() const {
+    static const int version = [this] {
+      unsigned int major, minor;
+      if (Version()) {
+        Version()(&major, &minor);
+      } else {
+        major = 12;
+        minor = 0;  // No way to get this
+      }
+      return major * 1000 + minor * 10;
+    }();
+    return version;
+  }
 
   // TODO: Check if an official version of this is added to nvJitLink in future.
   const char* get_error_string(nvJitLinkResult result) const {
@@ -1795,6 +1819,8 @@ class LibNvJitLink
  private:
   std::string get_symbol_name(const char* func_name, int major = -1,
                               int minor = -1) const {
+    // Special case for nvJitLinkVersion symbol, which is unversioned.
+    if (func_name == std::string("nvJitLinkVersion")) return func_name;
     const int compiled_major = CUDA_VERSION / 1000;
     const int compiled_minor = CUDA_VERSION % 1000 / 10;
     if (major == -1) major = compiled_major;
@@ -8502,6 +8528,31 @@ struct default_hasher<AutoKey> {
   using type = AutoKey::Hash;
 };
 
+inline int get_nvrtc_build_version() {
+  static const int version = [] {
+    // This is a HACK to extract the value of __CUDACC_VER_BUILD__ from NVRTC;
+    // there doesn't seem to be any other (cross-platform) way to get this info.
+    const std::string key = "JITIFY_NVRTC_BUILD_VER = ";
+    std::string source =
+        detail::string_concat("__device__ int ", key, "__CUDACC_VER_BUILD__;");
+    std::string ptx;
+    if (detail::compile_program("program", source, {}, {}, nullptr, nullptr,
+                                &ptx)) {
+      return -1;
+    }
+    size_t start = ptx.find(key);
+    if (start == std::string::npos) return -1;
+    start += key.size();
+    size_t end = ptx.find(";", start);
+    if (end == std::string::npos) return -1;
+    size_t parse_end;
+    int result = std::stoi(ptx.substr(start, end - start), &parse_end);
+    if (parse_end != end - start) return -1;
+    return result;
+  }();
+  return version;
+}
+
 }  // namespace detail
 
 template <typename Key = detail::AutoKey,
@@ -8690,10 +8741,28 @@ class ProgramCache {
                                       error);
         }
       }
+      if (!nvrtc()) return LoadedProgram::Error(nvrtc().error());
+      const int nvrtc_major = nvrtc().get_version() / 1000;
+      const int nvrtc_minor = nvrtc().get_version() / 10 % 100;
+      const int nvrtc_build = detail::get_nvrtc_build_version();
+      // Note that there's no (cross-platform) way to get the build version of
+      // nvjitlink or libcuda.
+#if CUDA_VERSION >= 12000
+      const int linker_major = nvjitlink().get_version() / 1000;
+      const int linker_minor = nvjitlink().get_version() / 10 % 100;
+      const char* const linker_name = "nvjitlink";
+#else
+      const int linker_major = cuda().get_version() / 1000;
+      const int linker_minor = cuda().get_version() / 10 % 100;
+      const char* const linker_name = "culink";
+#endif
       std::stringstream filename_ss;
       filename_ss.imbue(std::locale::classic());
-      filename_ss << to_filename_(key) << ".sm" << compute_capability << ".v"
-                  << std::hex << serialization::kSerializationVersion;
+      filename_ss << to_filename_(key) << ".sm" << compute_capability
+                  << ".nvrtc" << nvrtc_major << "-" << nvrtc_minor << "-"
+                  << nvrtc_build << "." << linker_name << linker_major << "-"
+                  << linker_minor << ".v" << std::hex
+                  << serialization::kSerializationVersion;
       LinkedProgram linked;
       bool hit = false;
       error = file_cache_.get(

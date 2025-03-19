@@ -720,6 +720,10 @@ TEST(Jitify2Test, PathSimplify) {
 #endif
 }
 
+TEST(Jitify2Test, GetNvrtcBuildVersion) {
+  EXPECT_NE(jitify2::detail::get_nvrtc_build_version(), -1);
+}
+
 TEST(Jitify2Test, Program) {
   static const char* const name = "my_program";
   static const char* const source = "/* empty source */";
