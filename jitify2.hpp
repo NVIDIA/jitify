@@ -5479,6 +5479,7 @@ template <typename... Ts> using void_t = typename __jitify_make_void<Ts...>::typ
 
 static const char* const jitsafe_header_utility = R"(
 #pragma once
+#include <cstring>  // For std::size_t
 #include <type_traits>
 
 namespace std {
