@@ -113,6 +113,12 @@
 #define JITIFY_USE_LIBCUFILT 0  // Use Jitify's builtin demangler by default
 #endif
 
+// Users can enable this to disable the is_trivially_copyable assertion on
+// kernel args.
+#ifndef JITIFY_IGNORE_NOT_TRIVIALLY_COPYABLE_ARGS
+#define JITIFY_IGNORE_NOT_TRIVIALLY_COPYABLE_ARGS 0
+#endif
+
 #if CUDA_VERSION >= 11040 && JITIFY_USE_LIBCUFILT
 #include <nv_decode.h>  // For __cu_demangle (requires linking with libcufilt.a)
 #endif
@@ -2092,6 +2098,22 @@ inline Kernel LoadedProgramData::get_kernel(std::string name) const {
   return Kernel::get_kernel(*this, std::move(name));
 }
 
+namespace detail {
+
+template <typename...>
+struct are_trivially_copyable;
+
+template <>
+struct are_trivially_copyable<> : std::true_type {};
+
+template <typename First, typename... Rest>
+struct are_trivially_copyable<First, Rest...>
+    : std::conditional<std::is_trivially_copyable<First>::value,
+                       are_trivially_copyable<Rest...>, std::false_type>::type {
+};
+
+}  // namespace detail
+
 /*! An object containing a configured CUDA kernel and associated metadata.
  */
 class ConfiguredKernelData {
@@ -2171,6 +2193,9 @@ class ConfiguredKernelData {
    */
   template <typename Arg, typename... Args>
   ErrorMsg launch(const Arg& arg, const Args&... args) const {
+    static_assert(JITIFY_IGNORE_NOT_TRIVIALLY_COPYABLE_ARGS ||
+                      detail::are_trivially_copyable<Arg, Args...>::value,
+                  "Kernel launch arguments must be trivially copyable");
     void* arg_ptrs[] = {(void*)&arg, (void*)&args...};
     return this->launch_raw(arg_ptrs);
   }

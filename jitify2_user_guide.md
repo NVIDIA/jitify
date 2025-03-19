@@ -297,6 +297,12 @@ documentation for many jitify features.
   message. Note that this info can always be accessed manually via
   the `info()` method of the error object.
 
+- `JITIFY_IGNORE_NOT_TRIVIALLY_COPYABLE_ARGS=0`
+
+  Defining this macro to 1 before including the jitify header
+  disables the static assertion that kernel launch arguments are
+  trivially copyable.
+
 <a name="compiler_options"/>
 
 ## Compiler options
