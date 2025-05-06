@@ -885,17 +885,34 @@ struct NonType {};
 // Forward declaration.
 template <typename T>
 inline std::string reflect(const T& value);
+template <typename T>
+inline std::string reflect();
 
 namespace detail {
 
+template <typename T, typename Enable = void>
+struct ValueStringImpl {
+  static std::string value(const T& x) { return std::to_string(x); }
+};
+
+template <typename T>
+struct ValueStringImpl<
+    T, typename std::enable_if<std::is_same<T, bool>::value>::type> {
+  static std::string value(const T& x) { return x ? "true" : "false"; }
+};
+
+template <typename T>
+struct ValueStringImpl<T,
+                       typename std::enable_if<std::is_enum<T>::value>::type> {
+  static std::string value(const T& x) {
+    using UnderlyingT = typename std::underlying_type<T>::type;
+    return ValueStringImpl<UnderlyingT>::value(static_cast<UnderlyingT>(x));
+  }
+};
+
 template <typename T>
 inline std::string value_string(const T& x) {
-  return std::to_string(x);
-}
-
-template <>
-inline std::string value_string<bool>(const bool& x) {
-  return x ? "true" : "false";
+  return ValueStringImpl<T>::value(x);
 }
 
 // Returns the demangled name corresponding to the given typeinfo structure.

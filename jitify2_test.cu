@@ -1714,6 +1714,8 @@ struct Base {
 template <typename T>
 struct Derived : public Base {};
 
+enum class MyEnum : short { A, B, C };
+
 TEST(Jitify2Test, Reflection) {
   static const char* const source = R"(
 struct Base { virtual ~Base() {} };
@@ -1723,6 +1725,10 @@ template <typename T>
 __global__ void type_kernel() {}
 template <unsigned short N>
 __global__ void nontype_kernel() {}
+
+enum class MyEnum : short { A, B, C };
+template <MyEnum E>
+__global__ void enum_kernel() {}
 )";
 
   PreprocessedProgram preprog =
@@ -1759,6 +1765,16 @@ __global__ void nontype_kernel() {}
 
   JITIFY_NONTYPE_REFLECTION_TEST(7);
   JITIFY_NONTYPE_REFLECTION_TEST('J');
+
+  Template enum_kernel("enum_kernel");
+
+#define JITIFY_ENUM_REFLECTION_TEST(N)                                 \
+  EXPECT_EQ(                                                           \
+      preprog->get_kernel(enum_kernel.instantiate(N))->lowered_name(), \
+      preprog->get_kernel(enum_kernel.instantiate({#N}))->lowered_name())
+
+  JITIFY_ENUM_REFLECTION_TEST(MyEnum::B);
+  JITIFY_ENUM_REFLECTION_TEST(MyEnum::C);
 
 #undef JITIFY_NONTYPE_REFLECTION_TEST
 }
