@@ -1664,6 +1664,10 @@ class LibCuda
                              unsigned int, unsigned int, unsigned int,
                              unsigned int, unsigned int, unsigned int, CUstream,
                              void**, void**)
+#if CUDA_VERSION >= 11080
+  JITIFY_DEFINE_CUDA_WRAPPER(LaunchKernelEx, CUresult, const CUlaunchConfig*,
+                             CUfunction, void**, void**)
+#endif
 #undef JITIFY_DEFINE_CUDA_WRAPPER
 #undef JITIFY_STR
 #undef JITIFY_STR_IMPL
@@ -2204,17 +2208,30 @@ class ConfiguredKernelData {
   Dim3 block_;
   unsigned int shared_memory_bytes_ = 0;
   CUstream stream_ = 0;
+#if CUDA_VERSION >= 11080
+  std::vector<CUlaunchAttribute> attrs_;
+#endif
 
  public:
   ConfiguredKernelData() = default;
   ConfiguredKernelData(KernelData kernel, Dim3 grid, Dim3 block,
-                       unsigned int shared_memory_bytes = 0,
-                       CUstream stream = 0)
+                       unsigned int shared_memory_bytes = 0, CUstream stream = 0
+#if CUDA_VERSION >= 11080
+                       ,
+                       std::vector<CUlaunchAttribute> attrs = {}
+#endif
+                       )
       : kernel_(std::move(kernel)),
         grid_(std::move(grid)),
         block_(std::move(block)),
         shared_memory_bytes_(shared_memory_bytes),
-        stream_(stream) {}
+        stream_(stream)
+#if CUDA_VERSION >= 11080
+        ,
+        attrs_(std::move(attrs))
+#endif
+  {
+  }
 
   /*! Get the underlying kernel object. */
   const KernelData& kernel() const { return kernel_; }
@@ -2226,6 +2243,43 @@ class ConfiguredKernelData {
   unsigned int shared_memory_bytes() const { return shared_memory_bytes_; }
   /*! Get the configured CUDA stream. */
   CUstream stream() const { return stream_; }
+
+#if CUDA_VERSION >= 11080
+  /*! Get the configured launch attributes. */
+  const std::vector<CUlaunchAttribute>& attrs() const { return attrs_; }
+
+  /*! Convenience method to return a copy with an additional launch attribute.
+   */
+  ConfiguredKernel with_attribute(CUlaunchAttribute extra_attr) const;
+
+  /*! Convenience method to return a copy with the given cluster dimensions. */
+  ConfiguredKernel with_cluster(Dim3 cluster) const;
+
+  /*! Convenience method to return a copy with cooperative enabled/disabled. */
+  ConfiguredKernel with_cooperative(bool enabled) const;
+
+  // TODO: May be useful to add convenience methods for other launch attributes
+  // too.
+
+  /*! Conversion to CUlaunchConfig structure.
+   *  \warning The returned structure must not outlive *this, because it holds a
+   *    non-owning pointer to the launch attrs data owned by *this.
+   */
+  CUlaunchConfig as_CUlaunchConfig() const {
+    CUlaunchConfig config = {};
+    config.gridDimX = grid_.x;
+    config.gridDimY = grid_.y;
+    config.gridDimZ = grid_.z;
+    config.blockDimX = block_.x;
+    config.blockDimY = block_.y;
+    config.blockDimZ = block_.z;
+    config.sharedMemBytes = shared_memory_bytes_;
+    config.hStream = stream_;
+    config.attrs = const_cast<CUlaunchAttribute*>(attrs_.data());
+    config.numAttrs = static_cast<unsigned int>(attrs_.size());
+    return config;
+  }
+#endif  // CUDA_VERSION >= 11080
 
   // overload below. E.g., passing void*const* silently fails.
   /*! Launch the configured kernel.
@@ -2252,9 +2306,22 @@ class ConfiguredKernelData {
    */
   ErrorMsg launch_raw(void** arg_ptrs) const {
     if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
-    JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
-        kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
-        block_.z, shared_memory_bytes_, stream_, arg_ptrs, nullptr));
+#if CUDA_VERSION >= 11080
+    const CUlaunchConfig config = as_CUlaunchConfig();
+    if (cuda().LaunchKernelEx()) {
+      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernelEx()(
+          &config, kernel_.function(), arg_ptrs, nullptr));
+    } else {
+      if (attrs_.size() != 0) {
+        JITIFY_THROW_OR_RETURN("Launch attributes require at least CUDA 11.8");
+      }
+#endif
+      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
+          kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
+          block_.z, shared_memory_bytes_, stream_, arg_ptrs, nullptr));
+#if CUDA_VERSION >= 11080
+    }
+#endif
     return {};
   }
 
@@ -2264,6 +2331,38 @@ class ConfiguredKernelData {
    */
   ErrorMsg launch_raw(const std::vector<void*>& arg_ptrs) const {
     return launch_raw(const_cast<void**>(arg_ptrs.data()));
+  }
+
+  /*! Launch the configured kernel.
+   *  \param args_buf Packed buffer of kernel arguments. Note that the format of
+   *    this is kernel-specific and may not follow standard alignment/padding
+   *    rules.
+   *  \param args_buf_size Size in bytes of `args_buf`.
+   *  \return An empty string on success, otherwise an error message.
+   */
+  ErrorMsg launch_buffer(const void* args_buf, size_t args_buf_size) const {
+    void* extra[] = {
+        CU_LAUNCH_PARAM_BUFFER_POINTER, const_cast<void*>(args_buf),
+        CU_LAUNCH_PARAM_BUFFER_SIZE,
+        const_cast<void*>(static_cast<const void*>(&args_buf_size)),
+        CU_LAUNCH_PARAM_END};
+#if CUDA_VERSION >= 11080
+    const CUlaunchConfig config = as_CUlaunchConfig();
+    if (cuda().LaunchKernelEx()) {
+      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
+          cuda().LaunchKernelEx()(&config, kernel_.function(), nullptr, extra));
+    } else {
+      if (attrs_.size() != 0) {
+        JITIFY_THROW_OR_RETURN("Launch attributes require at least CUDA 11.8");
+      }
+#endif
+      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
+          kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
+          block_.z, shared_memory_bytes_, stream_, nullptr, extra));
+#if CUDA_VERSION >= 11080
+    }
+#endif
+    return {};
   }
 
   /*! Launch the configured kernel.
@@ -2346,6 +2445,33 @@ inline ConfiguredKernel ConfiguredKernel::configure_1d_max_occupancy(
   return ConfiguredKernel(std::move(kernel), grid, block, shared_memory_bytes,
                           stream);
 }
+
+#if CUDA_VERSION >= 11080
+inline ConfiguredKernel ConfiguredKernelData::with_attribute(
+    CUlaunchAttribute extra_attr) const {
+  auto new_attrs = attrs_;
+  new_attrs.push_back(extra_attr);
+  return ConfiguredKernel(kernel_, grid_, block_, shared_memory_bytes_, stream_,
+                          std::move(new_attrs));
+}
+
+inline ConfiguredKernel ConfiguredKernelData::with_cluster(Dim3 cluster) const {
+  CUlaunchAttribute attr = {};
+  attr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+  attr.value.clusterDim.x = cluster.x;
+  attr.value.clusterDim.y = cluster.y;
+  attr.value.clusterDim.z = cluster.z;
+  return with_attribute(attr);
+}
+
+inline ConfiguredKernel ConfiguredKernelData::with_cooperative(
+    bool enabled) const {
+  CUlaunchAttribute attr = {};
+  attr.id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE;
+  attr.value.cooperative = enabled;
+  return with_attribute(attr);
+}
+#endif  // CUDA_VERSION >= 11080
 
 class LoadedProgram
     : public detail::FallibleObjectBase<LoadedProgram, LoadedProgramData> {

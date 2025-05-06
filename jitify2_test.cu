@@ -263,6 +263,53 @@ __global__ void my_kernel2(const float* indata, float* outdata) {
   EXPECT_FLOAT_EQ(inval, outval);
 }
 
+#if CUDA_VERSION >= 11080
+TEST(Jitify2Test, LaunchAttributes) {
+  static const char* const source = R"(
+__global__ void my_kernel(float* data) {
+  *data = 3.14f;
+}
+)";
+
+  ConfiguredKernel configured = Program("my_program", source)
+                                    ->preprocess()
+                                    ->get_kernel("my_kernel")
+                                    ->configure(1, 1);
+
+  float* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(*d_data)));
+  float h_data = 0.f;
+
+  if (get_current_device_arch() >= 90) {
+    configured->with_cluster(Dim3(2, 3, 1))->launch(d_data);
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(*d_data), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(h_data, 3.14f);
+
+    CHECK_CUDART(cudaMemset(d_data, 0, sizeof(*d_data)));
+    h_data = 0.f;
+  }
+
+  configured->with_cooperative(true)->launch(d_data);
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(*d_data), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 3.14f);
+
+  CHECK_CUDART(cudaMemset(d_data, 0, sizeof(*d_data)));
+  h_data = 0.f;
+
+  CUlaunchAttribute attr;
+  attr.id = CU_LAUNCH_ATTRIBUTE_PRIORITY;
+  attr.value.priority = 10;
+  configured->with_attribute(attr)->launch(d_data);
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(*d_data), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 3.14f);
+
+  CHECK_CUDART(cudaFree(d_data));
+}
+#endif  // CUDA_VERSION >= 11080
+
 TEST(Jitify2Test, StdFlag) {
   static const char* const source = R"(
 __global__ void my_kernel(long* cplusplus) {
