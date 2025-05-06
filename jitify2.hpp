@@ -432,18 +432,24 @@ class OptionsVec {
   // Allow implicit conversion (to avoid breaking the old options API).
   operator StringVec() const { return serialize(); }
 
-  // Removes all options with any of the specified keys, and returns whether any
-  // were removed.
-  bool pop(std::initializer_list<std::string> keys) {
+  // Removes all options with any of the specified keys, and returns the first
+  // matching one, or an empty Option if none were found. Also returns the
+  // number of matches found in *count if count is provided.
+  Option pop(std::initializer_list<std::string> keys, size_t* count = nullptr) {
     assert(ok_);
-    auto iter = std::remove_if(
-        options_.begin(), options_.end(), [&](const Option& option) {
-          return std::find(keys.begin(), keys.end(), option.key()) !=
-                 keys.end();
-        });
-    if (iter == options_.end()) return false;
-    options_.resize(iter - options_.begin());
-    return true;
+    Option result;
+    size_t num_removed = 0;
+    for (auto iter = options_.rbegin(); iter != options_.rend();) {
+      if (std::find(keys.begin(), keys.end(), iter->key()) != keys.end()) {
+        result = std::move(*iter);
+        iter = decltype(iter){options_.erase(std::next(iter).base())};
+        ++num_removed;
+      } else {
+        ++iter;
+      }
+    }
+    if (count) *count = num_removed;
+    return result;
   }
 
   void pop_back() {
@@ -3943,8 +3949,8 @@ inline CompiledProgram CompiledProgram::compile(
   }
   detail::add_std_flag_if_not_specified(&compiler_options);
   detail::add_default_device_flag_if_not_specified(&compiler_options);
-  bool should_remove_unused_globals = compiler_options.pop(
-      {"-remove-unused-globals", "--remove-unused-globals"});
+  bool should_remove_unused_globals = static_cast<bool>(compiler_options.pop(
+      {"-remove-unused-globals", "--remove-unused-globals"}));
   std::string log, ptx, cubin, nvvm;
   StringMap lowered_name_map;
   if (detail::compile_program(name, source, header_sources, compiler_options,
@@ -7486,10 +7492,11 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   const int cxx_standard_year =
       detail::add_std_flag_if_not_specified(&compiler_options);
   detail::add_default_device_flag_if_not_specified(&compiler_options);
-  bool minify = compiler_options.pop({"-m", "--minify"});
+  bool minify = static_cast<bool>(compiler_options.pop({"-m", "--minify"}));
   // TODO: This flag is experimental, because the implementation does not
   // support transformations of "namespace std {" (as used for specializations).
-  bool use_cuda_std = compiler_options.pop({"-cuda-std", "--cuda-std"});
+  bool use_cuda_std =
+      static_cast<bool>(compiler_options.pop({"-cuda-std", "--cuda-std"}));
   bool replace_pragma_once = !compiler_options.pop(
       {"-no-replace-pragma-once", "--no-replace-pragma-once"});
   bool use_builtin_headers = !compiler_options.pop(
@@ -7500,8 +7507,8 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   }
 
   // This is re-added to the remaining options below.
-  bool should_remove_unused_globals = compiler_options.pop(
-      {"-remove-unused-globals", "--remove-unused-globals"});
+  bool should_remove_unused_globals = static_cast<bool>(compiler_options.pop(
+      {"-remove-unused-globals", "--remove-unused-globals"}));
 
   using parser::IncludeName;
   using parser::ProcessFlags;
@@ -7711,7 +7718,7 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   }
   // We temporarily enable warnings so that we can parse the ones we added.
   const bool disable_warnings =
-      compiler_options.pop({"--disable-warnings", "-w"});
+      static_cast<bool>(compiler_options.pop({"--disable-warnings", "-w"}));
   // Maps header include names to their full file paths.
   StringMap header_fullpaths;
   std::string compile_log;
