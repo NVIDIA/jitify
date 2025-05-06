@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <climits>
 #include <initializer_list>
@@ -3181,6 +3182,20 @@ class CompiledProgramData
   }
 };
 
+/*! An object used for cancelling an ongoing compilation. */
+class Canceller {
+  std::atomic_bool cancelled_;
+
+ public:
+  Canceller() : cancelled_(false) {}
+
+  /*! Check if the cancel has been triggered. */
+  bool cancelled() const { return cancelled_.load(std::memory_order_relaxed); }
+
+  /*! Trigger the cancel. */
+  void cancel() { cancelled_.store(true, std::memory_order_relaxed); }
+};
+
 class CompiledProgram
     : public detail::FallibleObjectBase<CompiledProgram, CompiledProgramData> {
   friend class detail::FallibleObjectBase<CompiledProgram, CompiledProgramData>;
@@ -3196,7 +3211,8 @@ class CompiledProgram
                                  const StringMap& header_sources = {},
                                  const StringVec& name_expressions = {},
                                  OptionsVec compiler_options = {},
-                                 OptionsVec linker_options = {});
+                                 OptionsVec linker_options = {},
+                                 const Canceller* canceller = nullptr);
 
   /*! \see PreprocessedProgramData::compile */
   static CompiledProgram compile(const std::string& name,
@@ -3204,9 +3220,11 @@ class CompiledProgram
                                  const StringMap& header_sources = {},
                                  const std::string& name_expression = {},
                                  OptionsVec compiler_options = {},
-                                 OptionsVec linker_options = {}) {
+                                 OptionsVec linker_options = {},
+                                 const Canceller* canceller = nullptr) {
     return compile(name, source, header_sources, StringVec({name_expression}),
-                   std::move(compiler_options), std::move(linker_options));
+                   std::move(compiler_options), std::move(linker_options),
+                   canceller);
   }
 };
 
@@ -3414,6 +3432,16 @@ class LibNvrtc
   JITIFY_DEFINE_NVRTC_WRAPPER(GetProgramLogSize, nvrtcResult, nvrtcProgram,
                               size_t*)
   JITIFY_DEFINE_NVRTC_WRAPPER(Version, nvrtcResult, int*, int*)
+#if JITIFY_LINK_NVRTC_STATIC && CUDA_VERSION < 12080
+  detail::function_type<nvrtcResult, nvrtcProgram, int (*)(void*, void*),
+                        void*>*
+  SetFlowCallback() {
+    return nullptr;
+  }
+#else
+  JITIFY_DEFINE_NVRTC_WRAPPER(SetFlowCallback, nvrtcResult, nvrtcProgram,
+                              int (*)(void*, void*), void*)
+#endif
 #undef JITIFY_DEFINE_NVRTC_WRAPPER
 #undef JITIFY_STR_IMPL
 #undef JITIFY_STR
@@ -3837,6 +3865,11 @@ inline void find_lowered_global_variables(StringRef ptx,
 
 inline bool ptx_remove_unused_globals(std::string* ptx);  // Defined below
 
+inline int cancel_flow_callback(void* payload, void*) {
+  auto canceller = static_cast<const Canceller*>(payload);
+  return canceller->cancelled();
+}
+
 // Sets *error on failure if provided.
 // Sets *log if provided.
 // Sets *ptx on success if provided.
@@ -3848,7 +3881,8 @@ inline nvrtcResult compile_program(
     std::string* error = nullptr, std::string* log = nullptr,
     std::string* ptx = nullptr, std::string* cubin = nullptr,
     std::string* nvvm = nullptr, const StringVec& name_expressions = {},
-    StringMap* lowered_name_map = nullptr, bool remove_unused_globals = false) {
+    StringMap* lowered_name_map = nullptr, bool remove_unused_globals = false,
+    const Canceller* canceller = nullptr) {
   if (!nvrtc()) {
     if (error) *error = nvrtc().error();
     return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
@@ -3902,6 +3936,13 @@ inline nvrtcResult compile_program(
   for (const auto& name_expression : name_expressions) {
     JITIFY_CHECK_NVRTC(
         nvrtc().AddNameExpression()(nvrtc_program, name_expression.c_str()));
+  }
+
+  // nvrtcSetFlowCallback is only supported with NVRTC >= 12.8.
+  if (canceller && nvrtc().SetFlowCallback()) {
+    JITIFY_CHECK_NVRTC(nvrtc().SetFlowCallback()(
+        nvrtc_program, cancel_flow_callback,
+        const_cast<void*>(static_cast<const void*>(canceller))));
   }
 
   nvrtcResult ret = nvrtc().CompileProgram()(
@@ -4120,10 +4161,15 @@ inline ErrorMsg make_compilation_error_msg(const std::string& compile_error,
 inline CompiledProgram CompiledProgram::compile(
     const std::string& name, const std::string& source,
     const StringMap& header_sources, const StringVec& name_expressions,
-    OptionsVec compiler_options, OptionsVec linker_options) {
+    OptionsVec compiler_options, OptionsVec linker_options,
+    const Canceller* canceller) {
   JITIFY_NVTX_FUNC_RANGE();
   if (!compiler_options) return Error("Failed to parse compiler options");
   if (!linker_options) return Error("Failed to parse linker options");
+  if (!nvrtc()) return Error(nvrtc().error());
+  if (canceller && !nvrtc().SetFlowCallback()) {
+    return Error("Compilation cancellation requires NVRTC >= 12.8");
+  }
   std::string error;
   if (!detail::process_architecture_flags(&compiler_options, &linker_options,
                                           &error)) {
@@ -4138,7 +4184,7 @@ inline CompiledProgram CompiledProgram::compile(
   if (detail::compile_program(name, source, header_sources, compiler_options,
                               &error, &log, &ptx, &cubin, &nvvm,
                               name_expressions, &lowered_name_map,
-                              should_remove_unused_globals)) {
+                              should_remove_unused_globals, canceller)) {
     std::vector<std::string> header_names;
     header_names.reserve(header_sources.size());
     for (const auto& item : header_sources) {
@@ -4290,13 +4336,18 @@ class PreprocessedProgramData
    *    in the preprocessed program, replacing them if names match.
    *  \param extra_compiler_options List of additional compiler options.
    *  \param extra_linker_options List of additional linker options.
+   *  \param canceller If provided, this object can be used to cancel the
+   *    compilation from another thread before the function has returned.
+   *    If compilation is cancelled before completion, an error is returned.
+   *    The pointer must remain valid until the function has returned.
    *  \return A CompiledProgram object that contains either a valid
    *    CompiledProgramData object or an error state.
    */
   CompiledProgram compile(const StringVec& name_expressions = {},
                           const StringMap& extra_header_sources = {},
                           OptionsVec extra_compiler_options = {},
-                          OptionsVec extra_linker_options = {}) const {
+                          OptionsVec extra_linker_options = {},
+                          const Canceller* canceller = nullptr) const {
     StringMap combined_header_sources;
     const StringMap& combined_header_sources_ref = detail::merge(
         header_sources_, extra_header_sources, &combined_header_sources);
@@ -4306,9 +4357,10 @@ class PreprocessedProgramData
     extra_linker_options.insert(extra_linker_options.begin(),
                                 remaining_linker_options_.begin(),
                                 remaining_linker_options_.end());
-    return CompiledProgram::compile(
-        name_, source_, combined_header_sources_ref, name_expressions,
-        std::move(extra_compiler_options), std::move(extra_linker_options));
+    return CompiledProgram::compile(name_, source_, combined_header_sources_ref,
+                                    name_expressions,
+                                    std::move(extra_compiler_options),
+                                    std::move(extra_linker_options), canceller);
   }
 
   /*! Compile the program to PTX (and maybe CUBIN).
@@ -4319,20 +4371,25 @@ class PreprocessedProgramData
    *    in the preprocessed program, replacing them if names match.
    *  \param extra_compiler_options List of additional compiler options.
    *  \param extra_linker_options List of additional linker options.
+   *  \param canceller If provided, this object can be used to cancel the
+   *    compilation from another thread before the function has returned.
+   *    If compilation is cancelled before completion, an error is returned.
+   *    The pointer must remain valid until the function has returned.
    *  \return A CompiledProgram object that contains either a valid
    *    CompiledProgramData object or an error state.
    */
   CompiledProgram compile(const std::string& name_expression,
                           const StringMap& extra_header_sources = {},
                           OptionsVec extra_compiler_options = {},
-                          OptionsVec extra_linker_options = {}) const {
+                          OptionsVec extra_linker_options = {},
+                          const Canceller* canceller = nullptr) const {
     // Allow name_expression="" to be passed instead of name_expression={}
     // (which is ambiguous with the overload above that takes a StringVec).
     StringVec name_expressions =
         name_expression.empty() ? StringVec() : StringVec({name_expression});
     return compile(name_expressions, extra_header_sources,
                    std::move(extra_compiler_options),
-                   std::move(extra_linker_options));
+                   std::move(extra_linker_options), canceller);
   }
 
   /*! Compile, link, and load the preprocessed program.
@@ -4343,10 +4400,12 @@ class PreprocessedProgramData
   LoadedProgram load(const StringVec& name_expressions = {},
                      const StringMap& extra_header_sources = {},
                      OptionsVec extra_compiler_options = {},
-                     OptionsVec extra_linker_options = {}) const {
-    CompiledProgram compiled = compile(name_expressions, extra_header_sources,
-                                       std::move(extra_compiler_options),
-                                       std::move(extra_linker_options));
+                     OptionsVec extra_linker_options = {},
+                     const Canceller* canceller = nullptr) const {
+    CompiledProgram compiled =
+        compile(name_expressions, extra_header_sources,
+                std::move(extra_compiler_options),
+                std::move(extra_linker_options), canceller);
     if (!compiled) return LoadedProgram::Error(compiled.error());
     LinkedProgram linked = compiled->link();
     if (!linked) return LoadedProgram::Error(linked.error());
@@ -4361,11 +4420,13 @@ class PreprocessedProgramData
   Kernel get_kernel(std::string name, StringVec other_name_expressions = {},
                     const StringMap& extra_header_sources = {},
                     OptionsVec extra_compiler_options = {},
-                    OptionsVec extra_linker_options = {}) const {
+                    OptionsVec extra_linker_options = {},
+                    const Canceller* canceller = nullptr) const {
     other_name_expressions.push_back(name);
-    CompiledProgram compiled = compile(
-        other_name_expressions, extra_header_sources,
-        std::move(extra_compiler_options), std::move(extra_linker_options));
+    CompiledProgram compiled =
+        compile(other_name_expressions, extra_header_sources,
+                std::move(extra_compiler_options),
+                std::move(extra_linker_options), canceller);
     if (!compiled) return Kernel::Error(compiled.error());
     LinkedProgram linked = compiled->link();
     if (!linked) return Kernel::Error(linked.error());
@@ -9125,7 +9186,8 @@ class ProgramCache {
   LinkedProgram build_linked_program(const StringVec& name_expressions,
                                      const StringMap& extra_header_sources,
                                      OptionsVec extra_compiler_options,
-                                     OptionsVec extra_linker_options) const {
+                                     OptionsVec extra_linker_options,
+                                     const Canceller* canceller) const {
     StringMap tmp_all_header_sources;
     const StringMap& all_header_sources =
         merge_header_sources(extra_header_sources, &tmp_all_header_sources);
@@ -9135,7 +9197,7 @@ class ProgramCache {
 
     auto compiled = CompiledProgram::compile(
         preprog_.name(), preprog_.source(), all_header_sources,
-        name_expressions, std::move(all_compiler_options));
+        name_expressions, std::move(all_compiler_options), {}, canceller);
     if (!compiled) return LinkedProgram::Error(compiled.error());
     return compiled->link(std::move(all_linker_options));
   }
@@ -9196,6 +9258,10 @@ class ProgramCache {
    *    in the preprocessed program, replacing them if names match.
    *  \param extra_compiler_options List of additional compiler options.
    *  \param extra_linker_options List of additional linker options.
+   *  \param canceller If provided, this object can be used to cancel the
+   *    compilation from another thread before the function has returned.
+   *    If compilation is cancelled before completion, an error is returned.
+   *    The pointer must remain valid until the function has returned.
    *  \return A LoadedProgram object that contains either a valid
    *    LoadedProgramData object or an error state.
    *  \see get_kernel
@@ -9204,7 +9270,8 @@ class ProgramCache {
                             const StringVec& name_expressions,
                             const StringMap& extra_header_sources = {},
                             OptionsVec extra_compiler_options = {},
-                            OptionsVec extra_linker_options = {}) {
+                            OptionsVec extra_linker_options = {},
+                            const Canceller* canceller = nullptr) {
     JITIFY_NVTX_FUNC_RANGE();
     // Add the current CUDA context to the key, as modules are context-specific.
     CUcontext context;
@@ -9278,7 +9345,7 @@ class ProgramCache {
           [&] {
             return build_linked_program(name_expressions, extra_header_sources,
                                         extra_compiler_options,
-                                        extra_linker_options);
+                                        extra_linker_options, canceller);
           },
           [&](const LinkedProgram& _linked, std::ostream& ostream) {
             if (_linked) _linked->serialize(ostream);
@@ -9313,12 +9380,14 @@ class ProgramCache {
   LoadedProgram get_program(const StringVec& name_expressions,
                             const StringMap& extra_header_sources = {},
                             OptionsVec extra_compiler_options = {},
-                            OptionsVec extra_linker_options = {}) {
+                            OptionsVec extra_linker_options = {},
+                            const Canceller* canceller = nullptr) {
     return get_program(
         detail::AutoKey(name_expressions, extra_header_sources,
                         extra_compiler_options, extra_linker_options),
         name_expressions, extra_header_sources,
-        std::move(extra_compiler_options), std::move(extra_linker_options));
+        std::move(extra_compiler_options), std::move(extra_linker_options),
+        canceller);
   }
 
   /*! Get or build a Kernel object from the cache.
@@ -9339,6 +9408,10 @@ class ProgramCache {
    *    in the preprocessed program, replacing them if names match.
    *  \param extra_compiler_options List of additional compiler options.
    *  \param extra_linker_options List of additional linker options.
+   *  \param canceller If provided, this object can be used to cancel the
+   *    compilation from another thread before the function has returned.
+   *    If compilation is cancelled before completion, an error is returned.
+   *    The pointer must remain valid until the function has returned.
    *  \return A Kernel object that contains either a valid KernelData object or
    *    an error state.
    *  \see get_program
@@ -9347,11 +9420,13 @@ class ProgramCache {
                     StringVec other_name_expressions = {},
                     const StringMap& extra_header_sources = {},
                     OptionsVec extra_compiler_options = {},
-                    OptionsVec extra_linker_options = {}) {
+                    OptionsVec extra_linker_options = {},
+                    const Canceller* canceller = nullptr) {
     other_name_expressions.push_back(name);
-    LoadedProgram program = get_program(
-        key, other_name_expressions, extra_header_sources,
-        std::move(extra_compiler_options), std::move(extra_linker_options));
+    LoadedProgram program =
+        get_program(key, other_name_expressions, extra_header_sources,
+                    std::move(extra_compiler_options),
+                    std::move(extra_linker_options), canceller);
     if (!program) return Kernel::Error(program.error());
     return Kernel::get_kernel(std::move(*program), std::move(name));
   }
@@ -9367,13 +9442,15 @@ class ProgramCache {
   Kernel get_kernel(std::string name, StringVec other_name_expressions = {},
                     const StringMap& extra_header_sources = {},
                     OptionsVec extra_compiler_options = {},
-                    OptionsVec extra_linker_options = {}) {
+                    OptionsVec extra_linker_options = {},
+                    const Canceller* canceller = nullptr) {
     other_name_expressions.push_back(name);
     LoadedProgram program = get_program(
         detail::AutoKey(other_name_expressions, extra_header_sources,
                         extra_compiler_options, extra_linker_options),
         other_name_expressions, extra_header_sources,
-        std::move(extra_compiler_options), std::move(extra_linker_options));
+        std::move(extra_compiler_options), std::move(extra_linker_options),
+        canceller);
     if (!program) return Kernel::Error(program.error());
     return Kernel::get_kernel(std::move(*program), std::move(name));
   }

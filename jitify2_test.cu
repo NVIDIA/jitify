@@ -310,6 +310,67 @@ __global__ void my_kernel(float* data) {
 }
 #endif  // CUDA_VERSION >= 11080
 
+#if CUDA_VERSION >= 12080
+TEST(Jitify2Test, CancelCompile) {
+  static const char* const source = R"(
+#include <type_traits>
+
+// This instantiates 2^Depth templates, making it very slow to compile.
+template <int Depth, int Instance = 0>
+struct ExponentialTemplate
+    : std::integral_constant<
+          int, ExponentialTemplate<Depth - 1, Instance * 2>::value +
+                   ExponentialTemplate<Depth - 1, Instance * 2 + 1>::value> {};
+template <int Instance>
+struct ExponentialTemplate<0, Instance> : std::integral_constant<int, 1> {};
+
+template <int Depth>
+__global__ void my_kernel(int* value) {
+  *value = ExponentialTemplate<Depth>::value;
+}
+)";
+
+  int h_data = 0;
+  int* data;
+  CHECK_CUDART(cudaMalloc((void**)&data, sizeof(*data)));
+
+  PreprocessedProgram preprog =
+      Program("slow_compile_program", source)->preprocess();
+  const int depth = 16;  // Compilation takes ~5s at depth=16 on my machine
+  const std::string kernel_inst = Template("my_kernel").instantiate(depth);
+
+  std::unique_ptr<Canceller> canceller(new Canceller());
+  const Canceller* canceller_ptr = canceller.get();
+
+  std::thread compile_thread([&] {
+    cudaSetDevice(0);
+    cudaFree(0);  // Must initialize the driver context in the new thread
+    ASSERT_EQ(preprog->get_kernel(kernel_inst, {}, {}, {}, {}, canceller_ptr)
+                  ->configure(1, 1)
+                  ->launch(data),
+              "");
+  });
+  compile_thread.join();
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaFree(data));
+  EXPECT_EQ(h_data, 1 << depth);
+
+  compile_thread = std::thread([&] {
+    cudaSetDevice(0);
+    cudaFree(0);  // Must initialize the driver context in the new thread
+    // Sleep to ensure the cancel is triggered before compilation starts.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const std::string error =
+        get_error(preprog->compile(kernel_inst, {}, {}, {}, canceller_ptr));
+    EXPECT_TRUE(error.find("NVRTC_ERROR_CANCELLED") != std::string::npos)
+        << "Returned error: \"" << error << "\"";
+  });
+  canceller->cancel();
+  compile_thread.join();
+}
+#endif  // CUDA_VERSION >= 12080
+
 TEST(Jitify2Test, StdFlag) {
   static const char* const source = R"(
 __global__ void my_kernel(long* cplusplus) {
