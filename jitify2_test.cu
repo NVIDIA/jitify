@@ -26,6 +26,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define JITIFY_ENABLE_NVCC 1
 #define JITIFY_ENABLE_EXCEPTIONS 1
 #define JITIFY_ENABLE_NVTX 1
 #define JITIFY_VERBOSE_ERRORS 1
@@ -155,6 +156,42 @@ __global__ void my_kernel(T* data) {
 
   CHECK_CUDART(cudaFree(d_data));
 }
+
+#if JITIFY_ENABLE_NVCC
+TEST(Jitify2Test, NvccSimple) {
+  static const char* const source = R"(
+#include "example_headers/my_header1.cuh"
+
+template <typename T>
+__global__ void my_kernel(T* data) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  *data = square(*data);
+})";
+  using dtype = float;
+  dtype* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(dtype)));
+
+  auto preprog = Program("my_program", source)->preprocess({"-nvcc"});
+  ASSERT_EQ(get_error(preprog), "");
+  std::string kernel_inst = Template("my_kernel").instantiate(type_of(*d_data));
+  auto compiled = preprog->compile(kernel_inst);
+  ASSERT_EQ(get_error(compiled), "");
+  auto linked = compiled->link();
+  ASSERT_EQ(get_error(linked), "");
+
+  // Test that kernel instantiation produces correct result.
+  Kernel kernel = linked->load()->get_kernel(kernel_inst);
+  dim3 grid(1), block(1);
+  dtype h_data = 5;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(dtype), cudaMemcpyHostToDevice));
+  ASSERT_EQ(kernel->configure(grid, block)->launch(d_data), "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(dtype), cudaMemcpyDeviceToHost));
+  EXPECT_FLOAT_EQ(h_data, 25.f);
+  CHECK_CUDART(cudaFree(d_data));
+}
+#endif  // JITIFY_ENABLE_NVCC
 
 bool header_callback(const std::string& filename, std::string* source) {
   // On success, write to *source and return true, otherwise return false.

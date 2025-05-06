@@ -120,6 +120,11 @@
 #define JITIFY_IGNORE_NOT_TRIVIALLY_COPYABLE_ARGS 0
 #endif
 
+// Nvcc support is disabled by default.
+#ifndef JITIFY_ENABLE_NVCC
+#define JITIFY_ENABLE_NVCC 0
+#endif
+
 #if CUDA_VERSION >= 11040 && JITIFY_USE_LIBCUFILT
 #include <nv_decode.h>  // For __cu_demangle (requires linking with libcufilt.a)
 #endif
@@ -138,6 +143,12 @@
 #include <type_traits>
 #include <unordered_set>
 
+#if JITIFY_ENABLE_NVCC
+#if __cplusplus >= 201703L
+#include <filesystem>
+#endif
+#endif
+
 #if JITIFY_THREAD_SAFE
 #include <mutex>
 #define JITIFY_IF_THREAD_SAFE(x) x
@@ -152,10 +163,13 @@
 #endif
 
 #ifdef __linux__
-#include <cxxabi.h>             // For abi::__cxa_demangle
-#include <dirent.h>             // For struct dirent, opendir etc.
-#include <dlfcn.h>              // For ::dlopen, ::dlsym etc.
-#include <fcntl.h>              // For open
+#include <cxxabi.h>  // For abi::__cxa_demangle
+#include <dirent.h>  // For struct dirent, opendir etc.
+#include <dlfcn.h>   // For ::dlopen, ::dlsym etc.
+#include <fcntl.h>   // For open
+#if __cplusplus < 201703L && JITIFY_ENABLE_NVCC
+#include <ftw.h>  // For ::nftw
+#endif
 #include <linux/limits.h>       // For PATH_MAX
 #include <sys/stat.h>           // For stat
 #include <sys/types.h>          // For DIR etc.
@@ -169,7 +183,9 @@
 #include <dbghelp.h>      // For UndecorateSymbolName
 #include <direct.h>       // For mkdir
 #include <fcntl.h>        // For open, O_RDWR etc.
+#include <fileapi.h>      // For GetTempPath2A
 #include <io.h>           // For _sopen_s
+#include <process.h>      // For _getpid
 #include <stdlib.h>       // For _fullpath
 #include <sys/locking.h>  // For _LK_LOCK etc.
 #define JITIFY_PATH_MAX MAX_PATH
@@ -3865,6 +3881,461 @@ inline void find_lowered_global_variables(StringRef ptx,
 
 inline bool ptx_remove_unused_globals(std::string* ptx);  // Defined below
 
+inline std::string get_errno_string() {
+  char error_buf[256];
+  const char* error_str = error_buf;
+#if defined _WIN32 || defined _WIN64
+  ::strerror_s(error_buf, sizeof(error_buf), errno);
+#else
+  // See here for why this is necessary:
+  // http://www.club.cc.cmu.edu/~cmccabe/blog_strerror.html
+#if !((_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600) && !_GNU_SOURCE)
+  error_str =
+#endif
+      ::strerror_r(errno, error_buf, sizeof(error_buf));
+#endif
+  return error_str;
+}
+
+#if defined _WIN32 || defined _WIN64
+using mode_t = int;
+// These are not actually used.
+static constexpr const mode_t kDefaultDirectoryMode = 0;
+static constexpr const mode_t kDefaultFileMode = 0;
+#else
+static constexpr const mode_t kDefaultDirectoryMode =
+    S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
+static constexpr const mode_t kDefaultFileMode =
+    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+#endif
+
+// Returns false on error. Returns true on success or if path already exists.
+inline bool make_directory(const char* path,
+                           mode_t mode = kDefaultDirectoryMode) {
+  bool is_dir;
+  if (path_exists(path, &is_dir)) return is_dir;
+#if defined _WIN32 || defined _WIN64
+  return ::_mkdir(path) == 0 || errno == EEXIST;
+#else
+  return ::mkdir(path, mode) == 0 || errno == EEXIST;
+#endif
+}
+
+inline bool make_directories(std::string path,
+                             mode_t mode = kDefaultDirectoryMode) {
+#if defined _WIN32 || defined _WIN64
+  // Note that Windows supports both forward and backslash path separators.
+  const char* sep = "\\/";
+#else
+  const char* sep = "/";
+#endif
+  // This is based on https://stackoverflow.com/a/675193/7228843
+  char* p = &path[0];
+  char* s;
+  while ((s = std::strpbrk(p, sep))) {
+    if (s != p) {
+      // Neither root nor double slash in path.
+      *s = '\0';
+      if (!make_directory(path.c_str(), mode)) return false;
+      *s = sep[0];
+    }
+    p = s + 1;
+  }
+  return make_directory(path.c_str(), mode);
+}
+
+#if JITIFY_ENABLE_NVCC
+// Note: Only captures standard output. If standard error is needed, use 2>&1.
+inline int run_system_command(const char* command,
+                              std::string* output = nullptr,
+                              std::string* failure = nullptr) {
+#ifdef _MSC_VER
+#define JITIFY_POPEN _popen
+#define JITIFY_PCLOSE _pclose
+#else
+#define JITIFY_POPEN popen
+#define JITIFY_PCLOSE pclose
+#endif
+  FILE* pipe = JITIFY_POPEN(command, "r");
+  if (!pipe) return -1;
+  if (output) {
+    output->clear();
+    std::array<char, 128> buffer;
+    while (fgets(buffer.data(), buffer.size(), pipe)) {
+      *output += buffer.data();
+    }
+  }
+  const int result = JITIFY_PCLOSE(pipe);
+  if (result == -1 && failure) {
+    *failure = get_errno_string();
+  }
+  return result;
+}
+#endif  // JITIFY_ENABLE_NVCC
+
+inline const char* get_cuda_home() {
+  static const char* const cuda_home = [] {
+    const char* env_cuda_home = std::getenv("CUDA_HOME");
+    if (env_cuda_home) return env_cuda_home;
+    // Guess the default location.
+#if defined _WIN32 || defined _WIN64
+    return "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA";
+#else
+    return "/usr/local/cuda";
+#endif
+  }();
+  return cuda_home;
+};
+
+#if JITIFY_ENABLE_NVCC
+class Nvcc {
+  std::string nvcc_path_;
+
+  static bool is_valid_nvcc(std::string nvcc_path) {
+    return run_system_command((nvcc_path + " --version").c_str());
+  }
+
+  static std::string find_nvcc_path() {
+#if defined(_WIN32) || defined(_WIN64)
+    const std::string extension = ".exe";
+#else
+    const std::string extension = "";
+#endif
+    const char* env_nvcc = std::getenv("JITIFY_NVCC");
+    if (env_nvcc && is_valid_nvcc(env_nvcc)) return env_nvcc;
+    std::string nvcc_path = "nvcc" + extension;
+    if (is_valid_nvcc(nvcc_path)) return nvcc_path;
+    const char* cuda_home = get_cuda_home();
+    nvcc_path =
+        detail::path_join(detail::path_join(cuda_home, "bin"), nvcc_path);
+    if (is_valid_nvcc(nvcc_path)) return nvcc_path;
+    return "";
+  }
+
+ public:
+  explicit Nvcc(std::string _nvcc_path = "")
+      : nvcc_path_(_nvcc_path.empty() ? find_nvcc_path() : _nvcc_path) {}
+
+  explicit operator bool() const { return !nvcc_path_.empty(); }
+
+  int operator()(const OptionsVec& options, std::string* output = nullptr,
+                 std::string* failure = nullptr) const {
+    // Note: We redirect stderr to stdout so that we capture it too.
+    const std::string command =
+        detail::string_concat(nvcc_path_, " ", options, " ", "2>&1");
+    return run_system_command(command.c_str(), output, failure);
+  }
+};
+
+inline Nvcc& default_nvcc() {
+  static Nvcc default_nvcc_;
+  return default_nvcc_;
+}
+
+// Forward declarations.
+bool read_text_file(const std::string& fullpath, std::string* content);
+bool read_binary_file(const std::string& fullpath, std::string* content);
+
+// Creates a unique temporary directory and returns its path. Returns empty
+// string on failure.
+inline std::string make_temp_dir() {
+#if defined(_WIN32) || defined(_WIN64)
+  static std::atomic_uint32_t counter = 0;
+  const uint32_t id = counter.fetch_add(1, std::memory_order_relaxed);
+  const uint64_t uid = ((uint64_t)_getpid() << 32) | id;
+  char tmpdir[JITIFY_PATH_MAX + 1];
+  // Note: tmpdir is guaranteed to end with a '\'.
+  if (!GetTempPath2A(sizeof(tmpdir), tmpdir)) return "";
+  std::string path = tmpdir + "__jitify_" + std::to_string(uid);
+  if (::_mkdir(path.c_str()) != 0) return "";
+  return path;
+#else
+  char template_buf[] = "/tmp/__jitify_XXXXXX";
+  if (!::mkdtemp(template_buf)) return "";
+  return template_buf;
+#endif
+}
+
+#if __cplusplus < 201703L && (!defined(_WIN32) && !defined(_WIN64))
+inline int delete_file_visitor(const char* path, const struct stat* sbuf,
+                               int type, struct FTW* ftwb) {
+  (void)sbuf;
+  (void)type;
+  (void)ftwb;
+  return std::remove(path);
+}
+#endif
+
+inline bool remove_all(const std::string& path) {
+#if __cplusplus >= 201703L
+  std::error_code ec;
+  return std::filesystem::remove_all(path, ec) !=
+         static_cast<std::uintmax_t>(-1);
+#else  // __cplusplus < 201703L
+#if defined(_WIN32) || defined(_WIN64)
+  // TODO: Implement this if anyone cares about it.
+  return false;
+#else   // not Windows
+  int flags = FTW_DEPTH;
+  const bool follow_symlinks = false;
+  const bool include_mount_points = false;
+  if (!follow_symlinks) flags |= FTW_PHYS;
+  if (!include_mount_points) flags |= FTW_MOUNT;
+  const int max_depth = 20;
+  return ::nftw(path.c_str(), delete_file_visitor, max_depth, flags) == 0;
+#endif  // not Windows
+#endif  // __cplusplus < 201703L
+}
+
+class TempDirectory {
+  std::string path_;
+
+ public:
+  TempDirectory() : path_(make_temp_dir()) {}
+  ~TempDirectory() {
+    if (path_.empty()) return;
+    std::error_code ec;
+    if (!remove_all(path_.c_str())) {
+      std::cerr << "Jitify warning: Failed to delete temp directory: " << path_
+                << std::endl;
+    }
+  }
+  TempDirectory(const TempDirectory&) = delete;
+  TempDirectory& operator=(const TempDirectory&) = delete;
+  TempDirectory(TempDirectory&& tmp) : path_(std::move(tmp.path_)) {
+    tmp.path_.clear();
+  }
+  TempDirectory& operator=(TempDirectory&& tmp) {
+    path_ = std::move(tmp.path_);
+    tmp.path_.clear();
+    return *this;
+  }
+
+  explicit operator bool() const { return !path_.empty(); }
+  std::string error() const {
+    if (*this) return "";
+    return get_errno_string();
+  }
+  operator StringRef() const { return path_; }
+};
+
+// Forward declaration.
+static bool is_jitsafe_header(const std::string&);
+
+class NvccProgram {
+  std::string source_;
+  std::string name_;
+  StringMap header_sources_;
+  StringVec name_expressions_;
+  std::string log_;
+  std::string ptx_;
+  std::string cubin_;
+  std::string nvvm_;
+  StringMap lowered_name_map_;
+
+ public:
+  NvccProgram(std::string _source, std::string _name, StringMap _header_sources)
+      : source_(std::move(_source)),
+        name_(std::move(_name)),
+        header_sources_(std::move(_header_sources)) {}
+
+  void add_name_expression(std::string expression) {
+    name_expressions_.push_back(std::move(expression));
+  }
+
+  nvrtcResult compile(const Nvcc& nvcc, OptionsVec options,
+                      std::string* error = nullptr) {
+    if (error) *error = "";
+    if (!nvcc) {
+      if (error) *error = "nvcc not found";
+      return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+    }
+
+    TempDirectory tmp_dir;
+    if (!tmp_dir) {
+      if (error) *error = "Failed to make temp directory: " + tmp_dir.error();
+      return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+    }
+
+    const std::string tmp_include_dir = path_join(tmp_dir, "include");
+
+    for (auto const& name_header : header_sources_) {
+      const std::string& name = name_header.first;
+      const std::string& header = name_header.second;
+      // Do not use Jitify's builtin headers when using nvcc, as they will
+      // conflict with the host compiler's standard library headers.
+      if (is_jitsafe_header(name)) continue;
+      const std::string name_base = path_base(name);
+      const std::string path_base = path_join(tmp_include_dir, name_base);
+      if (!make_directories(path_base)) {
+        if (error) *error = "Failed to make directories: " + path_base;
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+      const std::string path = path_join(tmp_include_dir, name);
+      std::ofstream file(path);
+      if (!file) {
+        if (error) *error = "Failed to create file: " + path;
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+      file.imbue(std::locale::classic());
+      file << header;
+      if (!file) {
+        if (error) *error = "Failed to write to file: " + path;
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+    }
+    // Note: This ensures the cuda toolkit headers are found before any that
+    // were embedded during preprocessing (which probably won't work with nvcc).
+    options.emplace_back("-I",
+                         detail::path_join(detail::get_cuda_home(), "include"));
+    options.emplace_back("-I", tmp_include_dir);
+
+    static const char* const kJitifyExpressionPrefix = "__jitify_expression";
+
+    // Force expression instantiations by adding dummy references.
+    std::string name_expressions_source = "\n";
+    for (int i = 0; i < (int)name_expressions_.size(); ++i) {
+      name_expressions_source += std::string("__device__ void* ") +
+                                 kJitifyExpressionPrefix + std::to_string(i) +
+                                 " = (void*)" + name_expressions_[i] + ";\n";
+    }
+    std::string source = source_ + name_expressions_source;
+
+    const std::string tmp_source_name = path_join(tmp_dir, "source");
+    const std::string tmp_source_file = tmp_source_name + ".cu";
+    const std::string tmp_ptx_file = tmp_source_name + ".ptx";
+    const std::string tmp_cubin_file = tmp_source_name + ".cubin";
+    const std::string tmp_ltoir_file = tmp_source_name + ".ltoir";
+
+    {
+      std::ofstream source_file(tmp_source_file);
+      if (!source_file) {
+        if (error) *error = "Failed to create file: " + tmp_source_file;
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+      source_file.imbue(std::locale::classic());
+      source_file << source;
+    }
+    auto infer_nvcc_error_type = [&] {
+      return (log_.find(": error:") != std::string::npos ||
+              log_.find(": fatal error:") != std::string::npos)
+                 ? NVRTC_ERROR_COMPILATION
+                 : NVRTC_ERROR_INVALID_OPTION;
+    };
+
+    if (!options.find({"--dlink-time-opt, -dlto"}).empty()) {
+      options.emplace_back("-ltoir", "");
+      options.emplace_back(tmp_source_file, "");
+      if (nvcc(options, &log_, error)) return infer_nvcc_error_type();
+      if (!read_binary_file(tmp_ltoir_file, &nvvm_)) {
+        if (error) *error = "Failed to read binary file: " + tmp_ltoir_file;
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+      return NVRTC_SUCCESS;
+    }
+
+    options.emplace_back("-ptx", "");
+    options.emplace_back(tmp_source_file, "");
+    options.emplace_back("-o", tmp_ptx_file);
+    if (nvcc(options, &log_, error)) return infer_nvcc_error_type();
+    options.pop_back();  // Remove -o option
+    options.pop_back();  // Remove source file
+    options.pop_back();  // Remove -ptx
+    if (!read_text_file(tmp_ptx_file, &ptx_)) {
+      if (error) *error = "Failed to read text file: " + tmp_ptx_file;
+      return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+    }
+
+    // Extract mangled expression instantiations from PTX.
+    lowered_name_map_.clear();
+    for (int i = 0; i < (int)name_expressions_.size(); ++i) {
+      const std::string key =
+          kJitifyExpressionPrefix + std::to_string(i) + " = ";
+      size_t beg = ptx_.find(key);
+      if (beg == std::string::npos) {
+        if (error) {
+          *error = "Failed to find mangled name in PTX for expression: " +
+                   name_expressions_[i];
+        }
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+      beg += key.size();
+      const size_t end = ptx_.find(";", beg);
+      if (end == std::string::npos) {
+        if (error) *error = "Failed to parse mangled name expression in PTX";
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+      lowered_name_map_.emplace(name_expressions_[i],
+                                ptx_.substr(beg, end - beg));
+    }
+
+    bool is_virtual_arch;
+    if (!parse_arch_flag(options, &is_virtual_arch, error)) {
+      return NVRTC_ERROR_INVALID_OPTION;
+    }
+    if (!is_virtual_arch) {
+      options.emplace_back("-cubin", "");
+      options.emplace_back(tmp_ptx_file, "");
+      options.emplace_back("-o", tmp_cubin_file);
+      if (nvcc(options, &log_, error)) {
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+      if (!read_binary_file(tmp_cubin_file, &cubin_)) {
+        if (error) *error = "Failed to read binary file: " + tmp_cubin_file;
+        return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+      }
+    }
+
+    return NVRTC_SUCCESS;
+  }
+
+  const std::string& log() const { return log_; }
+  const std::string& ptx() const { return ptx_; }
+  const std::string& cubin() const { return cubin_; }
+  const std::string& lto_ir() const { return nvvm_; }
+  const StringMap& lowered_name_map() const { return lowered_name_map_; }
+};
+
+inline nvrtcResult compile_program_nvcc(
+    const std::string& nvcc_path, const std::string& name,
+    const std::string& source, const StringMap& header_sources,
+    const OptionsVec& options, std::string* error = nullptr,
+    std::string* log = nullptr, std::string* ptx = nullptr,
+    std::string* cubin = nullptr, std::string* nvvm = nullptr,
+    const StringVec& name_expressions = {},
+    StringMap* lowered_name_map = nullptr, bool remove_unused_globals = false) {
+  NvccProgram program(source, name, header_sources);
+
+  for (const std::string& name_expression : name_expressions) {
+    program.add_name_expression(name_expression);
+  }
+
+  Nvcc nvcc = nvcc_path.empty() ? default_nvcc() : Nvcc(nvcc_path);
+  nvrtcResult result = program.compile(nvcc, options, error);
+  if (log) *log = program.log();
+  if (result != NVRTC_SUCCESS) return result;
+
+  if (ptx) {
+    *ptx = program.ptx();
+    if (remove_unused_globals) {
+      ptx_remove_unused_globals(ptx);  // Ignores errors from this
+    }
+  }
+  if (cubin) *cubin = program.cubin();
+  if (nvvm) *nvvm = program.lto_ir();
+  if (lowered_name_map) *lowered_name_map = program.lowered_name_map();
+
+  if (ptx && lowered_name_map) {
+    // Automatically add global variables to lowered_name_map. This avoids
+    // needing to specify them explicitly in name_expressions. Note that this
+    // does not support template variables.
+    find_lowered_global_variables(*ptx, lowered_name_map);
+  }
+
+  return NVRTC_SUCCESS;
+}
+#endif  // JITIFY_ENABLE_NVCC
+
 inline int cancel_flow_callback(void* payload, void*) {
   auto canceller = static_cast<const Canceller*>(payload);
   return canceller->cancelled();
@@ -3875,7 +4346,7 @@ inline int cancel_flow_callback(void* payload, void*) {
 // Sets *ptx on success if provided.
 // Adds one entry to *lowered_name_map for each entry in name_expressions as
 //   well as any global definitions found in the generated PTX.
-inline nvrtcResult compile_program(
+inline nvrtcResult compile_program_nvrtc(
     const std::string& name, const std::string& source,
     const StringMap& header_sources, const OptionsVec& options,
     std::string* error = nullptr, std::string* log = nullptr,
@@ -4007,6 +4478,57 @@ inline nvrtcResult compile_program(
 
 #undef JITIFY_CHECK_NVRTC
   return NVRTC_SUCCESS;
+}
+
+inline nvrtcResult compile_program(
+    const std::string& name, const std::string& source,
+    const StringMap& header_sources, const OptionsVec& options,
+    std::string* error = nullptr, std::string* log = nullptr,
+    std::string* ptx = nullptr, std::string* cubin = nullptr,
+    std::string* nvvm = nullptr, const StringVec& name_expressions = {},
+    StringMap* lowered_name_map = nullptr, bool remove_unused_globals = false,
+    const Canceller* canceller = nullptr) {
+  OptionsVec options_modified = options;
+  if (options_modified.pop({"-nvcc", "--nvcc"})) {
+#if JITIFY_ENABLE_NVCC
+    std::string nvcc_path = "";
+    const std::vector<int> nvcc_path_idxs =
+        options_modified.find({"-nvcc-path", "--nvcc-path"}, 1);
+    if (!nvcc_path_idxs.empty()) {
+      nvcc_path = options_modified[nvcc_path_idxs[0]].value();
+    }
+    // These flags aren't supported (or needed) by nvcc.
+    options_modified.pop(
+        {"--device-as-default-execution-space", "-default-device"});
+    options_modified.pop({"--no-source-include", "-no-source-include"});
+    options_modified.pop({"--minimal", "-minimal"});
+    options_modified.pop({"--device-int128", "-device-int128"});
+    options_modified.pop({"--device-float128", "-device-float128"});
+    options_modified.pop({"--builtin-move-forward", "-builtin-move-forward"});
+    options_modified.pop(
+        {"--builtin-initializer-list", "-builtin-initializer-list"});
+    // The jitify_preinclude.h WAR is not needed with nvcc.
+    for (int idx : options_modified.find({"-include"})) {
+      if (options_modified[idx].value() == "jitify_preinclude.h") {
+        options_modified.erase(idx);
+        break;
+      }
+    }
+    // Note: canceller is not supported with nvcc.
+    return compile_program_nvcc(nvcc_path, name, source, header_sources,
+                                options_modified, error, log, ptx, cubin, nvvm,
+                                name_expressions, lowered_name_map,
+                                remove_unused_globals);
+#else  // !JITIFY_ENABLE_NVCC
+    if (error) *error = "Nvcc support is not enabled";
+    return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+#endif
+  } else {
+    return compile_program_nvrtc(name, source, header_sources, options_modified,
+                                 error, log, ptx, cubin, nvvm, name_expressions,
+                                 lowered_name_map, remove_unused_globals,
+                                 canceller);
+  }
 }
 
 inline StringVec split_string(std::string str, long maxsplit = -1,
@@ -6217,6 +6739,63 @@ static const std::unordered_set<std::string>& get_workaround_system_headers() {
   return workaround_system_header_names;
 }
 
+#if JITIFY_ENABLE_NVCC
+// Note: Using this function instead of get_jitsafe_headers_map.count() avoids
+// the header source strings being included in the binary.
+static bool is_jitsafe_header(const std::string& name) {
+  static const std::unordered_set<std::string> jitsafe_headers_set = {
+      "jitify_preinclude.h",
+      "assert.h",
+      "cassert",
+      "float.h",
+      "cfloat",
+      "limits.h",
+      "climits",
+      "math.h",
+      "cmath",
+      "stddef.h",
+      "cstddef",
+      "stdint.h",
+      "cstdint",
+      "stdio.h",
+      "cstdio",
+      "stdlib.h",
+      "cstdlib",
+      "string.h",
+      "cstring",
+      "stdarg.h",
+      "cstdarg",
+      "time.h",
+      "ctime",
+      "algorithm",
+      "array",
+      "complex",
+      "initializer_list",
+      "iostream",
+      "istream",
+      "iterator",
+      "limits",
+      "mutex",
+      "ostream",
+      "sstream",
+      "stdexcept",
+      "string",
+      "tuple",
+      "utility",
+      "type_traits",
+      "vector",
+      "memory.h",
+      "functional",
+      "map",
+      "stack",
+      "iomanip",
+      "typeinfo",
+      "sys/time.h",
+  };
+  return jitsafe_headers_set.count(name);
+}
+#endif  // JITIFY_ENABLE_NVCC
+
 static const StringMap& get_jitsafe_headers_map() {
   static const StringMap jitsafe_headers_map = {
       {"jitify_preinclude.h", jitsafe_header_preinclude_h},
@@ -6288,9 +6867,10 @@ inline std::string get_real_path(const char* filename) {
   return std::string(buffer);
 }
 
-// Reads a whole text file into *content. Returns false on failure.
-inline bool read_text_file(const std::string& fullpath, std::string* content) {
-  FILE* file = ::fopen(fullpath.c_str(), "r");
+// Reads a whole [text] file into *content. Returns false on failure.
+inline bool read_file(const std::string& fullpath, std::string* content,
+                      bool binary) {
+  FILE* file = ::fopen(fullpath.c_str(), binary ? "rb" : "r");
   if (!file) return false;
   std::unique_ptr<FILE, std::integral_constant<decltype(::fclose)*, ::fclose>>
       unique_file(file);
@@ -6312,6 +6892,15 @@ inline bool read_text_file(const std::string& fullpath, std::string* content) {
   }
   content->resize(bytes_read);
   return true;
+}
+
+inline bool read_text_file(const std::string& fullpath, std::string* content) {
+  return read_file(fullpath, content, false);
+}
+
+inline bool read_binary_file(const std::string& fullpath,
+                             std::string* content) {
+  return read_file(fullpath, content, true);
 }
 
 inline void extract_include_paths(OptionsVec* options,
@@ -7977,6 +8566,11 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   bool should_remove_unused_globals = static_cast<bool>(compiler_options.pop(
       {"-remove-unused-globals", "--remove-unused-globals"}));
 
+  // These are re-added to the remaining options below; we don't use nvcc
+  // for preprocessing.
+  Option use_nvcc = compiler_options.pop({"-nvcc", "--nvcc"});
+  Option nvcc_path = compiler_options.pop({"-nvcc-path", "--nvcc-path"});
+
   StringVec include_paths;
   detail::extract_include_paths(&compiler_options, &include_paths);
   for (std::string& include_path : include_paths) {
@@ -8335,6 +8929,9 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   if (disable_warnings) {
     compiler_options.push_back(Option("-w"));
   }
+  // Re-add -nvcc flags if they were provided.
+  if (use_nvcc) compiler_options.emplace_back(std::move(use_nvcc));
+  if (nvcc_path) compiler_options.emplace_back(std::move(nvcc_path));
   // Re-add the -remove-unused-globals flag if it was provided.
   if (should_remove_unused_globals) {
     compiler_options.push_back(Option("-remove-unused-globals"));
@@ -8423,18 +9020,6 @@ class Program : public detail::FallibleObjectBase<Program, ProgramData> {
 
 namespace detail {
 
-#if defined _WIN32 || defined _WIN64
-using mode_t = int;
-// These are not actually used.
-static constexpr const mode_t kDefaultDirectoryMode = 0;
-static constexpr const mode_t kDefaultFileMode = 0;
-#else
-static constexpr const mode_t kDefaultDirectoryMode =
-    S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
-static constexpr const mode_t kDefaultFileMode =
-    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
-#endif
-
 // Opens a file, creating it if necessary.
 class NewFile {
  private:
@@ -8443,21 +9028,9 @@ class NewFile {
   std::string error_ = "Success";
 
   std::string get_error_msg(bool success, const std::string& operation) const {
-    char error_buf[256];
-    const char* error_str = error_buf;
-#if defined _WIN32 || defined _WIN64
-    ::strerror_s(error_buf, sizeof(error_buf), errno);
-#else
-    // See here for why this is necessary:
-    // http://www.club.cc.cmu.edu/~cmccabe/blog_strerror.html
-#if !((_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600) && !_GNU_SOURCE)
-    error_str =
-#endif
-        ::strerror_r(errno, error_buf, sizeof(error_buf));
-#endif
     return success ? "Success"
                    : "Failed to " + operation + " " + filename_ + ": (" +
-                         std::to_string(errno) + ") " + error_str;
+                         std::to_string(errno) + ") " + get_errno_string();
   }
 
  public:
@@ -8606,41 +9179,6 @@ class FileLock {
     }
   }
 };
-
-// Returns false on error. Returns true on success or if path already exists.
-inline bool make_directory(const char* path,
-                           mode_t mode = kDefaultDirectoryMode) {
-  bool is_dir;
-  if (path_exists(path, &is_dir)) return is_dir;
-#if defined _WIN32 || defined _WIN64
-  return ::_mkdir(path) == 0 || errno == EEXIST;
-#else
-  return ::mkdir(path, mode) == 0 || errno == EEXIST;
-#endif
-}
-
-inline bool make_directories(std::string path,
-                             mode_t mode = kDefaultDirectoryMode) {
-#if defined _WIN32 || defined _WIN64
-  // Note that Windows supports both forward and backslash path separators.
-  const char* sep = "\\/";
-#else
-  const char* sep = "/";
-#endif
-  // This is based on https://stackoverflow.com/a/675193/7228843
-  char* p = &path[0];
-  char* s;
-  while ((s = std::strpbrk(p, sep))) {
-    if (s != p) {
-      // Neither root nor double slash in path.
-      *s = '\0';
-      if (!make_directory(path.c_str(), mode)) return false;
-      *s = sep[0];
-    }
-    p = s + 1;
-  }
-  return make_directory(path.c_str(), mode);
-}
 
 // Calls func(const char* filename) for each file in path (not recursively).
 // Stops early if the call returns false. Returns false on error.

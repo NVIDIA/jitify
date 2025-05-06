@@ -302,6 +302,13 @@ documentation for many jitify features.
   disables the static assertion that kernel launch arguments are
   trivially copyable.
 
+- `JITIFY_ENABLE_NVCC=0`
+
+  Defining this macro to 1 before including the jitify header
+  enables support for runtime compilation using nvcc instead of NVRTC
+  via the "--nvcc" compiler option. See the documentation for "--nvcc"
+  in this guide for more information.
+
 <a name="compiler_options"/>
 
 ## Compiler options
@@ -416,6 +423,36 @@ options), some trigger special behavior in Jitify as detailed below:
   implementations. This is experimental because it does not currently
   support the transformation of `namespace std {` (as is used for
   specializations of standard library templates).
+
+- `--nvcc (-nvcc)`
+
+  [SOMEWHAT EXPERIMENTAL]
+
+  Requires JITIFY_ENABLE_NVCC=1 to be defined before including the
+  jitify header.
+
+  This option causes runtime compilation to use nvcc instead of NVRTC.
+  Nvcc is not used for prepocessing, but the "--nvcc" option can be
+  specified during preprocessing and it will be kept for compilation.
+
+  Use of nvcc is somewhat experimental and intended only for cases
+  where NVRTC-specific issues need to be worked around. Some NVRTC
+  features are not supported by nvcc (e.g., "-default-device"). Using
+  nvcc also means that, during compilation, source files must be
+  temporarily written to the filesystem, the nvcc executable must be
+  located, and nvcc must be invoked as a subprocess (this is all
+  fully automated). It also requires that standard library and
+  CUDA Toolkit headers are available to nvcc at runtime in the
+  filesystem. (Unlike with NVRTC, nvcc and certain required CUDA
+  Toolkit headers cannot be redistributed).
+
+  By default, the nvcc executable is found using a heuristic, but
+  this can be overridden by setting the JITIFY_NVCC environment
+  variable or specifying the option "--nvcc-path=/path/to/nvcc".
+
+- `--nvcc-path=/path/to/nvcc (-nvcc-path)`
+
+  Specifies the path at which to find the nvcc executable.
 
 Linker options:
 
