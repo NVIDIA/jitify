@@ -1462,6 +1462,24 @@ __global__ void foo_kernel(int* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+TEST(Jitify2Test, Option) {
+  Option option;
+  EXPECT_FALSE(static_cast<bool>(option));
+  option = Option("--restrict");
+  EXPECT_TRUE(static_cast<bool>(option));
+  EXPECT_EQ(option.key(), "--restrict");
+  EXPECT_EQ(option.value(), "");
+  option = Option("-include", "foo/bar");
+  EXPECT_TRUE(static_cast<bool>(option));
+  EXPECT_EQ(option.key(), "-include");
+  EXPECT_EQ(option.value(), "foo/bar");
+  option = Option("-include=foo/bar");
+  EXPECT_TRUE(static_cast<bool>(option));
+  EXPECT_EQ(option.key(), "-include");
+  EXPECT_EQ(option.value(), "foo/bar");
+  EXPECT_EQ(option.key_and_value(), "-include=foo/bar");
+}
+
 TEST(Jitify2Test, OptionsVec) {
   OptionsVec options0;
   EXPECT_TRUE(options0.ok());

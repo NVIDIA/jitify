@@ -260,59 +260,6 @@ using StringRef = const std::string&;
 using StringSlice = std::string;
 #endif
 
-class Option {
- public:
-  Option() = default;
-  explicit Option(std::string _key, std::string _value = {},
-                  StringVec _repr = {})
-      : key_(std::move(_key)),
-        value_(std::move(_value)),
-        repr_(std::move(_repr)) {
-    if (repr_.empty()) {
-      repr_ = {key_};
-      if (!value_.empty()) {
-        repr_.front() += "=" + value_;
-      }
-    }
-    // TODO: Consider changing key and value to be views into key_and_value to
-    // avoid double-storage.
-    if (value_.empty()) {
-      key_and_value_ = key_;
-    } else {
-      key_and_value_.reserve(key_.size() + 1 + value_.size());
-      key_and_value_.append(key_);
-      key_and_value_.append("=");
-      key_and_value_.append(value_);
-    }
-  }
-
-  const std::string& key() const { return key_; }
-  const std::string& value() const { return value_; }
-  const std::string& key_and_value() const { return key_and_value_; }
-  const StringVec& original_representation() const { return repr_; }
-
-  friend const std::string& to_string(const Option& option) {
-    return option.key_and_value();
-  }
-
-  friend std::ostream& operator<<(std::ostream& os, const Option& option) {
-    return os << option.key_and_value();
-  }
-
-  friend bool operator==(const Option& lhs, const Option& rhs) {
-    return lhs.key_ == rhs.key_ && lhs.value_ == rhs.value_;
-  }
-  friend bool operator!=(const Option& lhs, const Option& rhs) {
-    return !(lhs == rhs);
-  }
-
- private:
-  std::string key_;
-  std::string value_;
-  std::string key_and_value_;
-  StringVec repr_;
-};
-
 namespace detail {
 
 // Strip whitespace from string in-place.
@@ -349,6 +296,85 @@ inline StringSlice rtrim(StringRef s) {
 inline StringSlice trim(StringRef s) { return rtrim(ltrim(s)); }
 
 }  // namespace detail
+
+class Option {
+  void set_key_and_value() {
+    // TODO: Consider changing key and value to be views into key_and_value to
+    // avoid double-storage.
+    if (value_.empty()) {
+      key_and_value_ = key_;
+    } else {
+      key_and_value_.reserve(key_.size() + 1 + value_.size());
+      key_and_value_.append(key_);
+      key_and_value_.append("=");
+      key_and_value_.append(value_);
+    }
+  }
+
+ public:
+  Option() = default;
+  explicit Option(std::string raw) {
+    const size_t eql = raw.find('=');
+    if (eql != std::string::npos) {
+      // Parse "-key=val".
+      key_ = raw.substr(0, eql);
+      value_ = raw.substr(eql + 1);
+    } else if (raw.size() > 2 &&
+               // HACK: Special case for '-l<lib>' linker flag.
+               (std::isupper(static_cast<unsigned char>(raw[1])) ||
+                (raw[1] == 'l' && raw.substr(0, 9) != "-lineinfo"))) {
+      // Parse "-Kval".
+      key_ = raw.substr(0, 2);
+      value_ = raw.substr(2);
+    } else {
+      // Parse "-key" (no value).
+      key_ = raw;
+    }
+    detail::trim(&value_);  // Strip whitespace
+    repr_ = {std::move(raw)};
+    set_key_and_value();
+  }
+  Option(std::string _key, std::string _value, StringVec _repr = {})
+      : key_(std::move(_key)),
+        value_(std::move(_value)),
+        repr_(std::move(_repr)) {
+    if (repr_.empty()) {
+      repr_ = {key_};
+      if (!value_.empty()) {
+        repr_.front() += "=" + value_;
+      }
+    }
+    set_key_and_value();
+  }
+
+  const std::string& key() const { return key_; }
+  const std::string& value() const { return value_; }
+  const std::string& key_and_value() const { return key_and_value_; }
+  const StringVec& original_representation() const { return repr_; }
+
+  friend const std::string& to_string(const Option& option) {
+    return option.key_and_value();
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const Option& option) {
+    return os << option.key_and_value();
+  }
+
+  friend bool operator==(const Option& lhs, const Option& rhs) {
+    return lhs.key_ == rhs.key_ && lhs.value_ == rhs.value_;
+  }
+  friend bool operator!=(const Option& lhs, const Option& rhs) {
+    return !(lhs == rhs);
+  }
+
+  explicit operator bool() const { return !key_.empty(); }
+
+ private:
+  std::string key_;
+  std::string value_;
+  std::string key_and_value_;
+  StringVec repr_;
+};
 
 class OptionsVec {
   using vec_type = std::vector<Option>;
@@ -507,31 +533,17 @@ class OptionsVec {
       if (option[0] != '-') {
         return false;  // "Expected an option, got " + option
       }
-      std::string key, val;
-      StringVec repr = {option};
-      const size_t eql = option.find('=');
+      Option new_option;
       if (i + 1 < options.size() && options[i + 1][0] != '-') {
         // Parse "-key" "val".
-        key = option;
-        val = options[++i];
-        repr = {key, val};
-      } else if (eql != std::string::npos) {
-        // Parse "-key=val".
-        key = option.substr(0, eql);
-        val = option.substr(eql + 1);
-      } else if (option.size() > 2 &&
-                 // HACK: Special case for '-l<lib>' linker flag.
-                 (std::isupper(static_cast<unsigned char>(option[1])) ||
-                  (option[1] == 'l' && option.substr(0, 9) != "-lineinfo"))) {
-        // Parse "-Kval".
-        key = option.substr(0, 2);
-        val = option.substr(2);
+        std::string val = options[++i];
+        detail::trim(&val);  // Strip whitespace
+        new_option = Option(option, val, {option, val});
       } else {
-        // Parse "-key" (no value).
-        key = option;
+        // Parse self-contained option.
+        new_option = Option(option);
       }
-      detail::trim(&val);  // Strip whitespace
-      options_.emplace_back(std::move(key), std::move(val), std::move(repr));
+      options_.emplace_back(std::move(new_option));
     }
     return true;
   }
