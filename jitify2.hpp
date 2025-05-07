@@ -5862,28 +5862,12 @@ inline bool read_text_file(const std::string& fullpath, std::string* content) {
   return true;
 }
 
-// Prepends the current executable dir (instead of the current working dir,
-// which is the implicit default) to relative paths. This is expected to be more
-// useful than the default because it allows referencing headers that are
-// shipped with the application independent of the current working directory.
-inline std::string expand_include_path(std::string path) {
-  if (path.empty()) return "";
-  if (!path_is_absolute(path)) {
-    path = path_join(path_base(get_current_executable_path()), path);
-  }
-  // TODO: Consider also expanding "$FOO" and "${FOO}" as environment variables.
-  return path;
-}
-
 inline void extract_include_paths(OptionsVec* options,
                                   StringVec* include_paths) {
   const std::vector<int> idxs = options->find({"-I"});
   for (int i = (int)idxs.size() - 1; i >= 0; --i) {
     const int idx = idxs[i];
     std::string include_path = (*options)[idx].value();
-    // Note: Not passing the arg with std::move() here due to a "may be used
-    // uninitialized" warning with some compilers.
-    include_path = expand_include_path(include_path);
     include_paths->push_back(std::move(include_path));
     options->erase(idx);
   }
@@ -7535,8 +7519,7 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
             });
       };
 
-  const std::string current_dir =
-      detail::path_base(detail::get_current_executable_path());
+  const std::string current_dir = ".";
   const std::string program_fullpath =
       detail::path_join(current_dir, detail::sanitize_slashes(program_name));
   ErrorMsg err = process_cuda_source_fn(&program_source, program_fullpath,

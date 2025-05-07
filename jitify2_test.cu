@@ -888,20 +888,6 @@ TEST(Jitify2Test, Preincludes) {
   ASSERT_EQ(get_error(preprog), "");
 }
 
-TEST(Jitify2Test, CurrentExeIncludePath) {
-  static const std::string source = R"(
-#include <example_headers/my_header1.cuh>
-)";
-  std::unique_ptr<const char, int (*)(const char*)> cd_back("..", ::chdir);
-  ASSERT_EQ(::chdir("example_headers"), 0);
-  // This requires -I. to be expanded to the current executable directory, not
-  // the current working directory.
-  PreprocessedProgram preprog =
-      Program("my_program", source)->preprocess({"-I."});
-  ASSERT_EQ(get_error(preprog), "");
-  ASSERT_EQ(get_error(preprog->compile()), "");
-}
-
 TEST(Jitify2Test, CompiledProgram) {
   // Tests compilation, lowered name lookup, and basic CompiledProgram API
   // functionality.
