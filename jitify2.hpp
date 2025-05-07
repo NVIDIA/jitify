@@ -3300,18 +3300,23 @@ namespace detail {
 // On success, sets *is_virtual to true if a "compute_" value was found, or
 // false for an "arch_" value, and *idx is set to the index of the option within
 // the options vector (e.g., so that it can be erased by the caller).
-inline int parse_arch_flag(const OptionsVec& options, bool* is_virtual,
+inline int parse_arch_flag(const OptionsVec& options,
+                           bool* is_virtual = nullptr,
+                           std::string* suffix = nullptr,
                            std::string* error = nullptr,
                            size_t* idx = nullptr) {
   const std::vector<int> idxs =
       options.find({"-arch", "--gpu-architecture", "--gpu-name"}, 1);
-  if (idxs.empty()) return 0;  // // No architecture flag found
+  if (idxs.empty()) {
+    if (suffix) *suffix = "";
+    return 0;  // No architecture flag found
+  }
   std::string value = options[idxs[0]].value();
   if (startswith(value, "compute_")) {
-    *is_virtual = true;
+    if (is_virtual) *is_virtual = true;
     value = value.substr(std::strlen("compute_"));
   } else if (startswith(value, "sm_")) {
-    *is_virtual = false;
+    if (is_virtual) *is_virtual = false;
     value = value.substr(std::strlen("sm_"));
   } else {
     if (error) *error = "Expected value to begin with 'compute_' or 'sm_'.";
@@ -3320,12 +3325,15 @@ inline int parse_arch_flag(const OptionsVec& options, bool* is_virtual,
   int result;
   if (value == ".") {
     result = -1;
+    if (suffix) *suffix = "";
   } else {
-    int cc = std::atoi(std::string(value).c_str());
+    char* suffix_c;
+    int cc = (int)std::strtol(value.c_str(), &suffix_c, 10);
     if (cc == 0) {
       if (error) *error = "Failed to parse a valid architecture number.";
       return 0;
     }
+    if (suffix) *suffix = suffix_c;
     result = cc;
   }
   if (idx) *idx = idxs[0];
@@ -3414,7 +3422,9 @@ inline int limit_to_supported_compute_capability(int cc,
   return cc;
 }
 
-inline bool is_binary_compatible_cc(int compiled_cc, int device_cc) {
+inline bool is_binary_compatible_cc(int compiled_cc, int device_cc,
+                                    StringRef suffix = "") {
+  if (suffix == "a") return compiled_cc == device_cc;
   auto get_major = [](int _cc) { return _cc / 10; };
   auto get_minor = [](int _cc) { return _cc % 10; };
   return get_major(compiled_cc) == get_major(device_cc) &&
@@ -3437,9 +3447,12 @@ inline bool process_architecture_flags(OptionsVec* compiler_options,
     return true;
   };
   bool is_virtual;
+  std::string linker_suffix;
+  size_t idx;
   // First identify any existing real arch in linker_options (e.g., from a
   // previous call to this function).
-  int linker_cc = parse_arch_flag(*linker_options, &is_virtual, &error);
+  int linker_cc = parse_arch_flag(*linker_options, &is_virtual, &linker_suffix,
+                                  &error, &idx);
   if (!check_error()) return false;
   if (linker_cc < 0) {
     // We do not allow "-arch=sm_." to be given as a linker option.
@@ -3454,13 +3467,32 @@ inline bool process_architecture_flags(OptionsVec* compiler_options,
     }
     return false;
   }
+  // Remove the parsed arch flag entries; they are replaced below.
+  if (linker_cc != 0) {
+    linker_options->erase(idx);
+  }
   // Now parse compiler options.
-  size_t idx;
-  int given_cc = parse_arch_flag(*compiler_options, &is_virtual, &error, &idx);
+  // Note: We only use a suffix if one is explicitly specified, we never
+  // automatically use one.
+  std::string suffix;
+  int given_cc =
+      parse_arch_flag(*compiler_options, &is_virtual, &suffix, &error, &idx);
   if (!check_error()) return false;
   // Remove the parsed arch flag entries; they are replaced below.
   if (given_cc != 0) {
     compiler_options->erase(idx);
+  }
+  if (linker_suffix != "" && linker_suffix != suffix) {
+    if (error_ptr) {
+      *error_ptr = "Linker architecture flag has incompatible suffix";
+    }
+    return false;
+  }
+  if (suffix != "" && suffix != "a" && suffix != "f") {
+    if (error_ptr) {
+      *error_ptr = "Unsupported architecture suffix: " + suffix;
+    }
+    return false;
   }
   int real_cc;
   if (linker_cc != 0) {
@@ -3498,9 +3530,16 @@ inline bool process_architecture_flags(OptionsVec* compiler_options,
         limit_to_supported_compute_capability(real_cc, &error);
     if (!check_error()) return false;
     if (!nvrtc().GetCUBIN() ||
-        !is_binary_compatible_cc(supported_real_cc, real_cc)) {
-      // This NVRTC version does not support compiling to a (compatible) real
-      // arch.
+        !is_binary_compatible_cc(supported_real_cc, real_cc, suffix)) {
+      // We must use a virtual architecture (PTX).
+      if (suffix != "" &&
+          !is_binary_compatible_cc(supported_real_cc, real_cc, suffix)) {
+        // Even PTX does not provide compatibility here.
+        if (error_ptr) {
+          *error_ptr = "No compatible architecture is supported, due to suffix";
+        }
+        return false;
+      }
       virt_cc = supported_real_cc;
     } else {
       // Pass the real arch to NVRTC.
@@ -3512,14 +3551,13 @@ inline bool process_architecture_flags(OptionsVec* compiler_options,
   // options.
   if (virt_cc) {
     compiler_options->push_back(
-        Option("-arch", "compute_" + std::to_string(virt_cc)));
+        Option("-arch", "compute_" + std::to_string(virt_cc) + suffix));
   } else {
     compiler_options->push_back(
-        Option("-arch", "sm_" + std::to_string(real_cc)));
+        Option("-arch", "sm_" + std::to_string(real_cc) + suffix));
   }
-  if (linker_cc == 0) {
-    linker_options->push_back(Option("-arch", "sm_" + std::to_string(real_cc)));
-  }
+  linker_options->push_back(
+      Option("-arch", "sm_" + std::to_string(real_cc) + suffix));
   return true;
 }
 
@@ -7652,14 +7690,19 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   struct ArchFlag {
     int cc;
     bool is_virtual;
+    std::string suffix;
     explicit operator Option() const {
-      return Option("-arch",
-                    (is_virtual ? "compute_" : "sm_") + std::to_string(cc));
+      return Option("-arch", (is_virtual ? "compute_" : "sm_") +
+                                 std::to_string(cc) + suffix);
     }
     bool operator==(const ArchFlag& other) const {
-      return cc == other.cc && is_virtual == other.is_virtual;
+      return cc == other.cc && is_virtual == other.is_virtual &&
+             suffix == other.suffix;
     }
-    size_t hash() const { return detail::fasthash64(cc) ^ (is_virtual * ~0); }
+    size_t hash() const {
+      return detail::hash_value(suffix,
+                                detail::fasthash64(cc) ^ (is_virtual * ~0));
+    }
     struct Hash {
       size_t operator()(const ArchFlag& x) const { return x.hash(); }
     };
@@ -7670,8 +7713,9 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     std::string error;
     size_t idx;
     bool is_virtual = false;
-    int given_cc =
-        detail::parse_arch_flag(compiler_options, &is_virtual, &error, &idx);
+    std::string suffix = "";
+    int given_cc = detail::parse_arch_flag(compiler_options, &is_virtual,
+                                           &suffix, &error, &idx);
     if (!error.empty()) {
       return Error("Failed to parse architecture flag: " + error);
     }
@@ -7690,14 +7734,14 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
       }
       is_virtual = true;
     }
-    arch_flags.insert({given_cc, is_virtual});
+    arch_flags.insert({given_cc, is_virtual, std::move(suffix)});
     // Remove the parsed arch flag entries; they are replaced below.
     compiler_options.erase(idx);
   }
   if (arch_flags.empty()) {
     // Push a placeholder entry so that preprocessing still runs (with the
     // default arch) when none was specified by the user.
-    arch_flags.insert({0, false});
+    arch_flags.insert({0, false, ""});
   }
   // We temporarily enable warnings so that we can parse the ones we added.
   const bool disable_warnings =
@@ -8724,24 +8768,23 @@ class ProgramCache {
       // Add the SM architecture to the key, as cubins are arch-specific.
       OptionsVec all_compiler_options =
           merge_compiler_options(extra_compiler_options);
+      OptionsVec all_linker_options =
+          merge_linker_options(extra_linker_options);
       std::string error;
-      bool is_virtual;
-      int given_cc =
-          detail::parse_arch_flag(all_compiler_options, &is_virtual, &error);
+      // This ensures the linker options will contain a fully-specified arch
+      // that matches what will be used during compilation and linking.
+      if (!detail::process_architecture_flags(&all_compiler_options,
+                                              &all_linker_options, &error)) {
+        return LoadedProgram::Error("Failed to process architecture flags: " +
+                                    error);
+      }
+      // Get the binary SM architecture.
+      std::string suffix;
+      const int linker_cc =
+          detail::parse_arch_flag(all_linker_options, nullptr, &suffix, &error);
       if (!error.empty()) {
         return LoadedProgram::Error("Failed to parse architecture flag: " +
                                     error);
-      }
-      int compute_capability;
-      if (given_cc > 0 && !is_virtual) {
-        compute_capability = given_cc;
-      } else {
-        compute_capability =
-            detail::get_current_device_compute_capability(&error);
-        if (!error.empty()) {
-          return LoadedProgram::Error("Failed to detect device architecture: " +
-                                      error);
-        }
       }
       if (!nvrtc()) return LoadedProgram::Error(nvrtc().error());
       const int nvrtc_major = nvrtc().get_version() / 1000;
@@ -8760,7 +8803,7 @@ class ProgramCache {
 #endif
       std::stringstream filename_ss;
       filename_ss.imbue(std::locale::classic());
-      filename_ss << to_filename_(key) << ".sm" << compute_capability
+      filename_ss << to_filename_(key) << ".sm" << linker_cc << suffix
                   << ".nvrtc" << nvrtc_major << "-" << nvrtc_minor << "-"
                   << nvrtc_build << "." << linker_name << linker_major << "-"
                   << linker_minor << ".v" << std::hex

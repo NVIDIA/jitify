@@ -1596,6 +1596,33 @@ const int arch = __CUDA_ARCH__ / 10;
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
+#if CUDA_VERSION >= 12010
+  // Test architecture-specific "a" suffix.
+  program = Program("arch_flags_program", source)
+                ->preprocess({"-arch=compute_90a"})
+                ->compile("", {}, {"-arch=compute_90a"});
+  EXPECT_GT(program->ptx().size(), 0);
+  EXPECT_EQ(program->cubin().size(), 0);
+  EXPECT_NE(program->ptx().find(".target sm_90a"), std::string::npos);
+
+  program = Program("arch_flags_program", source)
+                ->preprocess({"-arch=sm_90a"})
+                ->compile("", {}, {"-arch=sm_90a"});
+  EXPECT_GT(program->ptx().size(), 0);
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
+  EXPECT_NE(program->ptx().find(".target sm_90a"), std::string::npos);
+#endif
+
+#if CUDA_VERSION >= 12090
+  // Test family-specific "f" suffix.
+  program = Program("arch_flags_program", source)
+                ->preprocess({"-arch=sm_100f"})
+                ->compile("", {}, {"-arch=sm_100f"});
+  EXPECT_GT(program->ptx().size(), 0);
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
+  EXPECT_NE(program->ptx().find(".target sm_100f"), std::string::npos);
+#endif
+
 #undef JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE
 
   // Test that multiple architectures can be specified for preprocessing.
