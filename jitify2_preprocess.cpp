@@ -118,7 +118,9 @@ std::string sanitize_varname(const std::string& s) {
 bool make_directories_for(const std::string& filename) {
   using jitify2::detail::make_directories;
   using jitify2::detail::path_base;
-  if (!make_directories(path_base(filename))) {
+  std::string path = path_base(filename);
+  if (path.empty()) return true;
+  if (!make_directories(path)) {
     std::cerr << "Error creating directories for output file " << filename
               << std::endl;
     return false;
