@@ -125,6 +125,19 @@
 #define JITIFY_ENABLE_NVCC 0
 #endif
 
+// Context-independent module loading is enabled by default with CUDA 12.0+.
+#ifndef JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+#if CUDA_VERSION >= 12000
+#define JITIFY_USE_CONTEXT_INDEPENDENT_LOADING 1
+#else
+#define JITIFY_USE_CONTEXT_INDEPENDENT_LOADING 0
+#endif
+#endif
+
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING && CUDA_VERSION < 12000
+#error JITIFY_USE_CONTEXT_INDEPENDENT_LOADING=1 requires CUDA 12.0+
+#endif
+
 #if CUDA_VERSION >= 11040 && JITIFY_USE_LIBCUFILT
 #include <nv_decode.h>  // For __cu_demangle (requires linking with libcufilt.a)
 #endif
@@ -1685,6 +1698,20 @@ class LibCuda
   JITIFY_DEFINE_CUDA_WRAPPER(LaunchKernelEx, CUresult, const CUlaunchConfig*,
                              CUfunction, void**, void**)
 #endif
+#if CUDA_VERSION >= 12000
+  JITIFY_DEFINE_CUDA_WRAPPER(LibraryLoadData, CUresult, CUlibrary*, const void*,
+                             CUjit_option*, void**, unsigned int,
+                             CUlibraryOption*, void**, unsigned int)
+  JITIFY_DEFINE_CUDA_WRAPPER(LibraryUnload, CUresult, CUlibrary)
+  JITIFY_DEFINE_CUDA_WRAPPER(LibraryGetKernel, CUresult, CUkernel*, CUlibrary,
+                             const char*)
+  JITIFY_DEFINE_CUDA_WRAPPER(LibraryGetGlobal, CUresult, CUdeviceptr*, size_t*,
+                             CUlibrary, const char*)
+  JITIFY_DEFINE_CUDA_WRAPPER(KernelSetAttribute, CUresult, CUfunction_attribute,
+                             int, CUkernel, CUdevice)
+  JITIFY_DEFINE_CUDA_WRAPPER(KernelGetAttribute, CUresult, int*,
+                             CUfunction_attribute, CUkernel, CUdevice)
+#endif
 #undef JITIFY_DEFINE_CUDA_WRAPPER
 #undef JITIFY_STR
 #undef JITIFY_STR_IMPL
@@ -1912,13 +1939,23 @@ inline LibNvJitLink& nvjitlink() {
 
 class Kernel;
 
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+using CudaModule = CUlibrary;
+#else
+using CudaModule = CUmodule;
+#endif
+
 struct CudaModuleDestructor {
-  void operator()(CUmodule module) const {
+  void operator()(CudaModule module) const {
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+    if (module) cuda().LibraryUnload()(module);
+#else
     if (module) cuda().ModuleUnload()(module);
+#endif
   }
 };
-using UniqueCudaModule =
-    std::unique_ptr<std::remove_pointer<CUmodule>::type, CudaModuleDestructor>;
+using UniqueCudaModule = std::unique_ptr<std::remove_pointer<CudaModule>::type,
+                                         CudaModuleDestructor>;
 
 /*! An object containing a CUDA module that has been loaded into a CUDA context,
  *    along with other metadata.
@@ -1958,7 +1995,7 @@ class LoadedProgramData {
       : data_(new Data{std::move(module), std::move(lowered_name_map)}) {}
 
   /*! Get the CUDA module of the loaded program. */
-  CUmodule module() const { return data_->module.get(); }
+  CudaModule module() const { return data_->module.get(); }
   /*! Get the map of name expressions to lowered (mangled) symbol names. */
   const StringMap& lowered_name_map() const { return data_->lowered_name_map; }
 
@@ -1986,8 +2023,13 @@ class LoadedProgramData {
       symbol_name = iter->second;  // Replace name with lowered name.
     }
     if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+    JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
+        cuda().LibraryGetGlobal()(ptr, size, module(), symbol_name.c_str()));
+#else
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
         cuda().ModuleGetGlobal()(ptr, size, module(), symbol_name.c_str()));
+#endif
     return {};
   }
 
@@ -2079,6 +2121,12 @@ struct Dim3 {
   constexpr Dim3(const V3& v3) : x(v3.x), y(v3.y), z(v3.z) {}
 };
 
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+using CudaFunction = CUkernel;
+#else
+using CudaFunction = CUfunction;
+#endif
+
 /*! An object containing a loaded CUDA kernel and associated metadata.
  */
 class KernelData {
@@ -2086,19 +2134,19 @@ class KernelData {
   // needing to outlive the kernel object. The program uses a shared_ptr
   // internally, so this is cheap.
   LoadedProgramData program_;
-  CUfunction function_ = nullptr;
+  CudaFunction function_ = nullptr;
   std::string lowered_name_;
 
  public:
   KernelData() = default;
-  KernelData(LoadedProgramData program, CUfunction function,
+  KernelData(LoadedProgramData program, CudaFunction function,
              std::string lowered_name = {})
       : program_(std::move(program)),
         function_(function),
         lowered_name_(std::move(lowered_name)) {}
 
   /*! Get the CUDA function object of the kernel. */
-  CUfunction function() const { return function_; }
+  CudaFunction function() const { return function_; }
   /*! Get the lowered (mangled) name of the kernel. */
   const std::string& lowered_name() const { return lowered_name_; }
   /*! Get the program that contains the kernel. */
@@ -2107,27 +2155,53 @@ class KernelData {
   /*! Set an attribute of the kernel.
    *  \param attribute The attribute identifier.
    *  \param value The value to set.
+   *  \param device The device on which to set the attribute. Only used when
+   *    JITIFY_USE_CONTEXT_INDEPENDENT_LOADING=1. Defaults to the current
+   *    context's device.
    *  \return An empty string on success, otherwise an error message.
    *  \warning Though this is a const method, it results in a change of state
    *    that may affect shared references to the kernel. Care should be taken
    *    when using this from multiple threads.
    */
-  ErrorMsg set_attribute(CUfunction_attribute attribute, int value) const {
+  ErrorMsg set_attribute(CUfunction_attribute attribute, int value,
+                         CUdevice device = -1) const {
     if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+    if (device == -1) {
+      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().CtxGetDevice()(&device));
+    }
+    JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
+        cuda().KernelSetAttribute()(attribute, value, function_, device));
+#else
+    (void)device;
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
         cuda().FuncSetAttribute()(function_, attribute, value));
+#endif
     return {};
   }
 
   /*! Get an attribute of the kernel.
    *  \param attribute The attribute identifier.
    *  \param value Pointer to where the result value should be written.
+   *  \param device The device from which to get the attribute. Only used when
+   *    JITIFY_USE_CONTEXT_INDEPENDENT_LOADING=1. Defaults to the current
+   *    context's device.
    *  \return An empty string on success, otherwise an error message.
    */
-  ErrorMsg get_attribute(CUfunction_attribute attribute, int* value) const {
+  ErrorMsg get_attribute(CUfunction_attribute attribute, int* value,
+                         CUdevice device = -1) const {
     if (!cuda()) JITIFY_THROW_OR_RETURN(cuda().error());
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+    if (device == -1) {
+      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().CtxGetDevice()(&device));
+    }
+    JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
+        cuda().KernelGetAttribute()(value, attribute, function_, device));
+#else
+    (void)device;
     JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
         cuda().FuncGetAttribute()(value, attribute, function_));
+#endif
     return {};
   }
 
@@ -2184,10 +2258,15 @@ inline Kernel Kernel::get_kernel(LoadedProgramData program, std::string name) {
   if (iter != program.lowered_name_map().end()) {
     name = iter->second;  // Replace name with lowered name.
   }
-  CUfunction function;
+  CudaFunction function;
   if (!cuda()) return Error(cuda().error());
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+  CUresult ret =
+      cuda().LibraryGetKernel()(&function, program.module(), name.c_str());
+#else
   CUresult ret =
       cuda().ModuleGetFunction()(&function, program.module(), name.c_str());
+#endif
   if (ret != CUDA_SUCCESS) {
     return Error("get_kernel with name=\"" + name +
                  "\" failed: " + detail::get_cuda_error_string(ret));
@@ -2327,15 +2406,16 @@ class ConfiguredKernelData {
     const CUlaunchConfig config = as_CUlaunchConfig();
     if (cuda().LaunchKernelEx()) {
       JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernelEx()(
-          &config, kernel_.function(), arg_ptrs, nullptr));
+          &config, (CUfunction)kernel_.function(), arg_ptrs, nullptr));
     } else {
       if (attrs_.size() != 0) {
         JITIFY_THROW_OR_RETURN("Launch attributes require at least CUDA 11.8");
       }
 #endif
       JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
-          kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
-          block_.z, shared_memory_bytes_, stream_, arg_ptrs, nullptr));
+          (CUfunction)kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x,
+          block_.y, block_.z, shared_memory_bytes_, stream_, arg_ptrs,
+          nullptr));
 #if CUDA_VERSION >= 11080
     }
 #endif
@@ -2366,16 +2446,16 @@ class ConfiguredKernelData {
 #if CUDA_VERSION >= 11080
     const CUlaunchConfig config = as_CUlaunchConfig();
     if (cuda().LaunchKernelEx()) {
-      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(
-          cuda().LaunchKernelEx()(&config, kernel_.function(), nullptr, extra));
+      JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernelEx()(
+          &config, (CUfunction)kernel_.function(), nullptr, extra));
     } else {
       if (attrs_.size() != 0) {
         JITIFY_THROW_OR_RETURN("Launch attributes require at least CUDA 11.8");
       }
 #endif
       JITIFY_THROW_OR_RETURN_IF_CUDA_ERROR(cuda().LaunchKernel()(
-          kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x, block_.y,
-          block_.z, shared_memory_bytes_, stream_, nullptr, extra));
+          (CUfunction)kernel_.function(), grid_.x, grid_.y, grid_.z, block_.x,
+          block_.y, block_.z, shared_memory_bytes_, stream_, nullptr, extra));
 #if CUDA_VERSION >= 11080
     }
 #endif
@@ -2451,8 +2531,8 @@ inline ConfiguredKernel ConfiguredKernel::configure_1d_max_occupancy(
   int grid, block;
   if (!cuda()) return Error(cuda().error());
   CUresult ret = cuda().OccupancyMaxPotentialBlockSizeWithFlags()(
-      &grid, &block, kernel.function(), shared_memory_bytes_callback,
-      shared_memory_bytes, max_block_size, flags);
+      &grid, &block, (CUfunction)kernel.function(),
+      shared_memory_bytes_callback, shared_memory_bytes, max_block_size, flags);
   if (ret != CUDA_SUCCESS) {
     return Error("Configure failed: " + detail::get_cuda_error_string(ret));
   }
@@ -2505,9 +2585,17 @@ class LoadedProgram
 inline LoadedProgram LoadedProgram::load(StringRef cubin,
                                          StringMap lowered_name_map) {
   JITIFY_NVTX_FUNC_RANGE();
-  CUmodule module;
+  CudaModule module;
   if (!cuda()) return Error(cuda().error());
+#if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
+  CUresult ret = cuda().LibraryLoadData()(
+      &module, cubin.data(), /*jitOptions=*/nullptr,
+      /*jitOptionsValues=*/nullptr, /*numJitOptions=*/0,
+      /*libraryOptions=*/nullptr, /*libraryOptionValues=*/nullptr,
+      /*numLibraryOptions=*/0);
+#else
   CUresult ret = cuda().ModuleLoadData()(&module, cubin.data());
+#endif
   if (ret != CUDA_SUCCESS) {
     return Error("Loading failed: " + detail::get_cuda_error_string(ret));
   }

@@ -483,8 +483,9 @@ __global__ void my_kernel(const T*, U*) {}
   for (int i = 0; i < nrep; ++i) {
     // Benchmark direct kernel launch.
     auto t0 = std::chrono::steady_clock::now();
-    cuda().LaunchKernel()(kernel->function(), grid.x, grid.y, grid.z, block.x,
-                          block.y, block.z, 0, 0, arg_ptrs, nullptr);
+    cuda().LaunchKernel()((CUfunction)kernel->function(), grid.x, grid.y,
+                          grid.z, block.x, block.y, block.z, 0, 0, arg_ptrs,
+                          nullptr);
     auto dt = std::chrono::steady_clock::now() - t0;
     // Using the minimum is more robust than the average (though this test still
     // remains sensitive to the system environment and has been observed to fail
@@ -579,13 +580,13 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_int = kernel->function();
+  CudaFunction function_int = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
   JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_float = kernel->function();
+  CudaFunction function_float = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
@@ -658,13 +659,13 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_int = kernel->function();
+  CudaFunction function_int = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
   JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_float = kernel->function();
+  CudaFunction function_float = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");

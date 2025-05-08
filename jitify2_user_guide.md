@@ -309,6 +309,14 @@ documentation for many jitify features.
   via the "--nvcc" compiler option. See the documentation for "--nvcc"
   in this guide for more information.
 
+- `JITIFY_USE_CONTEXT_INDEPENDENT_LOADING=1`
+
+  Defining this macro to 0 before including the jitify header
+  disables use of the cuLibrary* and cuKernel* APIs (alternatives to
+  the cuModule* and cuFunction* APIs since CUDA 12.0). If disabled
+  (or unavailable due to old CUDA version), modules must be loaded
+  and managed separately on each device/context.
+
 <a name="compiler_options"/>
 
 ## Compiler options
