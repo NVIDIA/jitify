@@ -7045,12 +7045,9 @@ inline ErrorMsg visit_all_include_directives(TokenIterator begin,
   using Tt = Token::Type;
   for (auto iter = make_cpp_parser_iterator(begin, end); iter; ++iter) {
     if (iter.match(Tt::kHash)) {
-      if (!iter.match(Tt::kIdentifier)) {
-        return error_msg(
-            iter.line_number(),
-            "invalid preprocessing directive #" + iter->source_string());
-      }
-      if (iter.previous_token().token_string() == "include") {
+      // Note that preprocessor directives are allowed to have no identifier.
+      if (iter.match(Tt::kIdentifier) &&
+          iter.previous_token().token_string() == "include") {
         auto prev_iter = iter;
         // Note: It is possible to have macro substitutions here instead of a
         // string literal, but it is very rare, and some popular tools are
@@ -7891,10 +7888,11 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     std::string& header_source = header_name_and_source.second;
     static const char* const warning_string = "#warning JITIFY_USED_HEADER ";
     size_t pos = header_source.find(warning_string);
-    assert(pos != std::string::npos);
+    // Ignore special cases (e.g., CUB header that we force to empty).
+    if (pos == std::string::npos) continue;
     pos += std::strlen(warning_string);
     const size_t end = header_source.find("\n", pos);
-    assert(end != std::string::npos);
+    if (end == std::string::npos) continue;
     std::memset(&header_source[pos], '*', end - pos);
   }
 

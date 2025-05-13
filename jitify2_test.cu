@@ -2478,6 +2478,7 @@ c+=a+++b;c+=a+ ++b;c+=a+++b;c+=a+++++ ++++b;a: ::b;)~";
 TEST(Jitify2ParserTest, ProcessCudaSource) {
   using namespace jitify2::parser;
   static const char* const source = R"~(
+# // Nothing here
 # /*blah*/pragma /*blah*/once  // blah
 const char* include = "#include <x.h>";
 #pragma once
@@ -2497,13 +2498,14 @@ const char* cat = R"blah(#include "z.h")blah" "dog";
 int i = cat[0 + 1];
 )~";
   static const char* const expected =
-      R"~(#ifndef JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
-#define JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
+#define JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
 #ifdef JITIFY_USED_HEADER_WARNINGS
 #warning JITIFY_USED_HEADER "./my_header.cuh"
 #endif
 #line 1
 
+# // Nothing here
 const char* include = "#include <x.h>";
 // A comment.
 //using std::array;
@@ -2518,15 +2520,16 @@ const char* bar = "#include \"y.h\"";
 #include <foo/c.h>
 const char* cat = R"blah(#include "z.h")blah" "dog";
 int i = cat[0 + 1];
-#endif // JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+#endif // JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
 )~";
   static const char* const expected_minified =
-      R"~(#ifndef JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
-#define JITIFY_INCLUDE_GUARD_D17F1E6F8466B0A8F5157A76D6618008AF6353BBABC40BE8FC2AFF6B38D21883
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
+#define JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
 #ifdef JITIFY_USED_HEADER_WARNINGS
 #warning JITIFY_USED_HEADER "./my_header.cuh"
 #endif
 #line 1
+#
 const char*include="#include <x.h>";using cuda::std::array;using::cuda::std::array;
 #include<a.h>
 #line 1
@@ -2543,19 +2546,19 @@ const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
   std::string include_name = "my_header.cuh";
   std::string current_dir = ".";
   std::string include_fullpath = current_dir + "/" + include_name;
-  EXPECT_TRUE(process_cuda_source(
-                  source, include_fullpath,
-                  ProcessFlags::kReplacePragmaOnce | ProcessFlags::kReplaceStd |
-                      ProcessFlags::kAddUsedHeaderWarning,
-                  cxx_standard_year, &processed_source,
-                  [&](IncludeName* include) { includes.push_back(*include); })
-                  .empty());
+  EXPECT_EQ((const std::string&)process_cuda_source(
+                source, include_fullpath,
+                ProcessFlags::kReplacePragmaOnce | ProcessFlags::kReplaceStd |
+                    ProcessFlags::kAddUsedHeaderWarning,
+                cxx_standard_year, &processed_source,
+                [&](IncludeName* include) { includes.push_back(*include); }),
+            "");
   std::vector<IncludeName> expected_includes = {
       IncludeName("a.h"), IncludeName("b.h", current_dir),
       IncludeName("foo/c.h", "."), IncludeName("foo/c.h")};
   ASSERT_EQ(includes, expected_includes);
   EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
-  EXPECT_EQ(includes[0].location().line(), 11);
+  EXPECT_EQ(includes[0].location().line(), 12);
   EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
   EXPECT_EQ(includes[2].location().line(), 3);
   EXPECT_EQ(processed_source, expected);
@@ -2570,7 +2573,7 @@ const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
                   .empty());
   ASSERT_EQ(includes, expected_includes);
   EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
-  EXPECT_EQ(includes[0].location().line(), 11);
+  EXPECT_EQ(includes[0].location().line(), 12);
   EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
   EXPECT_EQ(includes[2].location().line(), 3);
   EXPECT_EQ(processed_source, expected_minified);
