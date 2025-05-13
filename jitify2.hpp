@@ -5831,7 +5831,7 @@ static const StringMap& get_jitsafe_headers_map() {
 }
 
 // Elides "/." and "/.." tokens from path. Returns empty string if illformed.
-inline std::string path_simplify(StringRef path) {
+inline std::string path_simplify(StringRef path, bool canonicalize = false) {
 #if defined _WIN32 || defined _WIN64
   // Note that Windows supports both forward and backslash path separators.
   const char* sep = "\\/";
@@ -5856,7 +5856,7 @@ inline std::string path_simplify(StringRef path) {
       } else if (cur_dir != ".") {  // Ignore /./
         dirs.push_back(cur_dir);
         if (after_slash) {
-          seps.push_back(path[i]);
+          seps.push_back(canonicalize ? '/' : path[i]);
         }
       }
       cur_dir.clear();
@@ -5903,10 +5903,12 @@ inline bool read_text_file(const std::string& fullpath, std::string* content) {
 inline void extract_include_paths(OptionsVec* options,
                                   StringVec* include_paths) {
   const std::vector<int> idxs = options->find({"-I"});
+  include_paths->clear();
+  include_paths->resize(idxs.size());
   for (int i = (int)idxs.size() - 1; i >= 0; --i) {
     const int idx = idxs[i];
     std::string include_path = (*options)[idx].value();
-    include_paths->push_back(std::move(include_path));
+    (*include_paths)[i] = std::move(include_path);
     options->erase(idx);
   }
 }
@@ -6924,8 +6926,8 @@ struct SourceLocation {
   int line_ = 0;
 };
 
-static const char* const kJitifyDirPrefix = "__jitify_rel_inc:";
-static const char* const kJitifyNamePrefix = ":__jitify_name:";
+static const char* const kJitifyDirPrefix = "__jitify_rel_inc@";
+static const char* const kJitifyNamePrefix = "@__jitify_name@";
 
 class IncludeName {
  public:
@@ -6972,19 +6974,23 @@ class IncludeName {
    */
   std::string local_full_path() const {
     assert(is_quote_include());
-    return is_quote_include() ? current_dir() + "/" + name() : "";
+    return is_quote_include() ? nonlocal_full_path(current_dir()) : "";
   }
   /*! Returns the full path to the header assuming it exists in the given
    * include directory. May be called for either "" or <> includes.
    */
   std::string nonlocal_full_path(const std::string& include_dir) const {
-    return include_dir + "/" + include_name_;
+    return jitify2::detail::path_join(include_dir, include_name_);
   }
   // For quote-includes, this returns a modified name that encodes the current
   // dir too.
   std::string patched_name() const {
     if (!is_quote_include()) return name();
     return kJitifyDirPrefix + current_dir() + kJitifyNamePrefix + name();
+  }
+
+  IncludeName with_current_dir(std::string _current_dir) const {
+    return IncludeName(name(), _current_dir, location());
   }
 
   friend bool operator==(const IncludeName& lhs, const IncludeName& rhs) {
@@ -7279,6 +7285,8 @@ inline bool operator&(ProcessFlags lhs, ProcessFlags rhs) {
 // they end up not being reachable due to #if[def] directives.
 // Note: It is OK if source and *processed_source are the same underlying memory
 // (i.e., in-place operation is OK).
+// Note: include_visitor should be a callable with signature
+// (IncludeName*)->void.
 template <typename IncludeVisitor>
 inline ErrorMsg process_cuda_source(const std::string& source,
                                     const std::string& full_path,
@@ -7291,12 +7299,13 @@ inline ErrorMsg process_cuda_source(const std::string& source,
   ErrorMsg err = visit_all_include_directives(
       tokens.begin(), tokens.end(), full_path,
       [&](IncludeName include, CppParserIterator<TokenIterator> iter) {
+        // Note: We pass by mutable pointer to allow the visitor to modify it.
+        include_visitor(&include);
         if (include.is_quote_include()) {
           // Change `#include "name"` to `#include <patched_name>`, where
           // patched_name encodes the current dir as well as the name.
           *iter = Token(Tt::kString, "<" + include.patched_name() + ">");
         }
-        include_visitor(std::move(include));
       });
   if (err) return err;
   // Insert "#line 1" at the beginning of the file so that line numbering is
@@ -7336,6 +7345,20 @@ inline ErrorMsg process_cuda_source(const std::string& source,
 }
 
 }  // namespace parser
+
+/*! Converts a quote-include name into Jitify's internal representation. This
+ *  can be used when specifying extra_header_sources in order to override a
+ *  quote-include. Note that this only works for quote-includes that appear
+ *  in the same directory as the source file (i.e., the current working dir).
+ *  E.g., if the source file contains `#include "foo/bar.h"`, that header can
+ *  be overridden via extra_header_sources by specifying the name
+ *  `quote_include_name("foo/bar.h")`.
+ *  Note that this isn't really recommended. It's likely better to use
+ *  angle-includes, or to use "-include" to add a completely new header.
+ */
+inline std::string quote_include_name(std::string name) {
+  return IncludeName(name, ".").patched_name();
+}
 
 namespace detail {
 
@@ -7532,6 +7555,27 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   bool should_remove_unused_globals = static_cast<bool>(compiler_options.pop(
       {"-remove-unused-globals", "--remove-unused-globals"}));
 
+  StringVec include_paths;
+  detail::extract_include_paths(&compiler_options, &include_paths);
+  for (std::string& include_path : include_paths) {
+    include_path = detail::path_simplify(include_path, /*canonicalize=*/true);
+  }
+  // Returns index of longest matching include dir, or -1 if no match.
+  auto match_include_path = [&](std::string path, size_t* length) -> int {
+    path = detail::path_simplify(path, /*canonicalize=*/true);
+    *length = 0;
+    int matched_index = -1;
+    for (int i = 0; i < (int)include_paths.size(); ++i) {
+      const std::string& include_path = include_paths[i];
+      if (include_path.size() > *length &&
+          detail::startswith(path, include_path)) {
+        *length = include_path.size();
+        matched_index = i;
+      }
+    }
+    return matched_index;
+  };
+
   using parser::IncludeName;
   using parser::ProcessFlags;
   std::unordered_map<IncludeName, std::string, IncludeName::Hash>
@@ -7544,16 +7588,52 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   const ProcessFlags replace_std_flag_if_enabled =
       use_cuda_std ? ProcessFlags::kReplaceStd : ProcessFlags::kNone;
 
+  static const char* const kJitifyEncodedIncludePath = "__jitify_I";
+  // Replaces an include path prefix with an index to avoid it appearing
+  // in the shipped binary.
+  auto encode_include_path = [&](IncludeName include) -> IncludeName {
+    size_t prefix_length;
+    const int matched_include_path_index =
+        match_include_path(include.current_dir(), &prefix_length);
+    if (matched_include_path_index != -1) {
+      include = include.with_current_dir(
+          kJitifyEncodedIncludePath +
+          std::to_string(matched_include_path_index) + "@" +
+          include.current_dir().substr(prefix_length));
+    }
+    return include;
+  };
+  auto decode_include_path = [&](IncludeName include) -> IncludeName {
+    if (include.is_quote_include()) {
+      std::string current_dir = include.current_dir();
+      size_t pos = current_dir.find(kJitifyEncodedIncludePath);
+      if (pos != std::string::npos) {
+        pos += std::strlen(kJitifyEncodedIncludePath);
+        const size_t end = current_dir.find("@", pos);
+        const int index = std::stoi(current_dir.substr(pos, end - pos));
+        current_dir = include_paths.at(index) + current_dir.substr(end + 1);
+        include = include.with_current_dir(current_dir);
+      }
+    }
+    return include;
+  };
+
   auto process_cuda_source_fn =
       [&](std::string* source_ptr, const std::string& fullpath,
           ProcessFlags extra_flags = ProcessFlags::kNone) {
         return parser::process_cuda_source(
             source_ptr->c_str(), fullpath, process_flags | extra_flags,
-            cxx_standard_year, source_ptr, [&](IncludeName include) {
-              if (include_to_fullpath.count(include)) {
+            cxx_standard_year, source_ptr, [&](IncludeName* include) {
+              if (include->is_quote_include() &&
+                  detail::path_is_absolute(include->current_dir())) {
+                // Replace an include path prefix with an index to avoid it
+                // appearing in the shipped binary.
+                *include = encode_include_path(*include);
+              }
+              if (include_to_fullpath.count(*include)) {
                 return;
               }
-              include_queue.push(std::move(include));
+              include_queue.push(*include);
             });
       };
 
@@ -7594,9 +7674,6 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     include_to_fullpath.emplace(IncludeName(name), std::move(fullpath));
   }
 
-  StringVec include_paths;
-  detail::extract_include_paths(&compiler_options, &include_paths);
-
   // Process preincludes as if they are <> includes.
   for (int idx : compiler_options.find({"--pre-include", "-include"})) {
     const std::string& preinclude = compiler_options[idx].value();
@@ -7612,9 +7689,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     include_queue.pop();
     std::string header_fullpath;
     using detail::HeaderLoadStatus;
+    const IncludeName decoded_include_name = decode_include_path(include_name);
     const HeaderLoadStatus status = detail::load_header(
-        include_name, header_callback, include_paths, use_builtin_headers,
-        &header_fullpath, &fullpath_to_source);
+        decoded_include_name, header_callback, include_paths,
+        use_builtin_headers, &header_fullpath, &fullpath_to_source);
     // Note: We ignore missing headers here because they may not be needed; if
     // they are needed, the error will be caught when we invoke the compiler.
     if (status == HeaderLoadStatus::kFailed) continue;
@@ -7805,6 +7883,19 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     } else {
       ++it;
     }
+  }
+
+  // Redact full include paths from used header warnings in header sources
+  // so that they aren't shipped with the binary.
+  for (auto& header_name_and_source : header_sources) {
+    std::string& header_source = header_name_and_source.second;
+    static const char* const warning_string = "#warning JITIFY_USED_HEADER ";
+    size_t pos = header_source.find(warning_string);
+    assert(pos != std::string::npos);
+    pos += std::strlen(warning_string);
+    const size_t end = header_source.find("\n", pos);
+    assert(end != std::string::npos);
+    std::memset(&header_source[pos], '*', end - pos);
   }
 
   // Re-add the --disable-warnings flag if it was provided.

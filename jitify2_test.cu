@@ -717,6 +717,12 @@ TEST(Jitify2Test, PathSimplify) {
             R"(\foo/bar\cat)");
   EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)"),
             R"(\foo/cat)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)",
+                                           /*canonicalize=*/true),
+            R"(/foo/cat)");
+  EXPECT_EQ(jitify2::detail::path_simplify(R"(///foo///.\\\bar\\\..///cat)",
+                                           /*canonicalize=*/true),
+            R"(/foo/cat)");
 #endif
 }
 
@@ -792,7 +798,36 @@ __global__ void my_kernel() {}
   ASSERT_EQ(get_error(compiled), "");
 }
 
+TEST(Jitify2Test, EncodedQuoteIncludes) {
+  // This tests that encoding of quote-includes works, and that the full include
+  // path is not left in the modified header source.
+  // Note that cuda_fp16.h contains `#include "cuda_fp16.hpp"`, which will be
+  // encoded with the cuda include dir.
+  static const char* const source = R"(
+#include <cuda_fp16.h>
+__global__ void my_kernel() {}
+)";
+  auto preprog =
+      Program("my_program", source)
+          ->preprocess({"-Ifoo/bar", "-I/cat/dog", "-I" CUDA_INC_DIR});
+  ASSERT_EQ(get_error(preprog), "");
+  auto compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  // Note: The '2' here is the index of the cuda include dir amongst the
+  // "-I" options.
+  ASSERT_TRUE(
+      preprog->header_sources().at("cuda_fp16.h").find("__jitify_I2@") !=
+      std::string::npos);
+  for (const auto& name_header : preprog->header_sources()) {
+    const std::string& header_source = name_header.second;
+    ASSERT_FALSE(header_source.find(CUDA_INC_DIR) != std::string::npos);
+  }
+}
+
 TEST(Jitify2Test, ExplicitHeaderSources) {
+  // TODO: This is currently only testing preprocess(), not compile(). We need
+  // to test compile() as well, because it behaves differently and may be the
+  // more common use-case.
   // This test checks how the keys in a user-provided header_sources map are
   // matched to #include directives in the source.
   static const std::string good_header = R"()";
@@ -868,6 +903,42 @@ TEST(Jitify2Test, ExplicitHeaderSources) {
                      {"foo/bar", bad_header}})
                 ->preprocess();
   ASSERT_EQ(get_error(preprog), "");
+}
+
+TEST(Jitify2Test, ExtraHeaderSourcesOverride) {
+  // This tests that includes can be overridden by extra_header_sources.
+  static const char* const source = R"(
+#ifdef USE_QUOTE_INCLUDE
+#include "example_headers/my_header1.cuh"
+#else
+#include <example_headers/my_header1.cuh>
+#endif
+
+template <typename T>
+__global__ void my_kernel(T* data) {
+  *data = cube(*data);
+}
+)";
+  static const char* const header = R"(
+template <typename T>
+__device__ T cube(T x) { return x * x * x; }
+)";
+  // Test angle-include.
+  PreprocessedProgram preprog =
+      Program("my_program", source)->preprocess({"-I."});
+  *preprog->get_kernel("my_kernel<int>", {},
+                       {{"example_headers/my_header1.cuh", header}});
+
+  // Test quote-include.
+  // Note that this requires the use of jitify2::quote_include_name().
+  // Note also that this isn't really recommended. It's likely better to use
+  // angle-includes, or to use "-include" to add a completely new header.
+  preprog = Program("my_program", source)
+                ->preprocess({"-DUSE_QUOTE_INCLUDE", "-I" CUDA_INC_DIR});
+  *preprog->get_kernel(
+      "my_kernel<int>", {},
+      {{jitify2::quote_include_name("example_headers/my_header1.cuh"),
+        header}});
 }
 
 TEST(Jitify2Test, Preincludes) {
@@ -2442,8 +2513,8 @@ using ::cuda::std::array;
 de /*blah*/ <a.h> /*blah*/ // blah
 #line 1
 const char* bar = "#include \"y.h\"";
-# /*blah*/ include /*blah*/ <__jitify_rel_inc:.:__jitify_name:b.h> /*blah*/ // blah
-#include <__jitify_rel_inc:.:__jitify_name:foo/c.h>
+# /*blah*/ include /*blah*/ <__jitify_rel_inc@.@__jitify_name@b.h> /*blah*/ // blah
+#include <__jitify_rel_inc@.@__jitify_name@foo/c.h>
 #include <foo/c.h>
 const char* cat = R"blah(#include "z.h")blah" "dog";
 int i = cat[0 + 1];
@@ -2460,8 +2531,8 @@ const char*include="#include <x.h>";using cuda::std::array;using::cuda::std::arr
 #include<a.h>
 #line 1
 const char*bar="#include \"y.h\"";
-#include<__jitify_rel_inc:.:__jitify_name:b.h>
-#include<__jitify_rel_inc:.:__jitify_name:foo/c.h>
+#include<__jitify_rel_inc@.@__jitify_name@b.h>
+#include<__jitify_rel_inc@.@__jitify_name@foo/c.h>
 #include<foo/c.h>
 const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
 #endif
@@ -2477,7 +2548,7 @@ const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
                   ProcessFlags::kReplacePragmaOnce | ProcessFlags::kReplaceStd |
                       ProcessFlags::kAddUsedHeaderWarning,
                   cxx_standard_year, &processed_source,
-                  [&](IncludeName include) { includes.push_back(include); })
+                  [&](IncludeName* include) { includes.push_back(*include); })
                   .empty());
   std::vector<IncludeName> expected_includes = {
       IncludeName("a.h"), IncludeName("b.h", current_dir),
@@ -2495,7 +2566,7 @@ const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
                       ProcessFlags::kAddUsedHeaderWarning |
                       ProcessFlags::kMinify,
                   cxx_standard_year, &processed_source,
-                  [&](IncludeName include) { includes.push_back(include); })
+                  [&](IncludeName* include) { includes.push_back(*include); })
                   .empty());
   ASSERT_EQ(includes, expected_includes);
   EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
