@@ -48,16 +48,15 @@ It provides a simple API for compiling and executing CUDA source code at runtime
   dim3 grid(1), block(1);
   float* data;
   cudaMalloc((void**)&data, sizeof(float));
-  jitify2::LoadedProgram program =
-      jitify2::Program(program_name, program_source)
-          // Preprocess source code and load all included headers.
-          ->preprocess({"-std=c++14"})
-          // Compile, link, and load the program, and obtain the loaded kernel.
-          ->get_kernel("my_kernel<float>")
-          // Configure the kernel launch.
-          ->configure(grid, block)
-          // Launch the kernel.
-          ->launch(data);
+  jitify2::Program(program_name, program_source)
+      // Preprocess source code and load all included headers.
+      ->preprocess({"-std=c++14"})
+      // Compile, link, and load the program, and obtain the loaded kernel.
+      ->get_kernel("my_kernel<float>")
+      // Configure the kernel launch.
+      ->configure(grid, block)
+      // Launch the kernel.
+      ->launch(data);
 ```
 
 <a name="error_handling"/>
@@ -228,7 +227,7 @@ The unit tests can be built and run using CMake as follows:
 
 ```bash
 $ mkdir build && cd build && cmake ..
-$ make check
+$ make check -j6
 ```
 
 Note that the tests in `jitify2_test.cu` may also be useful as a form of
