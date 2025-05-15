@@ -2016,6 +2016,7 @@ TEST(Jitify2Test, LibCudaCxxAndBuiltinLimits) {
   ASSERT_EQ(get_error(preprog), "");
   CompiledProgram compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
+  ASSERT_EQ(compiled->log(), "");  // Ensure no warnings
 }
 #endif  // CUDA_VERSION >= 11000
 

@@ -4377,7 +4377,7 @@ JITIFY_DEFINE_C_AND_CXX_HEADERS(limits, R"(
 #define LLONG_MIN  (-LLONG_MAX - 1)
 #endif
 #ifndef ULLONG_MAX
-#define ULLONG_MAX 0xffffffffffffffffULL
+#define ULLONG_MAX 0xffffffffffffffffUL
 #endif
 )",
                                 "");
