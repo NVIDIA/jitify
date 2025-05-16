@@ -2463,6 +2463,38 @@ TEST(Jitify2Test, SerializationGoldensLinkedProgram) {
   });
 }
 
+#if CUDA_VERSION >= 12080
+TEST(Jitify2Test, PrecompiledHeaders) {
+  static const char* const source = R"(
+#include <cuda_fp16.h>
+)";
+  const char* const program_name = "my_pch_program";
+  for (int i = 0; i < 3; ++i) {
+    CompiledProgram compiled = jitify2::Program(program_name, source)
+                                   ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                                   ->compile();
+    ASSERT_EQ(get_error(compiled), "");
+    // Check that PCH succeeded.
+    if (i == 0) {
+      EXPECT_TRUE(compiled->log().find("creating precompiled header file") !=
+                  std::string::npos);
+      EXPECT_FALSE(compiled->log().find("using precompiled header file") !=
+                   std::string::npos);
+    } else {
+      EXPECT_TRUE(compiled->log().find("using precompiled header file") !=
+                  std::string::npos);
+      EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
+                   std::string::npos);
+    }
+    EXPECT_FALSE(compiled->log().find("PCH creation disabled") !=
+                 std::string::npos);
+    // Check that the pch file didn't get saved to the current directory.
+    EXPECT_FALSE(jitify2::detail::path_exists(
+        (program_name + std::string(".pch")).c_str()));
+  }
+}
+#endif  // CUDA_VERSION >= 12080
+
 void expect_tokenization(const char* source,
                          std::vector<parser::Token::Type> expected_types,
                          std::vector<std::string> expected_token_strings) {
@@ -2786,7 +2818,6 @@ int i = cat[0 + 1];
 #ifdef JITIFY_USED_HEADER_WARNINGS
 #warning JITIFY_USED_HEADER "./my_header.cuh"
 #endif
-#line 1
 #
 #
 const char*include="#include <x.h>";

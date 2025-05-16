@@ -156,10 +156,8 @@
 #include <type_traits>
 #include <unordered_set>
 
-#if JITIFY_ENABLE_NVCC
 #if __cplusplus >= 201703L
 #include <filesystem>
-#endif
 #endif
 
 #if JITIFY_THREAD_SAFE
@@ -180,7 +178,7 @@
 #include <dirent.h>  // For struct dirent, opendir etc.
 #include <dlfcn.h>   // For ::dlopen, ::dlsym etc.
 #include <fcntl.h>   // For open
-#if __cplusplus < 201703L && JITIFY_ENABLE_NVCC
+#if __cplusplus < 201703L
 #include <ftw.h>  // For ::nftw
 #endif
 #include <linux/limits.h>       // For PATH_MAX
@@ -4124,6 +4122,8 @@ inline Nvcc& default_nvcc() {
 bool read_text_file(const std::string& fullpath, std::string* content);
 bool read_binary_file(const std::string& fullpath, std::string* content);
 
+#endif  // JITIFY_ENABLE_NVCC
+
 // Creates a unique temporary directory and returns its path. Returns empty
 // string on failure.
 inline std::string make_temp_dir() {
@@ -4204,8 +4204,10 @@ class TempDirectory {
     if (*this) return "";
     return get_errno_string();
   }
-  operator StringRef() const { return path_; }
+  const std::string& path() const { return path_; }
 };
+
+#if JITIFY_ENABLE_NVCC
 
 // Forward declaration.
 static bool is_jitsafe_header(const std::string&);
@@ -4245,7 +4247,7 @@ class NvccProgram {
       return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
     }
 
-    const std::string tmp_include_dir = path_join(tmp_dir, "include");
+    const std::string tmp_include_dir = path_join(tmp_dir.path(), "include");
 
     for (auto const& name_header : header_sources_) {
       const std::string& name = name_header.first;
@@ -4289,7 +4291,7 @@ class NvccProgram {
     }
     std::string source = source_ + name_expressions_source;
 
-    const std::string tmp_source_name = path_join(tmp_dir, "source");
+    const std::string tmp_source_name = path_join(tmp_dir.path(), "source");
     const std::string tmp_source_file = tmp_source_name + ".cu";
     const std::string tmp_ptx_file = tmp_source_name + ".ptx";
     const std::string tmp_cubin_file = tmp_source_name + ".cubin";
@@ -4568,6 +4570,14 @@ inline nvrtcResult compile_program_nvrtc(
   return NVRTC_SUCCESS;
 }
 
+inline const TempDirectory& get_temp_pch_dir() {
+  // Note: This is static because the temp dir for PCH files must persist
+  // for the lifetime of the process in order to be re-used in subsequent
+  // compilations.
+  static TempDirectory tmp_pch_dir;
+  return tmp_pch_dir;
+}
+
 inline nvrtcResult compile_program(
     const std::string& name, const std::string& source,
     const StringMap& header_sources, const OptionsVec& options,
@@ -4595,6 +4605,14 @@ inline nvrtcResult compile_program(
     options_modified.pop({"--builtin-move-forward", "-builtin-move-forward"});
     options_modified.pop(
         {"--builtin-initializer-list", "-builtin-initializer-list"});
+    options_modified.pop({"--pch", "-pch"});
+    options_modified.pop({"--pch-dir", "-pch-dir"});
+    options_modified.pop({"--create-pch", "-create-pch"});
+    options_modified.pop({"--use-pch", "-use-pch"});
+    options_modified.pop({"--pch-verbose", "-pch-verbose"});
+    options_modified.pop({"--pch-messages", "-pch-messages"});
+    options_modified.pop(
+        {"--instantiate-templates-in-pch", "-instantiate-templates-in-pch"});
     // The jitify_preinclude.h WAR is not needed with nvcc.
     for (int idx : options_modified.find({"-include"})) {
       if (options_modified[idx].value() == "jitify_preinclude.h") {
@@ -4612,6 +4630,21 @@ inline nvrtcResult compile_program(
     return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
 #endif
   } else {
+    if (!nvrtc()) {
+      if (error) *error = nvrtc().error();
+      return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
+    }
+    if (nvrtc().get_version() >= 12080 && nvrtc().get_version() <= 12090 &&
+        options_modified.find({"--pch", "-pch"}).size() &&
+        !options_modified.find({"--pch-dir", "-pch-dir"}).size()) {
+      // If no PCH dir is specified, we add one automatically to avoid PCH files
+      // being saved to the current working directory.
+      // Note: If the temp pch dir fails to be created, we don't apply the
+      // workaround and instead just let nvrtc do its default behavior.
+      if (get_temp_pch_dir()) {
+        options_modified.emplace_back("-pch-dir", get_temp_pch_dir().path());
+      }
+    }
     return compile_program_nvrtc(name, source, header_sources, options_modified,
                                  error, log, ptx, cubin, nvvm, name_expressions,
                                  lowered_name_map, remove_unused_globals,
@@ -8398,7 +8431,11 @@ inline ErrorMsg process_cuda_source(const std::string& source,
   // Insert "#line 1" at the beginning of the file so that line numbering is
   // not messed up by subsequent line insertions at the beginning.
   // Note: Reverse order due to insertion at the beginning.
-  insert_directive(&tokens, tokens.begin(), "line", Token(Tt::kNumber, "1"));
+  if ((flags & (ProcessFlags::kAddUsedHeaderWarning |
+                ProcessFlags::kReplacePragmaOnce)) &&
+      !(flags & ProcessFlags::kMinify)) {
+    insert_directive(&tokens, tokens.begin(), "line", Token(Tt::kNumber, "1"));
+  }
   if (flags & ProcessFlags::kAddUsedHeaderWarning) {
     // Insert a guarded #warning that we can use to see if this header was
     // actually included during compilation.
@@ -8688,8 +8725,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   std::unordered_map<std::string, detail::StringOrRef> fullpath_to_source;
   std::queue<IncludeName> include_queue;
   ProcessFlags process_flags = ProcessFlags::kNone;
-  if (replace_pragma_once) process_flags |= ProcessFlags::kReplacePragmaOnce;
   if (minify) process_flags |= ProcessFlags::kMinify;
+  const ProcessFlags replace_pragma_once_if_enabled =
+      replace_pragma_once ? ProcessFlags::kReplacePragmaOnce
+                          : ProcessFlags::kNone;
   const ProcessFlags replace_std_flag_if_enabled =
       use_cuda_std ? ProcessFlags::kReplaceStd : ProcessFlags::kNone;
 
@@ -8755,9 +8794,13 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
 
   const std::string program_fullpath =
       detail::path_join(starting_dir, detail::sanitize_slashes(program_name));
+  // Note: We must ensure we don't add a #line directive to the program source,
+  // because it would break PCH (this restriction does not apply to headers).
   ErrorMsg err = process_cuda_source_fn(&program_source, program_fullpath,
                                         replace_std_flag_if_enabled);
   if (err) return Error(err);
+  // Note: I think this is equivalent to the new NVRTC flag
+  // -fdevice-syntax-only (i.e., run the frontend only, no backend codegen).
   static const char* const early_stop_code = R"(
 #ifdef JITIFY_PREPROCESS_ONLY
 #include <__JITIFY_STOP_COMPILATION>
@@ -8773,9 +8816,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     std::string fullpath = detail::path_is_absolute(name)
                                ? name
                                : detail::path_join(starting_dir, name);
-    err = process_cuda_source_fn(
-        source_ptr, fullpath,
-        replace_std_flag_if_enabled | ProcessFlags::kAddUsedHeaderWarning);
+    err = process_cuda_source_fn(source_ptr, fullpath,
+                                 replace_std_flag_if_enabled |
+                                     replace_pragma_once_if_enabled |
+                                     ProcessFlags::kAddUsedHeaderWarning);
     if (err) return Error(err);
     // Note: The names (keys) in header_sources will be matched:
     // a) directly, for `#include <name>` directives, and
@@ -8819,7 +8863,8 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
         // WAR for CUB header that is full of host-only code.
         header_source = "";
       } else {
-        ProcessFlags extra_flags = ProcessFlags::kAddUsedHeaderWarning;
+        ProcessFlags extra_flags = replace_pragma_once_if_enabled |
+                                   ProcessFlags::kAddUsedHeaderWarning;
         const bool is_jitify_preinclude =
             include_name.name() == "jitify_preinclude.h";
         const bool is_builtin_header =
@@ -8952,7 +8997,7 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     compiler_options.push_back(Option("-DJITIFY_PREPROCESS_ONLY"));
     compiler_options.push_back(Option("-DJITIFY_USED_HEADER_WARNINGS"));
     std::string compile_error;
-    // Note: This should always fail, because we inserted an #error directive.
+    // Note: This should always fail, because of __JITIFY_STOP_COMPILATION.
     const nvrtcResult compile_result =
         detail::compile_program(program_name, program_source, header_sources,
                                 compiler_options, &compile_error, &compile_log);

@@ -421,6 +421,24 @@ options), some trigger special behavior in Jitify as detailed below:
   disables the use of builtin workarounds for certain libraries
   (e.g., Thrust and CUB).
 
+- `--pch (-pch)`
+
+  This option is passed through to NVRTC to enable pre-compiled
+  headers (PCH), which can significantly speed up compilation of some
+  programs (see NVRTC documentation for full details). Other NVRTC
+  PCH options can also be used.
+
+  If this option is present without a corresponding `--pch-dir`
+  option, a `--pch-dir` will automatically be specified using
+  a unique temporary directory.
+
+  One caveat with enabling PCH in Jitify is that PCH does not
+  support `#line` directives, which Jitify normally adds during
+  preprocessing. To avoid this issue, when PCH is enabled Jitify
+  will automatically remove these `#line` directives prior to
+  compilation, which may cause slightly incorrect line numbers in
+  error messages.
+
 - `--cuda-std (-cuda-std)`
 
   [EXPERIMENTAL]
