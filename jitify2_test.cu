@@ -2041,6 +2041,30 @@ __global__ void my_assert_kernel() {
   // longer be used for CUDA operations after this point.
 }
 
+TEST(Jitify2Test, LineNumbers) {
+  // This checks that line numbers are maintained after preprocessing replaces
+  // #pragma once directives etc.
+  static const char* const source = R"(
+#include <test_line_numbers.cuh>
+)";
+  static const char* const header_source = R"(// Line 1
+// Line 2
+#pragma once  // Line 3
+// Line 4
+#warning TEST_WARNING  // Line 5
+)";
+  CompiledProgram compiled =
+      jitify2::Program("line_numbers_program", source,
+                       {{"test_line_numbers.cuh", header_source}})
+          ->preprocess()
+          ->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  const std::string expected =
+      "test_line_numbers.cuh(5): warning #1105-D: #warning directive: "
+      "TEST_WARNING";
+  EXPECT_EQ(compiled->log().substr(0, expected.size()), expected);
+}
+
 TEST(Jitify2Test, Minify) {
   static const char* const name = "my_program";
   // This source is intentionally tricky to parse so that it stresses the
@@ -2484,6 +2508,8 @@ TEST(Jitify2ParserTest, ProcessCudaSource) {
 const char* include = "#include <x.h>";
 #pragma once
 #pragma once
+#pragma pack(1)
+struct PackedStruct {};
 // A comment.
 //using std::array;
 using std::array;
@@ -2499,15 +2525,20 @@ const char* cat = R"blah(#include "z.h")blah" "dog";
 int i = cat[0 + 1];
 )~";
   static const char* const expected =
-      R"~(#ifndef JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
-#define JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
+#define JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
 #ifdef JITIFY_USED_HEADER_WARNINGS
 #warning JITIFY_USED_HEADER "./my_header.cuh"
 #endif
 #line 1
 
 # // Nothing here
+# /*blah*/  // blah
 const char* include = "#include <x.h>";
+#
+#
+#pragma pack(1)
+struct PackedStruct {};
 // A comment.
 //using std::array;
 using cuda::std::array;
@@ -2521,17 +2552,22 @@ const char* bar = "#include \"y.h\"";
 #include <foo/c.h>
 const char* cat = R"blah(#include "z.h")blah" "dog";
 int i = cat[0 + 1];
-#endif // JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
+#endif // JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
 )~";
   static const char* const expected_minified =
-      R"~(#ifndef JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
-#define JITIFY_INCLUDE_GUARD_05492F4AF61B4B5D5B3321684DD52AD05E5B1A44B9116CEFDF6F999843941EFF
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
+#define JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
 #ifdef JITIFY_USED_HEADER_WARNINGS
 #warning JITIFY_USED_HEADER "./my_header.cuh"
 #endif
 #line 1
 #
-const char*include="#include <x.h>";using cuda::std::array;using::cuda::std::array;
+#
+const char*include="#include <x.h>";
+#
+#
+#pragma pack(1)
+struct PackedStruct{};using cuda::std::array;using::cuda::std::array;
 #include<a.h>
 #line 1
 const char*bar="#include \"y.h\"";
@@ -2559,7 +2595,7 @@ const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
       IncludeName("foo/c.h", "."), IncludeName("foo/c.h")};
   ASSERT_EQ(includes, expected_includes);
   EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
-  EXPECT_EQ(includes[0].location().line(), 12);
+  EXPECT_EQ(includes[0].location().line(), 14);
   EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
   EXPECT_EQ(includes[2].location().line(), 3);
   EXPECT_EQ(processed_source, expected);
@@ -2574,7 +2610,7 @@ const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
                   .empty());
   ASSERT_EQ(includes, expected_includes);
   EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
-  EXPECT_EQ(includes[0].location().line(), 12);
+  EXPECT_EQ(includes[0].location().line(), 14);
   EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
   EXPECT_EQ(includes[2].location().line(), 3);
   EXPECT_EQ(processed_source, expected_minified);

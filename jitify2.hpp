@@ -6838,11 +6838,13 @@ class CppParserIterator {
     return true;
   }
 
+  bool peek_identifier(const char* name) {
+    return current_->type() == Token::Type::kIdentifier &&
+           current_->token_string() == name;
+  }
+
   bool match_identifier(const char* name) {
-    if (current_->type() != Token::Type::kIdentifier ||
-        current_->token_string() != name) {
-      return false;
-    }
+    if (!peek_identifier(name)) return false;
     ++(*this);
     return true;
   }
@@ -6861,6 +6863,8 @@ class CppParserIterator {
     for (token_iterator it = first_to_erase.base(); it != current_; ++it) {
       previous_tokens_.pop();
     }
+    // Note: The ++ here advances to the next _base_ token (because we don't
+    // want to jump over subsequent comment or whitespace tokens).
     current_ = token_container->erase(first_to_erase.base(), ++current_);
     skip_whitespace_and_comments();
     return *this;
@@ -7142,21 +7146,16 @@ inline bool replace_pragma_once_with_ifndef(const std::string& unique_source_id,
   bool found = false;
   for (auto iter = make_cpp_parser_iterator(tokens->begin(), tokens->end());
        iter;) {
-    auto start_iter = iter;
     if (iter.match(Tt::kHash)) {
-      if (iter.match_identifier("pragma") && iter.match_identifier("once")) {
-        iter.advance_to(Tt::kEndOfDirective);
-        if (!iter) break;
-        // Note: The ++ here advances to the next _base_ token (because we don't
-        // want to jump over subsequent comment or whitespace tokens).
+      auto start_iter = iter;
+      if (iter.match_identifier("pragma") && iter.peek_identifier("once")) {
+        // Erase "pragma ... once", leaving "#\n".
         iter.erase_back_to(tokens, start_iter);
         found = true;
-        // Note: There can be more than one #pragma once.
-        continue;
-      } else {
-        iter.advance_to(Tt::kEndOfDirective);
-        if (!iter) break;
+        // Note: There can be more than one #pragma once, so we don't break out.
       }
+      iter.advance_to(Tt::kEndOfDirective);
+      if (!iter) break;
     }
     ++iter;
   }
