@@ -1795,6 +1795,41 @@ __global__ void nontype_kernel() {}
 #undef JITIFY_NONTYPE_REFLECTION_TEST
 }
 
+static const StringVec& get_jitsafe_headers_list() {
+  static StringVec headers = [] {
+    StringVec result;
+    for (const auto& name_source : jitify2::detail::get_jitsafe_headers_map()) {
+      result.push_back(name_source.first);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+  }();
+  return headers;
+}
+
+TEST(Jitify2Test, BuiltinHeadersAllCompatible) {
+  std::string source;
+  for (const std::string& header_name : get_jitsafe_headers_list()) {
+    source += "#include <" + header_name + ">\n";
+  }
+  CompiledProgram compiled =
+      jitify2::Program("my_program", source)->preprocess({"-std=c++17"})->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_EQ(compiled->log(), "");
+}
+
+TEST(Jitify2Test, BuiltinHeadersIndividual) {
+  for (const std::string& header_name : get_jitsafe_headers_list()) {
+    std::string source = "#include <" + header_name + ">\n";
+    CompiledProgram compiled =
+      jitify2::Program("my_program", source)->preprocess({"-std=c++17"})->compile();
+    EXPECT_EQ(get_error(compiled), "");
+    if (compiled) {
+      EXPECT_EQ(compiled->log(), "");
+    }
+  }
+}
+
 TEST(Jitify2Test, BuiltinNumericLimitsHeader) {
   static const char* const source = R"(
 #include <limits>
@@ -2013,6 +2048,20 @@ TEST(Jitify2Test, LibCudaCxxAndBuiltinLimits) {
 
   PreprocessedProgram preprog =
       Program("limits_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  ASSERT_EQ(get_error(preprog), "");
+  CompiledProgram compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  ASSERT_EQ(compiled->log(), "");  // Ensure no warnings
+}
+
+TEST(Jitify2Test, LibCudaCxxAndBuiltinTuple) {
+  static const char* const source = R"(
+#include <tuple>
+#include <cuda/std/tuple>
+)";
+
+  PreprocessedProgram preprog =
+      Program("tuple_program", source)->preprocess({"-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   CompiledProgram compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
