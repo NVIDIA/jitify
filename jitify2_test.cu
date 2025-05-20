@@ -2195,6 +2195,17 @@ __global__ void my_kernel() {}
   ASSERT_EQ(compiled->ptx(), orig_ptx);
 }
 
+TEST(Jitify2Test, InvokeResult) {
+  static const std::string source = R"(
+#include <type_traits>
+double op(float, int) { return 0.0; }
+static_assert(
+    std::is_same<std::invoke_result_t<decltype(op), float, int>, double>::value,
+    "");
+)";
+  *Program("my_program", source)->preprocess()->compile();
+}
+
 bool read_binary_file(const char* filename, std::string* contents) {
   std::ifstream file(filename, std::ios::binary | std::ios::ate);
   if (!file) return false;

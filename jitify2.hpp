@@ -5211,6 +5211,9 @@ struct tuple_element<0, tuple<Head, Tail...>> {
 // TODO: This is incomplete.
 static const char* const jitsafe_header_type_traits = R"(
 #pragma once
+
+#include <utility>  // For std::declval
+
 #if __cplusplus >= 201103L
 namespace std {
 
@@ -5330,25 +5333,6 @@ template <class Ret, class... Args>
 struct is_function<Ret(Args...)> : true_type {};  // regular
 template <class Ret, class... Args>
 struct is_function<Ret(Args......)> : true_type {};  // variadic
-
-template <class>
-struct result_of;
-template <class F, typename... Args>
-struct result_of<F(Args...)> {
-  // TODO: This is a hack; a proper implem is quite complicated.
-  typedef typename F::result_type type;
-};
-// Note: We include this before C++17 for convenience.
-// TODO: This implementation is probably not standard-conforming.
-template <class F, class... Args>
-struct invoke_result : result_of<F(Args...)> {};
-
-#if __cplusplus >= 201402L
-template <class T>
-using result_of_t = typename result_of<T>::type;
-template <class F, class... Args>
-using invoke_result_t = typename invoke_result<F, Args...>::type;
-#endif  // __cplusplus >= 201402L
 
 template <class T> struct is_pointer                    : false_type {};
 template <class T> struct is_pointer<T*>                : true_type {};
@@ -5490,6 +5474,41 @@ struct remove_cvref {
 template <class T>
 using remove_cvref_t = typename remove_cvref<T>::type;
 #endif
+
+namespace __jitify_detail {
+// TODO: Need specialization for member function pointers.
+template <class T>
+struct invoke_impl {
+  template <class Func, class... Args>
+  static auto call(Func&& func, Args&&... args)
+      -> decltype(std::forward<Func>(func)(std::forward<Args>(args)...));
+};
+template <class Func, class... Args, class FuncDecayed = std::decay_t<Func>>
+auto invoke(Func&& func, Args&&... args)
+    -> decltype(invoke_impl<FuncDecayed>::call(std::forward<Func>(func),
+                                               std::forward<Args>(args)...));
+template <typename Void, typename, typename...>
+struct invoke_result {};
+template <typename Func, typename... Args>
+struct invoke_result<decltype(void(invoke(std::declval<Func>(),
+                                          std::declval<Args>()...))),
+                     Func, Args...> {
+  using type = decltype(invoke(std::declval<Func>(), std::declval<Args>()...));
+};
+}  // namespace __jitify_detail
+
+template<class> struct result_of;
+template <class Func, class... Args>
+struct result_of<Func(Args...)> :
+    __jitify_detail::invoke_result<void, Func, Args...> {};
+
+template <class Func, class... Args>
+struct invoke_result : __jitify_detail::invoke_result<void, Func, Args...> {};
+
+template <class T>
+using result_of_t = typename result_of<T>::type;
+template <class Func, class... Args>
+using invoke_result_t = typename invoke_result<Func, Args...>::type;
 
 template <class T, T v>
 struct integral_constant {
@@ -5698,7 +5717,6 @@ template <typename... Ts> using void_t = typename __jitify_make_void<Ts...>::typ
 
 static const char* const jitsafe_header_utility = R"(
 #pragma once
-#include <type_traits>
 
 namespace std {
 
@@ -5721,17 +5739,28 @@ pair<T1, T2> make_pair(const T1& first, const T2& second) {
 
 #if __cplusplus >= 201103L
 
+namespace __jitify_utility_detail {
+template <class T>
+struct type_identity { using type = T; };
+template <class T>
+auto add_rvalue_reference_impl(int) -> type_identity<T&&>;
+template <class T>
+auto add_rvalue_reference_impl(...) -> type_identity<T>;
+template <class T>
+struct add_rvalue_reference : decltype(add_rvalue_reference_impl<T>(0)) {};
+}  // namespace __jitify_utility_detail
+
 template <typename T>
 struct __jitify_always_false {
   static constexpr bool value = false;
 };
 template <typename T>
-typename std::add_rvalue_reference<T>::type declval() noexcept {
+typename __jitify_utility_detail::add_rvalue_reference<T>::type declval() noexcept {
   static_assert(__jitify_always_false<T>::value,
                 "declval not allowed in an evaluated context");
+}
 
 #endif  // __cplusplus >= 201103L
-}
 
 #if __cplusplus >= 201402L
 
