@@ -5044,6 +5044,10 @@ struct IntegerLimits {
     traps             = false
   };
 };
+
+#undef JITIFY_CXX11_NOEXCEPT
+#undef JITIFY_CXX11_CONSTEXPR
+
 }  // namespace __jitify_detail
 template <typename T>
 struct numeric_limits {
@@ -5139,14 +5143,29 @@ static const char* const jitsafe_header_sstream = R"(
 #include <istream>
 )";
 
-static const char* const jitsafe_header_stdexcept = R"(
+static const char* const jitsafe_header_exception = R"(
 #pragma once
 #include <string>
 namespace std {
-struct runtime_error {
-  explicit runtime_error( const string& what_arg );
-  explicit runtime_error( const char* what_arg );
-  virtual const char* what() const;
+class exception {
+ public:
+  exception() noexcept;
+  exception(const exception& other) noexcept;
+  exception& operator=(const exception& other) noexcept;
+  virtual ~exception() {}
+  virtual const char* what() const noexcept;
+};
+}  // namespace std
+)";
+
+static const char* const jitsafe_header_stdexcept = R"(
+#pragma once
+#include <exception>
+namespace std {
+struct runtime_error : public exception {
+  explicit runtime_error(const string& what_arg);
+  explicit runtime_error(const char* what_arg);
+  const char* what() const noexcept override;
 };
 }  // namespace std
 )";
@@ -5887,6 +5906,71 @@ int setitimer(int, const struct itimerval*, struct itimerval*);
 int utimes(const char*, const struct timeval[2]);
 )";
 
+static const char* const jitsafe_header_numeric = R"(
+#pragma once
+namespace std {
+
+#if __cplusplus >= 202002L
+#define JITIFY_CXX20_CONSTEXPR constexpr
+#else
+#define JITIFY_CXX20_CONSTEXPR
+#endif
+
+template <class InputIter, class T>
+JITIFY_CXX20_CONSTEXPR T accumulate(InputIter first, InputIter last, T init);
+
+template <class InputIter, class T, class BinaryOp>
+JITIFY_CXX20_CONSTEXPR T accumulate(
+    InputIter first, InputIter last, T init, BinaryOp op);
+
+template <class InputIter1, class InputIter2, class T>
+JITIFY_CXX20_CONSTEXPR T inner_product(
+    InputIter1 first1, InputIter1 last1, InputIter2 first2, T init);
+
+template <class InputIter1, class InputIter2, class T,
+         class BinaryOp1, class BinaryOp2>
+JITIFY_CXX20_CONSTEXPR T inner_product(
+    InputIter1 first1, InputIter1 last1, InputIter2 first2, T init,
+    BinaryOp1 op1, BinaryOp2 op2);
+
+template <class InputIter, class OutputIter>
+JITIFY_CXX20_CONSTEXPR OutputIter adjacent_difference(
+    InputIter first, InputIter last, OutputIter d_first);
+
+template <class InputIter, class OutputIter, class BinaryOp>
+JITIFY_CXX20_CONSTEXPR OutputIter adjacent_difference(
+    InputIter first, InputIter last, OutputIter d_first, BinaryOp op);
+
+template <class InputIter, class OutputIter>
+JITIFY_CXX20_CONSTEXPR OutputIter partial_sum(
+    InputIter first, InputIter last, OutputIter d_first);
+
+template <class InputIter, class OutputIter, class BinaryOp>
+JITIFY_CXX20_CONSTEXPR OutputIter partial_sum(
+    InputIter first, InputIter last, OutputIter d_first, BinaryOp op);
+
+#if __cplusplus >= 201103L
+
+template <class ForwardIter, class T>
+JITIFY_CXX20_CONSTEXPR void iota(ForwardIter first, ForwardIter last, T value);
+
+#endif  // __cplusplus >= 201103L
+
+// TODO: More functions added since C++17.
+
+#undef JITIFY_CXX20_CONSTEXPR
+
+}  // namespace std
+)";
+
+static const char* const jitsafe_header_cxxabi_h = R"(
+#pragma once
+namespace abi {
+extern "C" char* __cxa_demangle(
+    const char* mangled_name, char* output_buffer, size_t* length, int* status);
+}  // namespace abi
+)";
+
 // WAR: These need to be pre-added as a workaround for NVRTC implicitly using
 // /usr/include as an include path. The other built-in headers will be included
 // lazily as needed.
@@ -5935,6 +6019,7 @@ static const StringMap& get_jitsafe_headers_map() {
       {"mutex", jitsafe_header_mutex},
       {"ostream", jitsafe_header_ostream},
       {"sstream", jitsafe_header_sstream},
+      {"exception", jitsafe_header_exception},
       {"stdexcept", jitsafe_header_stdexcept},
       {"string", jitsafe_header_string},
       {"tuple", jitsafe_header_tuple},
@@ -5948,6 +6033,8 @@ static const StringMap& get_jitsafe_headers_map() {
       {"iomanip", jitsafe_header_iomanip},
       {"typeinfo", jitsafe_header_typeinfo},
       {"sys/time.h", jitsafe_header_sys_time},
+      {"numeric", jitsafe_header_numeric},
+      {"cxxabi.h", jitsafe_header_cxxabi_h},
   };
   return jitsafe_headers_map;
 }
