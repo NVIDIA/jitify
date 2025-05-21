@@ -48,16 +48,15 @@ It provides a simple API for compiling and executing CUDA source code at runtime
   dim3 grid(1), block(1);
   float* data;
   cudaMalloc((void**)&data, sizeof(float));
-  jitify2::LoadedProgram program =
-      jitify2::Program(program_name, program_source)
-          // Preprocess source code and load all included headers.
-          ->preprocess({"-std=c++14"})
-          // Compile, link, and load the program, and obtain the loaded kernel.
-          ->get_kernel("my_kernel<float>")
-          // Configure the kernel launch.
-          ->configure(grid, block)
-          // Launch the kernel.
-          ->launch(data);
+  jitify2::Program(program_name, program_source)
+      // Preprocess source code and load all included headers.
+      ->preprocess({"-std=c++14"})
+      // Compile, link, and load the program, and obtain the loaded kernel.
+      ->get_kernel("my_kernel<float>")
+      // Configure the kernel launch.
+      ->configure(grid, block)
+      // Launch the kernel.
+      ->launch(data);
 ```
 
 <a name="error_handling"/>
@@ -96,6 +95,26 @@ call or when a method such as `launch()` fails:
         ->launch();
   }
 ```
+
+Most errors are simple strings, but compilation errors contain
+additional information that can be accessed via the `info()` method:
+
+```
+  jitify2::PreprocessedProgram preprocessed =
+      jitify2::Program("bad_program", "NOT CUDA C!")->preprocess();
+  assert(!preprocessed.ok());
+  const jitify2::ErrorMsg error = preprocessed.error();
+  std::cerr << error << std::endl;                  // Full error message
+  std::cerr << error.info("error") << std::endl;    // "NVRTC_ERROR_COMPILATION"
+  std::cerr << error.info("log") << std::endl;      // "error: identifier "NOT" is undefined..."
+  std::cerr << error.info("options") << std::endl;  // "-include=jitify_preinclude.h ..."
+  std::cerr << error.info("headers") << std::endl;  // (empty)
+```
+
+By default, the full error message only includes the error name
+and compile log. To also include compiler options and headers
+in this message, define the macro `JITIFY_VERBOSE_ERRORS=1` before
+including `jitify2.hpp`.
 
 <a name="basic_workflow"/>
 
@@ -208,8 +227,11 @@ The unit tests can be built and run using CMake as follows:
 
 ```bash
 $ mkdir build && cd build && cmake ..
-$ make check
+$ make check -j6
 ```
+
+Note that the tests in `jitify2_test.cu` may also be useful as a form of
+documentation for many jitify features.
 
 <a name="build_options"/>
 
@@ -260,6 +282,25 @@ $ make check
   built-in demangler implementation. This requires at least CUDA
   version 11.4, and the application must be linked with the
   libcufilt.a static library.
+
+- `JITIFY_ENABLE_NVTX=0`
+
+  Defining this macro to 1 before including the jitify header causes
+  NVTX ranges to be emitted around important functions and cache
+  hits/misses.
+
+- `JITIFY_VERBOSE_ERRORS=0`
+
+  Defining this macro to 1 before including the jitify header causes
+  compilation errors to include options and header info in the error
+  message. Note that this info can always be accessed manually via
+  the `info()` method of the error object.
+
+- `JITIFY_IGNORE_NOT_TRIVIALLY_COPYABLE_ARGS=0`
+
+  Defining this macro to 1 before including the jitify header
+  disables the static assertion that kernel launch arguments are
+  trivially copyable.
 
 <a name="compiler_options"/>
 
@@ -334,8 +375,9 @@ options), some trigger special behavior in Jitify as detailed below:
 - `-std=<std>`
 
   Unless otherwise specified, this flag is automatically passed to
-  NVRTC for all kernels and is set to `c++11` (which is the minimum
-  requirement for Jitify itself). Jitify also supports the value
+  NVRTC for all kernels and is set to the same C++ dialect as the
+  host binary is compiled for (i.e., matching
+  __cplusplus/_MSVC_LANG). Jitify also supports the value
   `-std=c++03` for explicitly selecting the `C++03` standard.
 
 - `--minify (-m)`

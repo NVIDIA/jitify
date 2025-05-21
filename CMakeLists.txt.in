@@ -13,3 +13,13 @@ ExternalProject_Add(googletest
   INSTALL_COMMAND   ""
   TEST_COMMAND      ""
 )
+ExternalProject_Add(nvtx3
+  GIT_REPOSITORY    https://github.com/NVIDIA/NVTX.git
+  GIT_TAG           release-v3
+  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/nvtx-src"
+  BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/nvtx-build"
+  CONFIGURE_COMMAND ""
+  BUILD_COMMAND     ""
+  INSTALL_COMMAND   ""
+  TEST_COMMAND      ""
+)

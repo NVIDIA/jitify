@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2024, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2017-2025, NVIDIA CORPORATION. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,6 +27,8 @@
  */
 
 #define JITIFY_ENABLE_EXCEPTIONS 1
+#define JITIFY_ENABLE_NVTX 1
+#define JITIFY_VERBOSE_ERRORS 1
 #include "jitify2.hpp"
 
 #include "example_headers/class_arg_kernel.cuh"
@@ -37,6 +39,13 @@
 #include <iostream>
 #include <string>
 #include <vector>
+
+#if defined _WIN32 || defined _WIN64
+#include <direct.h>
+#define chdir _chdir
+#else
+#include <unistd.h>
+#endif
 
 #include "gtest/gtest.h"
 
@@ -254,6 +263,54 @@ __global__ void my_kernel2(const float* indata, float* outdata) {
   EXPECT_FLOAT_EQ(inval, outval);
 }
 
+TEST(Jitify2Test, StdFlag) {
+  static const char* const source = R"(
+__global__ void my_kernel(long* cplusplus) {
+  *cplusplus = __cplusplus;
+}
+)";
+
+  long h_data = 0;
+  long* data;
+  CHECK_CUDART(cudaMalloc((void**)&data, sizeof(*data)));
+
+  ASSERT_EQ(Program("my_program", source)
+                ->preprocess()
+                ->get_kernel("my_kernel")
+                ->configure(1, 1)
+                ->launch(data),
+            "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaDeviceSynchronize());
+  // Default should be same as host binary.
+  EXPECT_EQ(h_data, JITIFY_CPLUSPLUS);
+
+  ASSERT_EQ(Program("my_program", source)
+                ->preprocess({"-std=c++03"})
+                ->get_kernel("my_kernel")
+                ->configure(1, 1)
+                ->launch(data),
+            "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaDeviceSynchronize());
+  EXPECT_EQ(h_data, 199711L);
+
+  ASSERT_EQ(Program("my_program", source)
+                ->preprocess({"-std=c++14"})
+                ->get_kernel("my_kernel")
+                ->configure(1, 1)
+                ->launch(data),
+            "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaDeviceSynchronize());
+  EXPECT_EQ(h_data, 201402L);
+
+  CHECK_CUDART(cudaFree(data));
+}
+
 TEST(Jitify2Test, LaunchLatencyBenchmark) {
   static const char* const source = R"(
 template <int N, int M, typename T, typename U>
@@ -335,6 +392,17 @@ inline bool remove_empty_dir(const char* path) {
 #endif
 }
 
+#define JITIFY_TEST_CHECK_HITS(expected_hits, expected_misses,                 \
+                               expected_file_hits, expected_file_misses)       \
+  {                                                                            \
+    size_t num_hits, num_misses, num_file_hits, num_file_misses;               \
+    cache.get_stats(&num_hits, &num_misses, &num_file_hits, &num_file_misses); \
+    EXPECT_EQ(num_hits, expected_hits);                                        \
+    EXPECT_EQ(num_misses, expected_misses);                                    \
+    EXPECT_EQ(num_file_hits, expected_file_hits);                              \
+    EXPECT_EQ(num_file_misses, expected_file_misses);                          \
+  }
+
 TEST(Jitify2Test, ProgramCache) {
   static const char* const source = R"(
 template <typename T>
@@ -346,53 +414,49 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   static const char* const cache_path = "jitify2_test_cache/subdir";
   ProgramCache<key_type> cache(max_size,
                                *Program("my_program", source)->preprocess(),
-                               nullptr, cache_path);
+                               nullptr, cache_path, /*max_files=*/max_size + 1);
   ScopeGuard scoped_cleanup_files([&] {
     cache.clear();
     remove_empty_dir(cache_path);
     remove_empty_dir(cache_path0);
   });
 
-  auto check_hits = [&](size_t expected_hits, size_t expected_misses) {
-    size_t num_hits, num_misses;
-    cache.get_stats(&num_hits, &num_misses);
-    EXPECT_EQ(num_hits, expected_hits);
-    EXPECT_EQ(num_misses, expected_misses);
-  };
-
   Kernel kernel;
   Template my_kernel("my_kernel");
 
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   ASSERT_EQ(kernel->configure(1, 1)->launch(nullptr, nullptr), "");
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 0, 1);
   kernel = cache.get_kernel(/* key = */ 1, my_kernel.instantiate<double>());
   ASSERT_EQ(get_error(kernel), "");
-  check_hits(0, 2);
+  JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_int = kernel->function();
-  check_hits(0, 3);
+  JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_float = kernel->function();
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_int);
-  check_hits(1, 1);
+  JITIFY_TEST_CHECK_HITS(1, 1, 1, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_float);
-  check_hits(2, 1);
+  JITIFY_TEST_CHECK_HITS(2, 1, 1, 0);
   LoadedProgram program =
       cache.get_program(/* key = */ 2, {my_kernel.instantiate<int>()});
   ASSERT_EQ(get_error(program), "");
-  check_hits(3, 1);
+  JITIFY_TEST_CHECK_HITS(3, 1, 1, 0);
+  kernel = cache.get_kernel(/* key = */ 1, my_kernel.instantiate<double>());
+  ASSERT_EQ(get_error(kernel), "");
+  JITIFY_TEST_CHECK_HITS(3, 2, 2, 0);
 
   // Make sure cache dir was created.
   bool cache_path_is_dir;
@@ -403,7 +467,7 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   // Now clear the cache.
   ASSERT_TRUE(cache.clear());
   EXPECT_EQ(cache.max_in_mem(), max_size);
-  EXPECT_EQ(cache.max_files(), max_size);
+  EXPECT_EQ(cache.max_files(), max_size + 1);
   // Make sure cache dir still exists.
   ASSERT_TRUE(jitify2::detail::path_exists(cache_path, &cache_path_is_dir));
   ASSERT_TRUE(cache_path_is_dir);
@@ -429,52 +493,48 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   static const char* const cache_path0 = "jitify2_test_cache";
   static const char* const cache_path = "jitify2_test_cache/subdir";
   ProgramCache<> cache(max_size, *Program("my_program", source)->preprocess(),
-                       nullptr, cache_path);
+                       nullptr, cache_path, /*max_files=*/max_size + 1);
   ScopeGuard scoped_cleanup_files([&] {
     cache.clear();
     remove_empty_dir(cache_path);
     remove_empty_dir(cache_path0);
   });
 
-  auto check_hits = [&](size_t expected_hits, size_t expected_misses) {
-    size_t num_hits, num_misses;
-    cache.get_stats(&num_hits, &num_misses);
-    EXPECT_EQ(num_hits, expected_hits);
-    EXPECT_EQ(num_misses, expected_misses);
-  };
-
   Kernel kernel;
   Template my_kernel("my_kernel");
 
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   ASSERT_EQ(kernel->configure(1, 1)->launch(nullptr, nullptr), "");
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 0, 1);
   kernel = cache.get_kernel(my_kernel.instantiate<double>());
   ASSERT_EQ(get_error(kernel), "");
-  check_hits(0, 2);
+  JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_int = kernel->function();
-  check_hits(0, 3);
+  JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
-  check_hits(0, 0);
+  JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   CUfunction function_float = kernel->function();
-  check_hits(0, 1);
+  JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_int);
-  check_hits(1, 1);
+  JITIFY_TEST_CHECK_HITS(1, 1, 1, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
   EXPECT_EQ(kernel->function(), function_float);
-  check_hits(2, 1);
+  JITIFY_TEST_CHECK_HITS(2, 1, 1, 0);
   LoadedProgram program = cache.get_program({my_kernel.instantiate<int>()});
   ASSERT_EQ(get_error(program), "");
-  check_hits(3, 1);
+  JITIFY_TEST_CHECK_HITS(3, 1, 1, 0);
+  kernel = cache.get_kernel(my_kernel.instantiate<double>());
+  ASSERT_EQ(get_error(kernel), "");
+  JITIFY_TEST_CHECK_HITS(3, 2, 2, 0);
 
   // Make sure cache dir was created.
   bool cache_path_is_dir;
@@ -485,7 +545,7 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   // Now clear the cache.
   ASSERT_TRUE(cache.clear());
   EXPECT_EQ(cache.max_in_mem(), max_size);
-  EXPECT_EQ(cache.max_files(), max_size);
+  EXPECT_EQ(cache.max_files(), max_size + 1);
   // Make sure cache dir still exists.
   ASSERT_TRUE(jitify2::detail::path_exists(cache_path, &cache_path_is_dir));
   ASSERT_TRUE(cache_path_is_dir);
@@ -501,6 +561,8 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   EXPECT_EQ(cache.max_in_mem(), max_size + 1);
   EXPECT_EQ(cache.max_files(), max_size + 2);
 }
+
+#undef JITIFY_TEST_CHECK_HITS
 
 TEST(Jitify2Test, ProgramCacheFilenameSanitization) {
   static const char* const source = R"(__global__ void my_kernel() {})";
@@ -607,56 +669,8 @@ TEST(Jitify2Test, PathJoin) {
 #endif
 }
 
-TEST(Jitify2Test, PathSimplify) {
-  EXPECT_EQ(jitify2::detail::path_simplify(""), "");
-  EXPECT_EQ(jitify2::detail::path_simplify("/"), "/");
-  EXPECT_EQ(jitify2::detail::path_simplify("//"), "/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar"), "/foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar"), "foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/./bar"), "/foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/./bar"), "foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar"), "bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/cat/../../bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/cat/../../bar"), "bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/./bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("./bar"), "bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("../bar"), "../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("../../bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("../.././bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify(".././../bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("./../../bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/.."), "/foo");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar/.."), "foo");
-  EXPECT_EQ(jitify2::detail::path_simplify("//foo///..////bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/"), "foo/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/"), "/foo/");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar/"), "foo/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/"), "/foo/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar/"), "bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar/"), "/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/../foo"), "");  // Invalid path
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../../bar"), // Invalid path
-            "");
-  EXPECT_EQ(jitify2::detail::path_simplify("/.."), "");  // Invalid path
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../.."), "");  // Invalid path
-#if defined _WIN32 || defined _WIN64
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\)"), R"(\)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\\)"), R"(\)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\bar)"), R"(\foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\bar)"), R"(foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\.\bar)"), R"(\foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\.\bar)"), R"(foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\..\bar)"), R"(\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\..\bar)"), R"(bar)");
-
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar)"),
-            R"(\foo/bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\./cat)"),
-            R"(\foo/bar\cat)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)"),
-            R"(\foo/cat)");
-#endif
+TEST(Jitify2Test, GetNvrtcBuildVersion) {
+  EXPECT_NE(jitify2::detail::get_nvrtc_build_version(), -1);
 }
 
 TEST(Jitify2Test, Program) {
@@ -697,11 +711,18 @@ TEST(Jitify2Test, PreprocessedProgram) {
 __global__ void my_kernel() {}
 )";
   static const char* const header_name = "my_header1.cuh";
+
+  Program empty_program(name, "");
+  ASSERT_EQ(get_error(empty_program), "");
+  PreprocessedProgram empty_preprog =
+      empty_program->preprocess({"-no-preinclude-workarounds"});
+  ASSERT_TRUE(static_cast<bool>(empty_preprog));
+
   Program program(name, source);
   ASSERT_EQ(get_error(program), "");
   PreprocessedProgram preprog = program->preprocess();
   ASSERT_EQ(static_cast<bool>(preprog), false);
-  EXPECT_TRUE(CONTAINS(preprog.error(), "File not found"));
+  EXPECT_TRUE(CONTAINS(preprog.error(), "could not open source file"));
   preprog = program->preprocess({"-Iexample_headers"}, {"-lfoo"});
   ASSERT_EQ(get_error(preprog), "");
   EXPECT_EQ(preprog->name(), name);
@@ -711,6 +732,199 @@ __global__ void my_kernel() {}
   EXPECT_EQ(preprog->remaining_linker_options(), StringVec({"-lfoo"}));
   EXPECT_NE(preprog->header_log(), "");
   EXPECT_EQ(preprog->compile_log(), "");
+
+  // Ensure that the --disable-warnings flag doesn't break things.
+  preprog = program->preprocess(
+      {"-Iexample_headers", "--disable-warnings", "-w"}, {"-lfoo"});
+  ASSERT_EQ(get_error(preprog), "");
+  CompiledProgram compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+}
+
+TEST(Jitify2Test, EncodedQuoteIncludes) {
+  // This tests that encoding of quote-includes works, and that the full include
+  // path is not left in the modified header source.
+  // Note that cuda_fp16.h contains `#include "cuda_fp16.hpp"`, which will be
+  // encoded with the cuda include dir.
+  static const char* const source = R"(
+#include <cuda_fp16.h>
+#include "example_headers/my_header1.cuh"
+__global__ void my_kernel() {}
+)";
+  auto preprog = Program("my_program", source)
+                     ->preprocess({"-I.", "-Iexample_headers", "-Ifoo/bar",
+                                   "-I" CUDA_INC_DIR});
+  ASSERT_EQ(get_error(preprog), "");
+  auto compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  // Note: The '2' in "I2@" here is the index of the cuda include dir amongst
+  // the "-I" options (excluding invalid paths like "foo/bar").
+  EXPECT_TRUE(
+      preprog->header_sources().at("cuda_fp16.h").find("__jitify_I2@") !=
+      std::string::npos);
+  std::string cwd = jitify2::detail::get_real_path(".");
+  for (const auto& name_header : preprog->header_sources()) {
+    const std::string& header_name = name_header.first;
+    const std::string& header_source = name_header.second;
+    EXPECT_FALSE(header_name.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_source.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_name.find(cwd) != std::string::npos);
+  }
+  // Repeat without "-I.", which will rely on the implicit current working
+  // directory include path for quote includes.
+  preprog = Program("my_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  ASSERT_EQ(get_error(preprog), "");
+  EXPECT_TRUE(
+      preprog->header_sources().at("cuda_fp16.h").find("__jitify_I0@") !=
+      std::string::npos);
+  for (const auto& name_header : preprog->header_sources()) {
+    const std::string& header_name = name_header.first;
+    const std::string& header_source = name_header.second;
+    EXPECT_FALSE(header_name.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_source.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_name.find(cwd) != std::string::npos);
+  }
+}
+
+TEST(Jitify2Test, ExplicitHeaderSources) {
+  // TODO: This is currently only testing preprocess(), not compile(). We need
+  // to test compile() as well, because it behaves differently and may be the
+  // more common use-case.
+  // This test checks how the keys in a user-provided header_sources map are
+  // matched to #include directives in the source.
+  static const std::string good_header = R"()";
+  static const std::string bad_header =
+      R"(#error TEST FAIL: WRONG HEADER FOUND)";
+  static const std::string angle_header = R"(#include <bar>)";
+  static const std::string quote_header = R"(#include "bar")";
+  static const std::string quote_abs_header = R"(#include "/bar")";
+  PreprocessedProgram preprog;
+  preprog = Program("my_program", R"(#include <foo>)", {{"foo", good_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog =
+      Program("my_program", R"(#include <foo/bar>)", {{"foo/bar", good_header}})
+          ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include <foo/angle>)",
+                    {{"foo/angle", angle_header},
+                     {"bar", good_header},
+                     {"foo/bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include "foo")",
+                    {{"foo", good_header}, {"/foo", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include "foo/bar")",
+                    {{"foo/bar", good_header},
+                     {"/foo/bar", bad_header},
+                     {"bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include <foo/quote>)",
+                    {{"foo/quote", quote_header},
+                     {"foo/bar", good_header},
+                     {"bar", bad_header},
+                     {"/foo/bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  // Relative include takes precedence over -I path.
+  preprog = Program("my_program", R"(#include <foo/quote>)",
+                    {{"foo/quote", quote_header},
+                     {"foo/bar", good_header},
+                     {"bar", bad_header},
+                     {"/foo/bar", bad_header}})
+                ->preprocess({"-I."});
+  ASSERT_EQ(get_error(preprog), "");
+  // Finding a header at "." from a quote-include in a subdir requires
+  // explicitly passing the current dir as an include path ("-I.").
+  preprog = Program("my_program", R"(#include <foo/quote>)",
+                    {{"foo/quote", quote_header},
+                     {"bar", good_header},
+                     {"/foo/bar", bad_header}})
+                ->preprocess({"-I."});
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include </foo/bar>)",
+                    {{"/foo/bar", good_header},
+                     {"foo/bar", bad_header},
+                     {"bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include "/foo/bar")",
+                    {{"/foo/bar", good_header},
+                     {"foo/bar", bad_header},
+                     {"bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", R"(#include <foo/quote_abs>)",
+                    {{"foo/quote_abs", quote_abs_header},
+                     {"/bar", good_header},
+                     {"bar", bad_header},
+                     {"/foo/bar", bad_header},
+                     {"foo/bar", bad_header}})
+                ->preprocess();
+  ASSERT_EQ(get_error(preprog), "");
+}
+
+TEST(Jitify2Test, ExtraHeaderSourcesOverride) {
+  // This tests that includes can be overridden by extra_header_sources.
+  static const char* const source = R"(
+#ifdef USE_QUOTE_INCLUDE
+#include "example_headers/my_header1.cuh"
+#else
+#include <example_headers/my_header1.cuh>
+#endif
+
+template <typename T>
+__global__ void my_kernel(T* data) {
+  *data = cube(*data);
+}
+)";
+  static const char* const header = R"(
+template <typename T>
+__device__ T cube(T x) { return x * x * x; }
+)";
+  // Test angle-include.
+  PreprocessedProgram preprog =
+      Program("my_program", source)->preprocess({"-I."});
+  ASSERT_EQ(get_error(preprog), "");
+  Kernel kernel = preprog->get_kernel(
+      "my_kernel<int>", {}, {{"example_headers/my_header1.cuh", header}});
+  ASSERT_EQ(get_error(kernel), "");
+
+  // Test quote-include.
+  // Note that this requires the use of jitify2::quote_include_name().
+  // Note also that this isn't really recommended. It's likely better to use
+  // angle-includes, or to use "-include" to add a completely new header.
+  preprog = Program("my_program", source)
+                ->preprocess({"-DUSE_QUOTE_INCLUDE", "-I" CUDA_INC_DIR});
+  ASSERT_EQ(get_error(preprog), "");
+  kernel = preprog->get_kernel(
+      "my_kernel<int>", {},
+      {{jitify2::quote_include_name("example_headers/my_header1.cuh"),
+        header}});
+  ASSERT_EQ(get_error(kernel), "");
+}
+
+TEST(Jitify2Test, Preincludes) {
+  // This tests that preincludes get preprocessed and that absolute paths are
+  // handled correctly. Note that cuda.h includes <stdlib.h>, so it must be
+  // preprocessed by Jitify (not simply loaded directly by NVRTC) to work.
+  static const std::string source = R"(
+#ifndef CUDA_VERSION
+#error TEST FAILED
+#endif
+)";
+  PreprocessedProgram preprog;
+  preprog = Program("my_program", source)
+                ->preprocess({"--pre-include=" CUDA_INC_DIR "/cuda.h"});
+  ASSERT_EQ(get_error(preprog), "");
+  preprog = Program("my_program", source)
+                ->preprocess({"-include=" CUDA_INC_DIR "/cuda.h"});
+  ASSERT_EQ(get_error(preprog), "");
 }
 
 TEST(Jitify2Test, CompiledProgram) {
@@ -866,6 +1080,20 @@ TEST(Jitify2Test, InvalidPrograms) {
       "");
   // Not OK.
   EXPECT_NE(get_error(Program("bad_program", "NOT CUDA C!")->preprocess()), "");
+
+  // Check that the returned error object contains correct extra info.
+  PreprocessedProgram preprocessed =
+      Program("bad_program", "NOT CUDA C!")->preprocess();
+  EXPECT_FALSE(preprocessed.ok());
+  const ErrorMsg error = preprocessed.error();
+  EXPECT_TRUE(error.find("Compilation failed:") != std::string::npos);
+  EXPECT_THROW(error.info("foo"), std::runtime_error);
+  EXPECT_EQ(error.info("error"), "NVRTC_ERROR_COMPILATION");
+  EXPECT_TRUE(error.info("log").find("identifier \"NOT\" is undefined") !=
+              std::string::npos);
+  EXPECT_TRUE(error.info("options").find("-default-device") !=
+              std::string::npos);
+  EXPECT_EQ(error.info("headers"), "");
 }
 
 TEST(Jitify2Test, CompileLTO_IR) {
@@ -882,6 +1110,8 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_GT(program->nvvm().size(), 0);
   EXPECT_EQ(program->nvvm().size(), program->lto_ir().size());
   int current_arch = get_current_device_arch();
+  current_arch =
+      jitify2::detail::limit_to_supported_compute_capability(current_arch);
   LinkedProgram linked_program = program->link();
   if (CUDA_VERSION < 11040) {
     ASSERT_FALSE(linked_program.ok());
@@ -1257,6 +1487,24 @@ __global__ void foo_kernel(int* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+TEST(Jitify2Test, Option) {
+  Option option;
+  EXPECT_FALSE(static_cast<bool>(option));
+  option = Option("--restrict");
+  EXPECT_TRUE(static_cast<bool>(option));
+  EXPECT_EQ(option.key(), "--restrict");
+  EXPECT_EQ(option.value(), "");
+  option = Option("-include", "foo/bar");
+  EXPECT_TRUE(static_cast<bool>(option));
+  EXPECT_EQ(option.key(), "-include");
+  EXPECT_EQ(option.value(), "foo/bar");
+  option = Option("-include=foo/bar");
+  EXPECT_TRUE(static_cast<bool>(option));
+  EXPECT_EQ(option.key(), "-include");
+  EXPECT_EQ(option.value(), "foo/bar");
+  EXPECT_EQ(option.key_and_value(), "-include=foo/bar");
+}
+
 TEST(Jitify2Test, OptionsVec) {
   OptionsVec options0;
   EXPECT_TRUE(options0.ok());
@@ -1326,6 +1574,8 @@ TEST(Jitify2Test, ArchFlags) {
 const int arch = __CUDA_ARCH__ / 10;
 )";
   int current_arch = get_current_device_arch();
+  current_arch =
+      jitify2::detail::limit_to_supported_compute_capability(current_arch);
   int arch;
   // Test default behavior (automatic architecture detection).
   PreprocessedProgram preprocessed =
@@ -1345,19 +1595,20 @@ const int arch = __CUDA_ARCH__ / 10;
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, 50);
 
-  auto expect_cubin_size_if_available = [](size_t cubin_size) {
-    if (jitify2::nvrtc().GetCUBIN()) {
-      EXPECT_GT(cubin_size, 0);
-    } else {
-      EXPECT_EQ(cubin_size, 0);
-    }
-  };
+#define JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(cubin_size) \
+  do {                                                    \
+    if (jitify2::nvrtc().GetCUBIN()) {                    \
+      EXPECT_GT(cubin_size, 0);                           \
+    } else {                                              \
+      EXPECT_EQ(cubin_size, 0);                           \
+    }                                                     \
+  } while (0)
 
   // Test explicit real architecture (may compile directly to CUBIN).
   program = preprocessed->compile(
       "", {}, {"-arch", "sm_" + std::to_string(current_arch)});
   EXPECT_GT(program->ptx().size(), 0);
-  expect_cubin_size_if_available(program->cubin().size());
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
@@ -1371,7 +1622,7 @@ const int arch = __CUDA_ARCH__ / 10;
   // Test automatic real architecture (may compile directly to CUBIN).
   program = preprocessed->compile("", {}, {"-arch=sm_."});
   EXPECT_GT(program->ptx().size(), 0);
-  expect_cubin_size_if_available(program->cubin().size());
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
 
@@ -1380,9 +1631,38 @@ const int arch = __CUDA_ARCH__ / 10;
                 ->preprocess({"-arch=sm_50"})
                 ->compile("", {}, {"-arch=sm_."});
   EXPECT_GT(program->ptx().size(), 0);
-  expect_cubin_size_if_available(program->cubin().size());
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
   EXPECT_EQ(arch, current_arch);
+
+#if CUDA_VERSION >= 12010
+  // Test architecture-specific "a" suffix.
+  program = Program("arch_flags_program", source)
+                ->preprocess({"-arch=compute_90a"})
+                ->compile("", {}, {"-arch=compute_90a"});
+  EXPECT_GT(program->ptx().size(), 0);
+  EXPECT_EQ(program->cubin().size(), 0);
+  EXPECT_NE(program->ptx().find(".target sm_90a"), std::string::npos);
+
+  program = Program("arch_flags_program", source)
+                ->preprocess({"-arch=sm_90a"})
+                ->compile("", {}, {"-arch=sm_90a"});
+  EXPECT_GT(program->ptx().size(), 0);
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
+  EXPECT_NE(program->ptx().find(".target sm_90a"), std::string::npos);
+#endif
+
+#if CUDA_VERSION >= 12090
+  // Test family-specific "f" suffix.
+  program = Program("arch_flags_program", source)
+                ->preprocess({"-arch=sm_100f"})
+                ->compile("", {}, {"-arch=sm_100f"});
+  EXPECT_GT(program->ptx().size(), 0);
+  JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
+  EXPECT_NE(program->ptx().find(".target sm_100f"), std::string::npos);
+#endif
+
+#undef JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE
 
   // Test that multiple architectures can be specified for preprocessing.
   program = Program("arch_flags_program", source)
@@ -1422,6 +1702,10 @@ const int arch = __CUDA_ARCH__ / 10;
   EXPECT_EQ(linker_options.count("--maxrregcount=100"), 1);
   EXPECT_EQ(linker_options.count("--generate-line-info"), 1);
   EXPECT_EQ(linker_options.count("--device-debug"), 1);
+
+  // TODO: Test "sm_90a/100a/120a".
+  //         Should possibly automatically add 'a' suffix when inferring arch
+  //         from current device.
 }
 
 struct Base {
@@ -1479,6 +1763,43 @@ __global__ void nontype_kernel() {}
 #undef JITIFY_NONTYPE_REFLECTION_TEST
 }
 
+static const StringVec& get_jitsafe_headers_list() {
+  static StringVec headers = [] {
+    StringVec result;
+    for (const auto& name_source : jitify2::detail::get_jitsafe_headers_map()) {
+      result.push_back(name_source.first);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+  }();
+  return headers;
+}
+
+TEST(Jitify2Test, BuiltinHeadersAllCompatible) {
+  std::string source;
+  for (const std::string& header_name : get_jitsafe_headers_list()) {
+    source += "#include <" + header_name + ">\n";
+  }
+  CompiledProgram compiled = jitify2::Program("my_program", source)
+                                 ->preprocess({"-std=c++17"})
+                                 ->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_EQ(compiled->log(), "");
+}
+
+TEST(Jitify2Test, BuiltinHeadersIndividual) {
+  for (const std::string& header_name : get_jitsafe_headers_list()) {
+    std::string source = "#include <" + header_name + ">\n";
+    CompiledProgram compiled = jitify2::Program("my_program", source)
+                                   ->preprocess({"-std=c++17"})
+                                   ->compile();
+    EXPECT_EQ(get_error(compiled), "");
+    if (compiled) {
+      EXPECT_EQ(compiled->log(), "");
+    }
+  }
+}
+
 TEST(Jitify2Test, BuiltinNumericLimitsHeader) {
   static const char* const source = R"(
 #include <limits>
@@ -1527,15 +1848,15 @@ __global__ void my_kernel() {}
 TEST(Jitify2Test, Thrust) {
   // clang-format off
   static const char* const source = R"(
-// WAR for header include issue (note: order of includes matters):
-//   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
-#include <cuda/std/cstdint>
-#include <cuda/std/cstddef>
-#include <cuda/std/type_traits>
-#include <cuda/std/limits>
-namespace std { using ::ptrdiff_t; }
+// WAR for NVRTC issue causing compilation error:
+//   `namespace "thrust" has no actual member "iterator_core_access"`.
+#define THRUST_WRAPPED_NAMESPACE jitify_thrust_ns_war
+#define THRUST_DISABLE_ABI_NAMESPACE
 
 #include <thrust/iterator/counting_iterator.h>
+
+using namespace jitify_thrust_ns_war;  // Part of WAR above
+
 __global__ void my_kernel(thrust::counting_iterator<int> begin,
                           thrust::counting_iterator<int> end) {
 })";
@@ -1564,12 +1885,12 @@ TEST(Jitify2Test, CubBlockPrimitives) {
 #define ProcessFloatMinusZero BaseDigitExtractor<KeyT>::ProcessFloatMinusZero
 #endif
 
-// WAR for header include issue (note: order of includes matters):
-//   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
-#include <cuda/std/cstdint>
-#include <cuda/std/cstddef>
-#include <cuda/std/type_traits>
-#include <cuda/std/limits>
+// WAR for issue in CUB shipped with CUDA 12.4-<12.8.
+// TODO(benbarsdell): Check exactly when this issue was fixed in CUB,
+// this is an upper-bound.
+#if CUB_VERSION < 200700
+#include <type_traits>
+#endif
 
 #include <cub/block/block_load.cuh>
 #include <cub/block/block_radix_sort.cuh>
@@ -1687,6 +2008,35 @@ __global__ void my_kernel() {}
                     "-no-system-headers-workaround", "-no-replace-pragma-once"})
       ->get_kernel("my_kernel");
 }
+
+// See GitHub issue #107.
+TEST(Jitify2Test, LibCudaCxxAndBuiltinLimits) {
+  static const char* const source = R"(
+#include <limits>
+#include <cuda/std/limits>
+)";
+
+  PreprocessedProgram preprog =
+      Program("limits_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  ASSERT_EQ(get_error(preprog), "");
+  CompiledProgram compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  ASSERT_EQ(compiled->log(), "");  // Ensure no warnings
+}
+
+TEST(Jitify2Test, LibCudaCxxAndBuiltinTuple) {
+  static const char* const source = R"(
+#include <tuple>
+#include <cuda/std/tuple>
+)";
+
+  PreprocessedProgram preprog =
+      Program("tuple_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  ASSERT_EQ(get_error(preprog), "");
+  CompiledProgram compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  ASSERT_EQ(compiled->log(), "");  // Ensure no warnings
+}
 #endif  // CUDA_VERSION >= 11000
 
 TEST(Jitify2Test, AssertHeader) {
@@ -1708,6 +2058,64 @@ __global__ void my_assert_kernel() {
   ASSERT_EQ(cudaDeviceSynchronize(), cudaErrorAssert);
   // NOTE: Assertion failure is a sticky error in CUDA, so the process can no
   // longer be used for CUDA operations after this point.
+}
+
+TEST(Jitify2Test, LineNumbers) {
+  // This checks that line numbers are maintained after preprocessing replaces
+  // #pragma once directives etc.
+  static const char* const source = R"(
+#include <test_line_numbers.cuh>
+)";
+  static const char* const header_source = R"(// Line 1
+// Line 2
+#pragma once  // Line 3
+// Line 4
+#warning TEST_WARNING  // Line 5
+)";
+  CompiledProgram compiled =
+      jitify2::Program("line_numbers_program", source,
+                       {{"test_line_numbers.cuh", header_source}})
+          ->preprocess()
+          ->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  const std::string expected =
+      "test_line_numbers.cuh(5): warning #1105-D: #warning directive: "
+      "TEST_WARNING";
+  EXPECT_EQ(compiled->log().substr(0, expected.size()), expected);
+}
+
+TEST(Jitify2Test, IncludeDirectoryOrder) {
+  static const char* const source = R"(
+#include <my_header1.cuh>
+
+__global__ void my_kernel(int* data) {
+  *data = square(*data);
+}
+)";
+  std::unique_ptr<const char, int (*)(const char*)> tmp_header_filename(
+      "my_header1.cuh", std::remove);
+  // Create empty header in current directory with same name as correct header.
+  std::ofstream tmp_header(tmp_header_filename.get());
+
+  // Passing -I. first should cause the empty header to be used, which will
+  // fail.
+  PreprocessedProgram preprog =
+      jitify2::Program("include_dirs_program", source)
+          ->preprocess(
+              {"-I.", "-Iexample_headers", "-no-preinclude-workarounds",
+               "-no-system-headers-workaround", "-arch=sm_80", "-std=c++17"});
+  ASSERT_NE(get_error(preprog), "");
+  EXPECT_TRUE(preprog.error().find("identifier \"square\" is undefined") !=
+              std::string::npos);
+  // Passing -Iexample_headers first should succeed.
+  CompiledProgram compiled =
+      jitify2::Program("include_dirs_program", source)
+          ->preprocess(
+              {"-Iexample_headers", "-I.", "-no-preinclude-workarounds",
+               "-no-system-headers-workaround", "-arch=sm_80", "-std=c++17"})
+          ->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_EQ(compiled->log(), "");
 }
 
 TEST(Jitify2Test, Minify) {
@@ -1753,10 +2161,12 @@ const char c = '\xff';
 
 // WAR for header include issue (note: order of includes matters):
 //   https://github.com/NVIDIA/jitify/issues/107#issuecomment-1225617951
+// clang-format off
 #include <cuda/std/cstdint>
 #include <cuda/std/cstddef>
 #include <cuda/std/type_traits>
 #include <cuda/std/limits>
+// clang-format on
 
 // CUB headers can be tricky to parse.
 #include <cub/block/block_load.cuh>
@@ -1787,6 +2197,17 @@ __global__ void my_kernel() {}
   compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
   ASSERT_EQ(compiled->ptx(), orig_ptx);
+}
+
+TEST(Jitify2Test, InvokeResult) {
+  static const std::string source = R"(
+#include <type_traits>
+double op(float, int) { return 0.0; }
+static_assert(
+    std::is_same<std::invoke_result_t<decltype(op), float, int>, double>::value,
+    "");
+)";
+  *Program("my_program", source)->preprocess()->compile();
 }
 
 bool read_binary_file(const char* filename, std::string* contents) {
@@ -1879,6 +2300,458 @@ TEST(Jitify2Test, SerializationGoldensLinkedProgram) {
         "some cubin", {{"name", "lowered_name"}}, "log", {"-lfoo"}));
   });
 }
+
+void expect_tokenization(const char* source,
+                         std::vector<parser::Token::Type> expected_types,
+                         std::vector<std::string> expected_token_strings) {
+  using namespace jitify2::parser;
+  CppLexer lexer(source);
+  std::vector<Token> tokens;
+  Token cur_token = lexer.next();
+  while (cur_token) {
+    tokens.push_back(cur_token);
+    cur_token = lexer.next();
+  }
+  std::vector<Token::Type> types;
+  std::vector<std::string> token_strings;
+  types.reserve(tokens.size());
+  token_strings.reserve(tokens.size());
+  for (const Token& token : tokens) {
+    types.push_back(token.type());
+    token_strings.push_back(std::string(token.token_string()));
+  }
+  EXPECT_EQ(types, expected_types);
+  EXPECT_EQ(token_strings, expected_token_strings);
+}
+
+TEST(Jitify2ParserTest, SingleTokens) {
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  expect_tokenization("(", {Tt::kLParen}, {"("});
+  expect_tokenization(")", {Tt::kRParen}, {")"});
+  expect_tokenization("[", {Tt::kLBracket}, {"["});
+  expect_tokenization("<:", {Tt::kLBracket}, {"<:"});
+  expect_tokenization("]", {Tt::kRBracket}, {"]"});
+  expect_tokenization(":>", {Tt::kRBracket}, {":>"});
+  expect_tokenization("{", {Tt::kLBrace}, {"{"});
+  expect_tokenization("<%", {Tt::kLBrace}, {"<%"});
+  expect_tokenization("}", {Tt::kRBrace}, {"}"});
+  expect_tokenization("%>", {Tt::kRBrace}, {"%>"});
+  expect_tokenization(".", {Tt::kDot}, {"."});
+  expect_tokenization(".*", {Tt::kDotStar}, {".*"});
+  expect_tokenization("->", {Tt::kArrow}, {"->"});
+  expect_tokenization("->*", {Tt::kArrowStar}, {"->*"});
+  expect_tokenization(",", {Tt::kComma}, {","});
+  expect_tokenization("+", {Tt::kPlus}, {"+"});
+  expect_tokenization("++", {Tt::kPlusPlus}, {"++"});
+  expect_tokenization("+=", {Tt::kPlusEq}, {"+="});
+  expect_tokenization("-", {Tt::kMinus}, {"-"});
+  expect_tokenization("--", {Tt::kMinusMinus}, {"--"});
+  expect_tokenization("-=", {Tt::kMinusEq}, {"-="});
+  expect_tokenization("*", {Tt::kStar}, {"*"});
+  expect_tokenization("*=", {Tt::kStarEq}, {"*="});
+  expect_tokenization("/", {Tt::kSlash}, {"/"});
+  expect_tokenization("/=", {Tt::kSlashEq}, {"/="});
+  expect_tokenization("%", {Tt::kPercent}, {"%"});
+  expect_tokenization("%=", {Tt::kPercentEq}, {"%="});
+  expect_tokenization("?", {Tt::kQuestion}, {"?"});
+  expect_tokenization(":", {Tt::kColon}, {":"});
+  expect_tokenization("::", {Tt::kColonColon}, {"::"});
+  expect_tokenization("&", {Tt::kAmp}, {"&"});
+  expect_tokenization("&&", {Tt::kAmpAmp}, {"&&"});
+  expect_tokenization("&=", {Tt::kAmpEq}, {"&="});
+  expect_tokenization("|", {Tt::kBar}, {"|"});
+  expect_tokenization("||", {Tt::kBarBar}, {"||"});
+  expect_tokenization("|=", {Tt::kBarEq}, {"|="});
+  expect_tokenization("^", {Tt::kCaret}, {"^"});
+  expect_tokenization("^=", {Tt::kCaretEq}, {"^="});
+  expect_tokenization("~", {Tt::kTilde}, {"~"});
+  expect_tokenization("=", {Tt::kEq}, {"="});
+  expect_tokenization("==", {Tt::kEqEq}, {"=="});
+  expect_tokenization("!", {Tt::kBang}, {"!"});
+  expect_tokenization("!=", {Tt::kBangEq}, {"!="});
+  expect_tokenization("<", {Tt::kLt}, {"<"});
+  expect_tokenization("<<", {Tt::kLtLt}, {"<<"});
+  expect_tokenization("<=", {Tt::kLtEq}, {"<="});
+  expect_tokenization("<<=", {Tt::kLtLtEq}, {"<<="});
+  expect_tokenization(">", {Tt::kGt}, {">"});
+  expect_tokenization(">>", {Tt::kGtGt}, {">>"});
+  expect_tokenization(">=", {Tt::kGtEq}, {">="});
+  expect_tokenization(">>=", {Tt::kGtGtEq}, {">>="});
+  expect_tokenization("#", {Tt::kHash}, {"#"});
+  expect_tokenization("%:", {Tt::kHash}, {"%:"});
+  expect_tokenization("##", {Tt::kHashHash}, {"##"});
+  expect_tokenization("%:%:", {Tt::kHashHash}, {"%:%:"});
+  expect_tokenization(";", {Tt::kSemicolon}, {";"});
+  expect_tokenization(" ", {Tt::kWhitespace}, {" "});
+  expect_tokenization("\f", {Tt::kWhitespace}, {"\f"});
+  expect_tokenization("\r", {Tt::kWhitespace}, {"\r"});
+  expect_tokenization("\t", {Tt::kWhitespace}, {"\t"});
+  expect_tokenization("\v", {Tt::kWhitespace}, {"\v"});
+  expect_tokenization("\n", {Tt::kWhitespace}, {"\n"});
+  expect_tokenization("0123", {Tt::kNumber}, {"0123"});
+  expect_tokenization("123", {Tt::kNumber}, {"123"});
+  expect_tokenization("0x1F", {Tt::kNumber}, {"0x1F"});
+  expect_tokenization("0b10", {Tt::kNumber}, {"0b10"});
+  expect_tokenization("123u", {Tt::kNumber}, {"123u"});
+  expect_tokenization("123LLu", {Tt::kNumber}, {"123LLu"});
+  expect_tokenization("123'45'6", {Tt::kNumber}, {"123'45'6"});
+  expect_tokenization("0x12'34'56", {Tt::kNumber}, {"0x12'34'56"});
+  expect_tokenization("\"str\"", {Tt::kString}, {"\"str\""});
+  expect_tokenization("u\"str\"", {Tt::kString}, {"u\"str\""});
+  expect_tokenization("u8\"str\"", {Tt::kString}, {"u8\"str\""});
+  expect_tokenization("U\"str\"", {Tt::kString}, {"U\"str\""});
+  expect_tokenization("L\"str\"", {Tt::kString}, {"L\"str\""});
+  expect_tokenization(R"("a \n\"b\"")", {Tt::kString}, {R"("a \n\"b\"")"});
+  expect_tokenization("R\"xx(str)xx\"", {Tt::kRawString}, {"R\"xx(str)xx\""});
+  expect_tokenization("uR\"xx(str)xx\"", {Tt::kRawString}, {"uR\"xx(str)xx\""});
+  expect_tokenization("u8R\"xx(str)xx\"", {Tt::kRawString},
+                      {"u8R\"xx(str)xx\""});
+  expect_tokenization("UR\"xx(str)xx\"", {Tt::kRawString}, {"UR\"xx(str)xx\""});
+  expect_tokenization("LR\"xx(str)xx\"", {Tt::kRawString}, {"LR\"xx(str)xx\""});
+  expect_tokenization(R"yy(R"xx(a\nb
+\c\\")xx")yy",
+                      {Tt::kRawString}, {R"yy(R"xx(a\nb
+\c\\")xx")yy"});
+  expect_tokenization("'c'", {Tt::kCharacter}, {"'c'"});
+  expect_tokenization("u'c'", {Tt::kCharacter}, {"u'c'"});
+  expect_tokenization("u8'c'", {Tt::kCharacter}, {"u8'c'"});
+  expect_tokenization("U'c'", {Tt::kCharacter}, {"U'c'"});
+  expect_tokenization("L'c'", {Tt::kCharacter}, {"L'c'"});
+  expect_tokenization(R"('\'')", {Tt::kCharacter}, {R"('\'')"});
+  expect_tokenization(R"('\\')", {Tt::kCharacter}, {R"('\\')"});
+  expect_tokenization(R"('\n')", {Tt::kCharacter}, {R"('\n')"});
+  expect_tokenization("abc_DEF1", {Tt::kIdentifier}, {"abc_DEF1"});
+  expect_tokenization("u", {Tt::kIdentifier}, {"u"});
+  expect_tokenization("u8", {Tt::kIdentifier}, {"u8"});
+  expect_tokenization("U", {Tt::kIdentifier}, {"U"});
+  expect_tokenization("L", {Tt::kIdentifier}, {"L"});
+  expect_tokenization("uabc", {Tt::kIdentifier}, {"uabc"});
+  expect_tokenization("u8abc", {Tt::kIdentifier}, {"u8abc"});
+  expect_tokenization("Uabc", {Tt::kIdentifier}, {"Uabc"});
+  expect_tokenization("Labc", {Tt::kIdentifier}, {"Labc"});
+  expect_tokenization("class", {Tt::kKeyword}, {"class"});
+  expect_tokenization("not", {Tt::kKeyword}, {"not"});
+  expect_tokenization("consteval", {Tt::kKeyword}, {"consteval"});
+  expect_tokenization("__device__", {Tt::kKeyword}, {"__device__"});
+  expect_tokenization("__constant__", {Tt::kKeyword}, {"__constant__"});
+  expect_tokenization("// A comment", {Tt::kComment}, {"// A comment"});
+  expect_tokenization("// A \"comment\"", {Tt::kComment}, {"// A \"comment\""});
+  expect_tokenization("/* A comment\n*/", {Tt::kComment}, {"/* A comment\n*/"});
+  expect_tokenization("/* A \"comment\"\n*/", {Tt::kComment},
+                      {"/* A \"comment\"\n*/"});
+}
+
+TEST(Jitify2ParserTest, MultipleTokens) {
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  // Make sure escaped backslashes don't break string tokenization.
+  expect_tokenization(R"('\\';)", {Tt::kCharacter, Tt::kSemicolon},
+                      {R"('\\')", ";"});
+  expect_tokenization(R"("\\";)", {Tt::kString, Tt::kSemicolon},
+                      {R"("\\")", ";"});
+  // Make sure unterminated string doesn't run on into the next line.
+  expect_tokenization(R"("foo
+";)",
+                      {Tt::kString, Tt::kWhitespace, Tt::kString},
+                      {R"("foo)", "\n", R"(";)"});
+  // Make sure #include strings treat backslashes literally.
+  expect_tokenization(
+      R"(#include "x\n\\y\"//comment)",
+      {Tt::kHash, Tt::kIdentifier, Tt::kWhitespace, Tt::kString, Tt::kComment},
+      {"#", "include", " ", R"("x\n\\y\")", "//comment"});
+  expect_tokenization(
+      R"(#include <x\n\\y\>//comment)",
+      {Tt::kHash, Tt::kIdentifier, Tt::kWhitespace, Tt::kString, Tt::kComment},
+      {"#", "include", " ", R"(<x\n\\y\>)", "//comment"});
+}
+
+TEST(Jitify2ParserTest, AlternativeOperatorRepresentations) {
+  using namespace jitify2::parser;
+  static const char* const source1 = "vector<::std::string>";
+  CppLexer lexer(source1);
+  ASSERT_EQ(lexer.next().token_string(), "vector");
+  ASSERT_EQ(lexer.next().token_string(), "<");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "std");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "string");
+
+  static const char* const source2 = "(argv<::>)";
+  lexer = CppLexer(source2);
+  ASSERT_EQ(lexer.next().token_string(), "(");
+  ASSERT_EQ(lexer.next().token_string(), "argv");
+  ASSERT_EQ(lexer.next().token_string(), "<:");
+  ASSERT_EQ(lexer.next().token_string(), ":>");
+  ASSERT_EQ(lexer.next().token_string(), ")");
+
+  static const char* const source3 = "foo<:::std::string>";
+  lexer = CppLexer(source3);
+  ASSERT_EQ(lexer.next().token_string(), "foo");
+  ASSERT_EQ(lexer.next().token_string(), "<:");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "std");
+  ASSERT_EQ(lexer.next().token_string(), "::");
+  ASSERT_EQ(lexer.next().token_string(), "string");
+}
+
+TEST(Jitify2ParserTest, Minify) {
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  static const char* const source = R"~(#pragma once
+#define BAR -1
+#define CAT ( x )
+#define CAT2 (x) + (y)
+#define DOG( x )
+#define DOG2( x ) x
+#define DOG3( x ) ( x )
+#define DOG4( x ) (x) + (y)
+#define DOG5( x )x 
+#define DOG6( x )( x )
+
+#define FOO            \
+  do {                 \
+    printf("error\n"); \
+  while (0)
+
+#define _STR(x) #x
+#define STR(x) _STR(x)
+#define PLUS +
+const char* str_suf1 = "foo"s;
+const char* str_suf2 = "foo" STR(bar) "bar";
+#pragma once
+const char* rstr_suf1 = R"(foo)"s;
+const char* rstr_suf2 = R"(foo)" s;
+char char_suf = 'c's;
+#pragma once
+unsigned num_suf1 = 123u;
+unsigned num_suf2 = 123 PLUS 1;
+
+#pragma once
+c += a++ + b;
+c += a + ++b;
+c += a +++ b;
+c += a++++ + ++++b;
+
+a : ::b;
+)~";
+  static const char* const minified_source = R"~(#pragma once
+#define BAR -1
+#define CAT (x)
+#define CAT2 (x)+(y)
+#define DOG(x)
+#define DOG2(x)x
+#define DOG3(x)(x)
+#define DOG4(x)(x)+(y)
+#define DOG5(x)x
+#define DOG6(x)(x)
+#define FOO do{printf("error\n");while(0)
+#define _STR(x)#x
+#define STR(x)_STR(x)
+#define PLUS +
+const char*str_suf1="foo"s;const char*str_suf2="foo" STR(bar)"bar";
+#pragma once
+const char*rstr_suf1=R"(foo)"s;const char*rstr_suf2=R"(foo)" s;char char_suf='c's;
+#pragma once
+unsigned num_suf1=123u;unsigned num_suf2=123 PLUS 1;
+#pragma once
+c+=a+++b;c+=a+ ++b;c+=a+++b;c+=a+++++ ++++b;a: ::b;)~";
+  auto tokens = CppLexer::tokenize<TokenSequence>(source);
+  const int cxx_standard_year = 20;
+  std::string processed_source;
+  minify_cuda_source(tokens.begin(), tokens.end(), cxx_standard_year,
+                     &processed_source);
+  EXPECT_EQ(processed_source, minified_source);
+}
+
+TEST(Jitify2ParserTest, ProcessCudaSource) {
+  using namespace jitify2::parser;
+  static const char* const source = R"~(
+# // Nothing here
+# /*blah*/pragma /*blah*/once  // blah
+const char* include = "#include <x.h>";
+#pragma once
+#pragma once
+#pragma pack(1)
+struct PackedStruct {};
+// A comment.
+//using std::array;
+using std::array;
+using ::std::array;
+# /*blah*/ inclu\
+de /*blah*/ <a.h> /*blah*/ // blah
+#line 1
+const char* bar = "#include \"y.h\"";
+# /*blah*/ include /*blah*/ "b.h" /*blah*/ // blah
+#include "foo/c.h"
+#include <foo/c.h>
+const char* cat = R"blah(#include "z.h")blah" "dog";
+int i = cat[0 + 1];
+)~";
+  static const char* const expected =
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
+#define JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
+#ifdef JITIFY_USED_HEADER_WARNINGS
+#warning JITIFY_USED_HEADER "./my_header.cuh"
+#endif
+#line 1
+
+# // Nothing here
+# /*blah*/  // blah
+const char* include = "#include <x.h>";
+#
+#
+#pragma pack(1)
+struct PackedStruct {};
+// A comment.
+//using std::array;
+using cuda::std::array;
+using ::cuda::std::array;
+# /*blah*/ inclu\
+de /*blah*/ <a.h> /*blah*/ // blah
+#line 1
+const char* bar = "#include \"y.h\"";
+# /*blah*/ include /*blah*/ <__jitify_rel_inc@.@__jitify_name@b.h> /*blah*/ // blah
+#include <__jitify_rel_inc@.@__jitify_name@foo/c.h>
+#include <foo/c.h>
+const char* cat = R"blah(#include "z.h")blah" "dog";
+int i = cat[0 + 1];
+#endif // JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
+)~";
+  static const char* const expected_minified =
+      R"~(#ifndef JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
+#define JITIFY_INCLUDE_GUARD_02AF516366B59070A1EF7711992CA9E66C3BE9955A6440B49A271CF7EE1D3239
+#ifdef JITIFY_USED_HEADER_WARNINGS
+#warning JITIFY_USED_HEADER "./my_header.cuh"
+#endif
+#line 1
+#
+#
+const char*include="#include <x.h>";
+#
+#
+#pragma pack(1)
+struct PackedStruct{};using cuda::std::array;using::cuda::std::array;
+#include<a.h>
+#line 1
+const char*bar="#include \"y.h\"";
+#include<__jitify_rel_inc@.@__jitify_name@b.h>
+#include<__jitify_rel_inc@.@__jitify_name@foo/c.h>
+#include<foo/c.h>
+const char*cat=R"blah(#include "z.h")blah""dog";int i=cat[0+1];
+#endif
+)~";
+  const int cxx_standard_year = -1;
+  std::string processed_source;
+  std::vector<IncludeName> includes;
+  std::string include_name = "my_header.cuh";
+  std::string current_dir = ".";
+  std::string include_fullpath = current_dir + "/" + include_name;
+  EXPECT_EQ((const std::string&)process_cuda_source(
+                source, include_fullpath,
+                ProcessFlags::kReplacePragmaOnce | ProcessFlags::kReplaceStd |
+                    ProcessFlags::kAddUsedHeaderWarning,
+                cxx_standard_year, &processed_source,
+                [&](IncludeName* include) { includes.push_back(*include); }),
+            "");
+  std::vector<IncludeName> expected_includes = {
+      IncludeName("a.h"), IncludeName("b.h", current_dir),
+      IncludeName("foo/c.h", "."), IncludeName("foo/c.h")};
+  ASSERT_EQ(includes, expected_includes);
+  EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[0].location().line(), 14);
+  EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[2].location().line(), 3);
+  EXPECT_EQ(processed_source, expected);
+  includes.clear();
+  EXPECT_TRUE(process_cuda_source(
+                  source, include_fullpath,
+                  ProcessFlags::kReplacePragmaOnce | ProcessFlags::kReplaceStd |
+                      ProcessFlags::kAddUsedHeaderWarning |
+                      ProcessFlags::kMinify,
+                  cxx_standard_year, &processed_source,
+                  [&](IncludeName* include) { includes.push_back(*include); })
+                  .empty());
+  ASSERT_EQ(includes, expected_includes);
+  EXPECT_EQ(includes[0].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[0].location().line(), 14);
+  EXPECT_EQ(includes[2].location().file_name(), include_fullpath);
+  EXPECT_EQ(includes[2].location().line(), 3);
+  EXPECT_EQ(processed_source, expected_minified);
+}
+
+TEST(Jitify2ParserTest, CppParserIterator) {
+  static const char* const source =
+      R"(
+#/*blah*/incl\
+ude/*blah*/<foo> //blah
+
+
+#/*blah*/line/*blah*/10
+#/*blah*/include/*blah*/"bar" //blah
+#/*blah*/li\
+ne/*blah*/20 "newfilename"
+# include "cat"
+)";
+  using namespace jitify2::parser;
+  using Tt = Token::Type;
+  auto tokens = CppLexer::tokenize<TokenSequence>(source);
+  auto iter = make_cpp_parser_iterator(tokens.begin(), tokens.end());
+  EXPECT_EQ(iter.line_number(), 2);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 2);
+  ASSERT_TRUE(iter.match_identifier("include"));
+  EXPECT_EQ(iter.line_number(), 3);
+  ASSERT_TRUE(iter.match(Tt::kString));
+  EXPECT_EQ(iter.line_number(), 3);
+  ASSERT_EQ(iter.previous_token().token_string(), "<foo>");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_TRUE(iter.match_identifier("line"));
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_TRUE(iter.match(Tt::kNumber));
+  EXPECT_EQ(iter.line_number(), 6);
+  ASSERT_EQ(iter.previous_token().token_string(), "10");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_TRUE(iter.match_identifier("include"));
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_TRUE(iter.match(Tt::kString));
+  EXPECT_EQ(iter.line_number(), 10);
+  ASSERT_EQ(iter.previous_token().token_string(), "\"bar\"");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 11);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 11);
+  ASSERT_TRUE(iter.match_identifier("line"));
+  EXPECT_EQ(iter.line_number(), 12);
+  ASSERT_TRUE(iter.match(Tt::kNumber));
+  EXPECT_EQ(iter.line_number(), 12);
+  ASSERT_EQ(iter.previous_token().token_string(), "20");
+  ASSERT_TRUE(iter.match(Tt::kString));
+  ASSERT_EQ(iter.previous_token().token_string(), "\"newfilename\"");
+  EXPECT_EQ(iter.line_number(), 12);
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_TRUE(iter.match(Tt::kHash));
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_TRUE(iter.match_identifier("include"));
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_TRUE(iter.match(Tt::kString));
+  EXPECT_EQ(iter.line_number(), 20);
+  ASSERT_EQ(iter.previous_token().token_string(), "\"cat\"");
+  ASSERT_TRUE(iter.match(Tt::kEndOfDirective));
+}
+
+// TODO(benbarsdell): Add tests for nvtx ranges (using cuPTI).
 
 int main(int argc, char** argv) {
   cudaSetDevice(0);

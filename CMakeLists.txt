@@ -4,15 +4,18 @@ project(jitify LANGUAGES CXX CUDA)
 option(ASAN "Enable address sanitizer in debug build" ON)
 
 # C++ compiler options.
-set (CMAKE_CXX_STANDARD 11)
-set (CMAKE_CUDA_STANDARD 11)  # Doesn't work?
+set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CUDA_STANDARD 17)  # Doesn't work?
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ")
 if (MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
 else()
   set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra -Wconversion -Wshadow -fmessage-length=80")
+      "${CMAKE_CXX_FLAGS} -O3 \
+      -Wall -Wextra -Wconversion -Wshadow -fmessage-length=80 \
+      -D_FILE_OFFSET_BITS=64 \
+      ")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
   if (ASAN)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
@@ -32,7 +35,11 @@ if (MSVC)
     "${CMAKE_CUDA_FLAGS_RELEASE} -O3 -Xcompiler=\"/O2\"")
 else()
   set(CMAKE_CUDA_FLAGS
-    "${CMAKE_CUDA_FLAGS} -Xcompiler=\"-Wall -Wextra -Wconversion -Wshadow\" -O3 -rdc=true")
+    "${CMAKE_CUDA_FLAGS} -O3 \
+    -Xcompiler=\"-Wall -Wextra -Wconversion -Wshadow -fmessage-length=80 \" \
+    -D_FILE_OFFSET_BITS=64 \
+    -rdc=true \
+    ")
   set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g")
 endif()
 
@@ -74,6 +81,15 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 # the gtest and gtest_main targets.
 add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
                  ${CMAKE_CURRENT_BINARY_DIR}/googletest-build
+                 EXCLUDE_FROM_ALL)
+
+# ----
+# NVTX
+# ----
+# Download and unpack nvtx at configure time.
+configure_file(CMakeLists.txt.in nvtx-download/CMakeLists.txt)
+add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/nvtx-src/c
+                 ${CMAKE_CURRENT_BINARY_DIR}/nvtx-build
                  EXCLUDE_FROM_ALL)
 
 # ----
@@ -135,8 +151,10 @@ foreach(test ${TESTS})
   target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
   # Ensure the main jitify header can be found.
   target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(${test} gtest_main)
+  target_link_libraries(${test} gtest_main nvtx3-cpp)
   set_property(TARGET ${test} PROPERTY CUDA_ARCHITECTURES OFF)
+  target_compile_definitions(${test}
+                               PUBLIC JITIFY_ENABLE_NVTX=1)
   if (${test} MATCHES "_static$")
     target_compile_definitions(${test}
                                PUBLIC JITIFY_LINK_CUDA_STATIC=1
