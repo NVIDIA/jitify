@@ -669,63 +669,6 @@ TEST(Jitify2Test, PathJoin) {
 #endif
 }
 
-TEST(Jitify2Test, PathSimplify) {
-  EXPECT_EQ(jitify2::detail::path_simplify(""), "");
-  EXPECT_EQ(jitify2::detail::path_simplify("/"), "/");
-  EXPECT_EQ(jitify2::detail::path_simplify("//"), "/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar"), "/foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar"), "foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/./bar"), "/foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/./bar"), "foo/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar"), "bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/cat/../../bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/cat/../../bar"), "bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/./bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("./bar"), "bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("../bar"), "../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("../../bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("../.././bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify(".././../bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("./../../bar"), "../../bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/.."), "/foo");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar/.."), "foo");
-  EXPECT_EQ(jitify2::detail::path_simplify("//foo///..////bar"), "/bar");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/"), "foo/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/"), "/foo/");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/bar/"), "foo/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/bar/"), "/foo/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("foo/../bar/"), "bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../bar/"), "/bar/");
-  EXPECT_EQ(jitify2::detail::path_simplify("/../foo"), "");    // Invalid path
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../../bar"),  // Invalid path
-            "");
-  EXPECT_EQ(jitify2::detail::path_simplify("/.."), "");         // Invalid path
-  EXPECT_EQ(jitify2::detail::path_simplify("/foo/../.."), "");  // Invalid path
-#if defined _WIN32 || defined _WIN64
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\)"), R"(\)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\\)"), R"(\)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\bar)"), R"(\foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\bar)"), R"(foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\.\bar)"), R"(\foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\.\bar)"), R"(foo\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo\..\bar)"), R"(\bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(foo\..\bar)"), R"(bar)");
-
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar)"), R"(\foo/bar)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\./cat)"),
-            R"(\foo/bar\cat)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)"),
-            R"(\foo/cat)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(\foo/.\bar\../cat)",
-                                           /*canonicalize=*/true),
-            R"(/foo/cat)");
-  EXPECT_EQ(jitify2::detail::path_simplify(R"(///foo///.\\\bar\\\..///cat)",
-                                           /*canonicalize=*/true),
-            R"(/foo/cat)");
-#endif
-}
-
 TEST(Jitify2Test, GetNvrtcBuildVersion) {
   EXPECT_NE(jitify2::detail::get_nvrtc_build_version(), -1);
 }
@@ -805,22 +748,43 @@ TEST(Jitify2Test, EncodedQuoteIncludes) {
   // encoded with the cuda include dir.
   static const char* const source = R"(
 #include <cuda_fp16.h>
+#include "example_headers/my_header1.cuh"
 __global__ void my_kernel() {}
 )";
-  auto preprog =
-      Program("my_program", source)
-          ->preprocess({"-Ifoo/bar", "-I/cat/dog", "-I" CUDA_INC_DIR});
+  auto preprog = Program("my_program", source)
+                     ->preprocess({"-I.", "-Iexample_headers", "-Ifoo/bar",
+                                   "-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   auto compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
-  // Note: The '2' here is the index of the cuda include dir amongst the
-  // "-I" options.
-  ASSERT_TRUE(
+  // Note: The '2' in "I2@" here is the index of the cuda include dir amongst
+  // the "-I" options (excluding invalid paths like "foo/bar").
+  EXPECT_TRUE(
       preprog->header_sources().at("cuda_fp16.h").find("__jitify_I2@") !=
       std::string::npos);
+  std::string cwd = jitify2::detail::get_real_path(".");
   for (const auto& name_header : preprog->header_sources()) {
+    const std::string& header_name = name_header.first;
     const std::string& header_source = name_header.second;
-    ASSERT_FALSE(header_source.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_name.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_source.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_name.find(cwd) != std::string::npos);
+  }
+  // Repeat without "-I.", which will rely on the implicit current working
+  // directory include path for quote includes.
+  preprog = Program("my_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  compiled = preprog->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  ASSERT_EQ(get_error(preprog), "");
+  EXPECT_TRUE(
+      preprog->header_sources().at("cuda_fp16.h").find("__jitify_I0@") !=
+      std::string::npos);
+  for (const auto& name_header : preprog->header_sources()) {
+    const std::string& header_name = name_header.first;
+    const std::string& header_source = name_header.second;
+    EXPECT_FALSE(header_name.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_source.find(CUDA_INC_DIR) != std::string::npos);
+    EXPECT_FALSE(header_name.find(cwd) != std::string::npos);
   }
 }
 
@@ -875,7 +839,7 @@ TEST(Jitify2Test, ExplicitHeaderSources) {
                      {"/foo/bar", bad_header}})
                 ->preprocess({"-I."});
   ASSERT_EQ(get_error(preprog), "");
-  // Finding a header at the root from a quote-include in a subdir requires
+  // Finding a header at "." from a quote-include in a subdir requires
   // explicitly passing the current dir as an include path ("-I.").
   preprog = Program("my_program", R"(#include <foo/quote>)",
                     {{"foo/quote", quote_header},
@@ -926,8 +890,10 @@ __device__ T cube(T x) { return x * x * x; }
   // Test angle-include.
   PreprocessedProgram preprog =
       Program("my_program", source)->preprocess({"-I."});
-  *preprog->get_kernel("my_kernel<int>", {},
-                       {{"example_headers/my_header1.cuh", header}});
+  ASSERT_EQ(get_error(preprog), "");
+  Kernel kernel = preprog->get_kernel(
+      "my_kernel<int>", {}, {{"example_headers/my_header1.cuh", header}});
+  ASSERT_EQ(get_error(kernel), "");
 
   // Test quote-include.
   // Note that this requires the use of jitify2::quote_include_name().
@@ -935,10 +901,12 @@ __device__ T cube(T x) { return x * x * x; }
   // angle-includes, or to use "-include" to add a completely new header.
   preprog = Program("my_program", source)
                 ->preprocess({"-DUSE_QUOTE_INCLUDE", "-I" CUDA_INC_DIR});
-  *preprog->get_kernel(
+  ASSERT_EQ(get_error(preprog), "");
+  kernel = preprog->get_kernel(
       "my_kernel<int>", {},
       {{jitify2::quote_include_name("example_headers/my_header1.cuh"),
         header}});
+  ASSERT_EQ(get_error(kernel), "");
 }
 
 TEST(Jitify2Test, Preincludes) {
@@ -1812,8 +1780,9 @@ TEST(Jitify2Test, BuiltinHeadersAllCompatible) {
   for (const std::string& header_name : get_jitsafe_headers_list()) {
     source += "#include <" + header_name + ">\n";
   }
-  CompiledProgram compiled =
-      jitify2::Program("my_program", source)->preprocess({"-std=c++17"})->compile();
+  CompiledProgram compiled = jitify2::Program("my_program", source)
+                                 ->preprocess({"-std=c++17"})
+                                 ->compile();
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_EQ(compiled->log(), "");
 }
@@ -1821,8 +1790,9 @@ TEST(Jitify2Test, BuiltinHeadersAllCompatible) {
 TEST(Jitify2Test, BuiltinHeadersIndividual) {
   for (const std::string& header_name : get_jitsafe_headers_list()) {
     std::string source = "#include <" + header_name + ">\n";
-    CompiledProgram compiled =
-      jitify2::Program("my_program", source)->preprocess({"-std=c++17"})->compile();
+    CompiledProgram compiled = jitify2::Program("my_program", source)
+                                   ->preprocess({"-std=c++17"})
+                                   ->compile();
     EXPECT_EQ(get_error(compiled), "");
     if (compiled) {
       EXPECT_EQ(compiled->log(), "");
@@ -2112,6 +2082,40 @@ TEST(Jitify2Test, LineNumbers) {
       "test_line_numbers.cuh(5): warning #1105-D: #warning directive: "
       "TEST_WARNING";
   EXPECT_EQ(compiled->log().substr(0, expected.size()), expected);
+}
+
+TEST(Jitify2Test, IncludeDirectoryOrder) {
+  static const char* const source = R"(
+#include <my_header1.cuh>
+
+__global__ void my_kernel(int* data) {
+  *data = square(*data);
+}
+)";
+  std::unique_ptr<const char, int (*)(const char*)> tmp_header_filename(
+      "my_header1.cuh", std::remove);
+  // Create empty header in current directory with same name as correct header.
+  std::ofstream tmp_header(tmp_header_filename.get());
+
+  // Passing -I. first should cause the empty header to be used, which will
+  // fail.
+  PreprocessedProgram preprog =
+      jitify2::Program("include_dirs_program", source)
+          ->preprocess(
+              {"-I.", "-Iexample_headers", "-no-preinclude-workarounds",
+               "-no-system-headers-workaround", "-arch=sm_80", "-std=c++17"});
+  ASSERT_NE(get_error(preprog), "");
+  EXPECT_TRUE(preprog.error().find("identifier \"square\" is undefined") !=
+              std::string::npos);
+  // Passing -Iexample_headers first should succeed.
+  CompiledProgram compiled =
+      jitify2::Program("include_dirs_program", source)
+          ->preprocess(
+              {"-Iexample_headers", "-I.", "-no-preinclude-workarounds",
+               "-no-system-headers-workaround", "-arch=sm_80", "-std=c++17"})
+          ->compile();
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_EQ(compiled->log(), "");
 }
 
 TEST(Jitify2Test, Minify) {

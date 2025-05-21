@@ -169,6 +169,7 @@
 #include <direct.h>       // For mkdir
 #include <fcntl.h>        // For open, O_RDWR etc.
 #include <io.h>           // For _sopen_s
+#include <stdlib.h>       // For _fullpath
 #include <sys/locking.h>  // For _LK_LOCK etc.
 #define JITIFY_PATH_MAX MAX_PATH
 #else
@@ -2489,7 +2490,7 @@ inline bool path_exists(const char* filename, bool* is_dir = nullptr) {
 
 inline const char* get_current_executable_path() {
   static const char* path = []() -> const char* {
-    static char buffer[JITIFY_PATH_MAX] = {};
+    static char buffer[JITIFY_PATH_MAX + 1] = {};
 #ifdef __linux__
     if (!::realpath("/proc/self/exe", buffer)) return nullptr;
 #elif defined(_WIN32) || defined(_WIN64)
@@ -6068,48 +6069,19 @@ static const StringMap& get_jitsafe_headers_map() {
   return jitsafe_headers_map;
 }
 
-// Elides "/." and "/.." tokens from path. Returns empty string if illformed.
-inline std::string path_simplify(StringRef path, bool canonicalize = false) {
-#if defined _WIN32 || defined _WIN64
-  // Note that Windows supports both forward and backslash path separators.
-  const char* sep = "\\/";
+// Returns the canonical full path (resolving all symlinks, "." and ".."
+// references, and repeat slashes) for the given filename, or an empty string on
+// failure. The filename must exist and be accessible.
+// Note: "." -> current working directory.
+// Note: "" -> "".
+inline std::string get_real_path(const char* filename) {
+  char buffer[JITIFY_PATH_MAX + 1] = {};
+#if defined(_WIN32) || defined(_WIN64)
+  if (!::_fullpath(buffer, filename, JITIFY_PATH_MAX)) return "";
 #else
-  const char* sep = "/";
+  if (!::realpath(filename, buffer)) return "";
 #endif
-  const int n = (int)path.size();
-  StringVec dirs;
-  std::string seps;
-  std::string cur_dir;
-  bool after_slash = false;
-  for (int i = 0; i < n + 1; ++i) {
-    if (i == n || std::strchr(sep, path[i])) {
-      if (after_slash) continue;  // Ignore repeat slashes
-      after_slash = i < n;
-      if (cur_dir == ".." && !dirs.empty() && dirs.back() != "..") {
-        if (dirs.size() == 1 && dirs.front().empty()) {
-          return {};  // Bad path: back-traversals exceed depth of absolute path
-        }
-        dirs.pop_back();
-        seps.pop_back();
-      } else if (cur_dir != ".") {  // Ignore /./
-        dirs.push_back(cur_dir);
-        if (after_slash) {
-          seps.push_back(canonicalize ? '/' : path[i]);
-        }
-      }
-      cur_dir.clear();
-    } else {
-      after_slash = false;
-      cur_dir.push_back(path[i]);
-    }
-  }
-  std::ostringstream ss;
-  for (int i = 0; i < (int)dirs.size() - 1; ++i) {
-    ss << dirs[i] << seps[i];
-  }
-  if (!dirs.empty()) ss << dirs.back();
-  if (after_slash) ss << seps.back();
-  return ss.str();
+  return std::string(buffer);
 }
 
 // Reads a whole text file into *content. Returns false on failure.
@@ -7591,6 +7563,10 @@ inline ErrorMsg process_cuda_source(const std::string& source,
  *  angle-includes, or to use "-include" to add a completely new header.
  */
 inline std::string quote_include_name(std::string name) {
+  // Note: Preprocessing encodes the current directory as ".", so this will
+  // match that. We also wouldn't want to use get_real_path(".") anyway because
+  // it wouldn't necessarily match the current directory that was used during
+  // preprocessing.
   return IncludeName(name, ".").patched_name();
 }
 
@@ -7614,7 +7590,7 @@ HeaderLoadStatus load_header(const parser::IncludeName& include,
                              bool use_builtin_headers, std::string* full_path,
                              StringMapT* fullpath_to_source) {
   auto already_loaded = [&](const std::string& fp) {
-    return fullpath_to_source->count(fp);
+    return !fp.empty() && fullpath_to_source->count(fp);
   };
   auto newly_loaded = [&](std::string source) {
     fullpath_to_source->emplace(*full_path, std::move(source));
@@ -7624,18 +7600,21 @@ HeaderLoadStatus load_header(const parser::IncludeName& include,
   if (path_is_absolute(include.name())) {
     // Handle absolute filename.
     *full_path = include.name();
-    *full_path = path_simplify(*full_path);
+    // Try loading absolute filename via callback.
     if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
-    // Try loading via callback or from the filesystem.
-    if ((header_callback && header_callback(include, &source)) ||
-        read_text_file(*full_path, &source)) {
+    if (header_callback && header_callback(include, &source)) {
+      return newly_loaded(std::move(source));
+    }
+    // Try loading absolute filename from the filesystem.
+    *full_path = get_real_path(full_path->c_str());
+    if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
+    if (!full_path->empty() && read_text_file(*full_path, &source)) {
       return newly_loaded(std::move(source));
     }
     return HeaderLoadStatus::kFailed;
   }
   // Try loading via callback.
   *full_path = include.nonlocal_full_path(kJitifyCallbackHeaderPrefix);
-  *full_path = path_simplify(*full_path);
   if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
   if (header_callback && header_callback(include, &source)) {
     return newly_loaded(std::move(source));
@@ -7643,25 +7622,30 @@ HeaderLoadStatus load_header(const parser::IncludeName& include,
   // Try loading from current directory.
   if (include.is_quote_include()) {
     *full_path = include.local_full_path();
-    *full_path = path_simplify(*full_path);
+    // Note: We first match with existing full paths _before_ applying
+    // get_real_path() so that extra header sources (which may not actually
+    // exist in the filesystem) are found.
     if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
-    if (read_text_file(*full_path, &source)) {
+    *full_path = get_real_path(full_path->c_str());
+    if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
+    if (!full_path->empty() && read_text_file(*full_path, &source)) {
       return newly_loaded(std::move(source));
     }
   }
   // Try loading from include directories.
   for (const std::string& include_path : include_paths) {
     *full_path = include.nonlocal_full_path(include_path);
-    *full_path = path_simplify(*full_path);
+    // See comment above for why we do this here.
     if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
-    if (read_text_file(*full_path, &source)) {
+    *full_path = get_real_path(full_path->c_str());
+    if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
+    if (!full_path->empty() && read_text_file(*full_path, &source)) {
       return newly_loaded(std::move(source));
     }
   }
   // Try loading from builtin headers.
   if (use_builtin_headers) {
     *full_path = include.nonlocal_full_path(kJitifyBuiltinHeaderPrefix);
-    *full_path = path_simplify(*full_path);
     if (already_loaded(*full_path)) return HeaderLoadStatus::kAlreadyLoaded;
     auto iter = get_jitsafe_headers_map().find(include.name());
     if (iter != get_jitsafe_headers_map().end()) {
@@ -7792,11 +7776,12 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   StringVec include_paths;
   detail::extract_include_paths(&compiler_options, &include_paths);
   for (std::string& include_path : include_paths) {
-    include_path = detail::path_simplify(include_path, /*canonicalize=*/true);
+    include_path = detail::get_real_path(include_path.c_str());
   }
+  // Remove empty (non-existent) include paths.
+  std::remove(include_paths.begin(), include_paths.end(), std::string{});
   // Returns index of longest matching include dir, or -1 if no match.
   auto match_include_path = [&](std::string path, size_t* length) -> int {
-    path = detail::path_simplify(path, /*canonicalize=*/true);
     *length = 0;
     int matched_index = -1;
     for (int i = 0; i < (int)include_paths.size(); ++i) {
@@ -7822,6 +7807,8 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   const ProcessFlags replace_std_flag_if_enabled =
       use_cuda_std ? ProcessFlags::kReplaceStd : ProcessFlags::kNone;
 
+  const std::string starting_dir = detail::get_real_path(".");
+
   static const char* const kJitifyEncodedIncludePath = "__jitify_I";
   // Replaces an include path prefix with an index to avoid it appearing
   // in the shipped binary.
@@ -7834,6 +7821,12 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
           kJitifyEncodedIncludePath +
           std::to_string(matched_include_path_index) + "@" +
           include.current_dir().substr(prefix_length));
+    } else {
+      // Try matching current directory and encode as ".".
+      if (detail::startswith(include.current_dir(), starting_dir)) {
+        include = include.with_current_dir(
+            "." + include.current_dir().substr(starting_dir.size()));
+      }
     }
     return include;
   };
@@ -7846,6 +7839,9 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
         const size_t end = current_dir.find("@", pos);
         const int index = std::stoi(current_dir.substr(pos, end - pos));
         current_dir = include_paths.at(index) + current_dir.substr(end + 1);
+        include = include.with_current_dir(current_dir);
+      } else if (detail::startswith(current_dir, ".")) {
+        current_dir = starting_dir + current_dir.substr(1);
         include = include.with_current_dir(current_dir);
       }
     }
@@ -7871,9 +7867,8 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
             });
       };
 
-  const std::string current_dir = ".";
   const std::string program_fullpath =
-      detail::path_join(current_dir, detail::sanitize_slashes(program_name));
+      detail::path_join(starting_dir, detail::sanitize_slashes(program_name));
   ErrorMsg err = process_cuda_source_fn(&program_source, program_fullpath,
                                         replace_std_flag_if_enabled);
   if (err) return Error(err);
@@ -7891,15 +7886,14 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     std::string* source_ptr = &header_source.second;
     std::string fullpath = detail::path_is_absolute(name)
                                ? name
-                               : detail::path_join(current_dir, name);
-    fullpath = detail::path_simplify(fullpath);
+                               : detail::path_join(starting_dir, name);
     err = process_cuda_source_fn(
         source_ptr, fullpath,
         replace_std_flag_if_enabled | ProcessFlags::kAddUsedHeaderWarning);
     if (err) return Error(err);
     // Note: The names (keys) in header_sources will be matched:
     // a) directly, for `#include <name>` directives, and
-    // b) as if they are filenames (relative to the current exe dir if not
+    // b) as if they are filenames (relative to the current working dir if not
     //    absolute), for `#include "name"` directives. This will NOT fall back
     //    to direct matching like <> includes.
     // This allows path-based matching.
