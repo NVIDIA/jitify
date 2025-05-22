@@ -439,6 +439,34 @@ options), some trigger special behavior in Jitify as detailed below:
   compilation, which may cause slightly incorrect line numbers in
   error messages.
 
+  Note that PCH is not used during preprocessing, but the flags can
+  be specified during preprocessing and they will be kept for
+  compilation.
+
+- `--no-pch-auto-resize (-no-pch-auto-resize)`
+
+  This option disables auto-resizing of the process-wide NVRTC PCH
+  heap. By default, when PCH generation fails due to heap exhaustion,
+  Jitify automatically resizes it based on the size required for the
+  compilation.
+
+  When PCH generation fails, the compilation log will contain a
+  warning similar to the following:
+  "warning #639-D: insufficient preallocated memory for generation
+  of precompiled header file".
+  When applicable, Jitify will add a message to the log similar to:
+  "Automatically resizing PCH heap".
+  When this happens, the compilation is not automatically re-tried,
+  so PCH generation will occur during the _next_ compilation of the
+  program.
+
+  To avoid the PCH heap being resized on the fly, users can
+  pre-resize it using:
+  `jitify2::nvrtc().SetPCHHeapSize()(desired_size_in_bytes);`
+  The default heap size can also be set via the `NVRTC_PCH_HEAP_SIZE=`
+  environment variable.
+  See the NVRTC documentation for more details about the PCH heap.
+
 - `--cuda-std (-cuda-std)`
 
   [EXPERIMENTAL]

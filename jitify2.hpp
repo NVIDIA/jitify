@@ -3540,9 +3540,27 @@ class LibNvrtc
   SetFlowCallback() {
     return nullptr;
   }
+  detail::function_type<nvrtcResult, nvrtcProgram>* GetPCHCreateStatus() {
+    return nullptr;
+  }
+  detail::function_type<nvrtcResult, size_t*>* GetPCHHeapSize() {
+    return nullptr;
+  }
+  detail::function_type<nvrtcResult, size_t>* SetPCHHeapSize() {
+    return nullptr;
+  }
+  detail::function_type<nvrtcResult, nvrtcProgram, size_t*>*
+  GetPCHHeapSizeRequired() {
+    return nullptr;
+  }
 #else
   JITIFY_DEFINE_NVRTC_WRAPPER(SetFlowCallback, nvrtcResult, nvrtcProgram,
                               int (*)(void*, void*), void*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetPCHCreateStatus, nvrtcResult, nvrtcProgram)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetPCHHeapSize, nvrtcResult, size_t*)
+  JITIFY_DEFINE_NVRTC_WRAPPER(SetPCHHeapSize, nvrtcResult, size_t)
+  JITIFY_DEFINE_NVRTC_WRAPPER(GetPCHHeapSizeRequired, nvrtcResult, nvrtcProgram,
+                              size_t*)
 #endif
 #undef JITIFY_DEFINE_NVRTC_WRAPPER
 #undef JITIFY_STR_IMPL
@@ -4443,7 +4461,7 @@ inline nvrtcResult compile_program_nvrtc(
     std::string* ptx = nullptr, std::string* cubin = nullptr,
     std::string* nvvm = nullptr, const StringVec& name_expressions = {},
     StringMap* lowered_name_map = nullptr, bool remove_unused_globals = false,
-    const Canceller* canceller = nullptr) {
+    const Canceller* canceller = nullptr, bool pch_auto_resize = true) {
   if (!nvrtc()) {
     if (error) *error = nvrtc().error();
     return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
@@ -4459,6 +4477,7 @@ inline nvrtcResult compile_program_nvrtc(
     header_sources_c.push_back(name_source.second.c_str());
   }
 
+  bool pch_verbose = true;
   std::vector<const char*> options_c;
   options_c.reserve(options.size());
   for (const Option& option : options) {
@@ -4470,6 +4489,10 @@ inline nvrtcResult compile_program_nvrtc(
       }
     }
     options_c.push_back(option.key_and_value().c_str());
+    if ((option.key() == "--pch-verbose" || option.key() == "-pch-verbose") &&
+        option.value() == "false") {
+      pch_verbose = false;
+    }
   }
 
 #define JITIFY_CHECK_NVRTC(call)                                      \
@@ -4517,6 +4540,32 @@ inline nvrtcResult compile_program_nvrtc(
     JITIFY_CHECK_NVRTC(nvrtc().GetProgramLog()(nvrtc_program, &(*log)[0]));
   }
   JITIFY_CHECK_NVRTC(ret);
+
+  // Automatically resize the global NVRTC PCH heap if it is exhausted.
+  if (pch_auto_resize && nvrtc().GetPCHCreateStatus()) {
+    const nvrtcResult pch_status = nvrtc().GetPCHCreateStatus()(nvrtc_program);
+    if (pch_status == NVRTC_ERROR_PCH_CREATE_HEAP_EXHAUSTED) {
+      size_t required_heap_size;
+      JITIFY_CHECK_NVRTC(
+          nvrtc().GetPCHHeapSizeRequired()(nvrtc_program, &required_heap_size));
+      // This is effectively doing an atomic max on the PCH heap size.
+      JITIFY_IF_THREAD_SAFE(static std::mutex mutex;
+                            std::lock_guard<std::mutex> lock(mutex);)
+      size_t heap_size;
+      JITIFY_CHECK_NVRTC(nvrtc().GetPCHHeapSize()(&heap_size));
+      if (required_heap_size > heap_size) {
+        JITIFY_CHECK_NVRTC(nvrtc().SetPCHHeapSize()(required_heap_size));
+        if (pch_verbose && log) {
+          *log += "\nJitify: Automatically resizing PCH heap from " +
+                  std::to_string(heap_size) + " to " +
+                  std::to_string(required_heap_size) + " bytes.";
+        }
+      }
+      // Note: We don't re-run the compilation here, so PCH generation will only
+      // succeed on the next compilation of the program.
+    }
+  }
+
   if (ptx) {
     size_t ptx_size;
     JITIFY_CHECK_NVRTC(nvrtc().GetPTXSize()(nvrtc_program, &ptx_size));
@@ -4613,6 +4662,7 @@ inline nvrtcResult compile_program(
     options_modified.pop({"--pch-messages", "-pch-messages"});
     options_modified.pop(
         {"--instantiate-templates-in-pch", "-instantiate-templates-in-pch"});
+    options_modified.pop({"--no-pch-auto-resize", "-no-pch-auto-resize"});
     // The jitify_preinclude.h WAR is not needed with nvcc.
     for (int idx : options_modified.find({"-include"})) {
       if (options_modified[idx].value() == "jitify_preinclude.h") {
@@ -4645,10 +4695,12 @@ inline nvrtcResult compile_program(
         options_modified.emplace_back("-pch-dir", get_temp_pch_dir().path());
       }
     }
+    const bool pch_auto_resize = !static_cast<bool>(
+        options_modified.pop({"--no-pch-auto-resize", "-no-pch-auto-resize"}));
     return compile_program_nvrtc(name, source, header_sources, options_modified,
                                  error, log, ptx, cubin, nvvm, name_expressions,
                                  lowered_name_map, remove_unused_globals,
-                                 canceller);
+                                 canceller, pch_auto_resize);
   }
 }
 
@@ -8696,6 +8748,10 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   Option use_nvcc = compiler_options.pop({"-nvcc", "--nvcc"});
   Option nvcc_path = compiler_options.pop({"-nvcc-path", "--nvcc-path"});
 
+  // These are re-added to the remaining options below; we don't use PCH
+  // for preprocessing.
+  Option use_pch = compiler_options.pop({"-pch", "--pch"});
+
   StringVec include_paths;
   detail::extract_include_paths(&compiler_options, &include_paths);
   for (std::string& include_path : include_paths) {
@@ -9065,6 +9121,8 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
   // Re-add -nvcc flags if they were provided.
   if (use_nvcc) compiler_options.emplace_back(std::move(use_nvcc));
   if (nvcc_path) compiler_options.emplace_back(std::move(nvcc_path));
+  // Re-add -pch flags if they were provided.
+  if (use_pch) compiler_options.emplace_back(std::move(use_pch));
   // Re-add the -remove-unused-globals flag if it was provided.
   if (should_remove_unused_globals) {
     compiler_options.push_back(Option("-remove-unused-globals"));

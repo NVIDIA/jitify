@@ -2466,13 +2466,23 @@ TEST(Jitify2Test, SerializationGoldensLinkedProgram) {
 #if CUDA_VERSION >= 12080
 TEST(Jitify2Test, PrecompiledHeaders) {
   static const char* const source = R"(
+#include "example_headers/my_header1.cuh"
 #include <cuda_fp16.h>
+
+template <int I>
+__global__ void my_kernel() {}
 )";
   const char* const program_name = "my_pch_program";
+
+  // In case the PCH heap size was reduced by another test.
+  ASSERT_EQ(jitify2::nvrtc().SetPCHHeapSize()(256 * 1024 * 1024),
+            NVRTC_SUCCESS);
+
   for (int i = 0; i < 3; ++i) {
-    CompiledProgram compiled = jitify2::Program(program_name, source)
-                                   ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
-                                   ->compile();
+    CompiledProgram compiled =
+        jitify2::Program(program_name, source)
+            ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+            ->compile(Template("my_kernel").instantiate(i));
     ASSERT_EQ(get_error(compiled), "");
     // Check that PCH succeeded.
     if (i == 0) {
@@ -2492,6 +2502,63 @@ TEST(Jitify2Test, PrecompiledHeaders) {
     EXPECT_FALSE(jitify2::detail::path_exists(
         (program_name + std::string(".pch")).c_str()));
   }
+}
+
+TEST(Jitify2Test, PrecompiledHeadersAutoHeapResize) {
+  // Note: Using different headers to ensure it doesn't re-use PCH files from
+  // the above test.
+  static const char* const source = R"(
+#include "example_headers/my_header2.cuh"
+#include <cuda_fp16.h>
+
+template <int I>
+__global__ void my_kernel() {}
+)";
+  const char* const program_name = "my_pch_program2";
+
+  // Start with a tiny PCH heap to ensure it gets exhausted (note: 0 disables
+  // PCH altogether).
+  ASSERT_EQ(jitify2::nvrtc().SetPCHHeapSize()(1), NVRTC_SUCCESS);
+
+  // Start with PCH auto-resizing disabled.
+  CompiledProgram compiled =
+      jitify2::Program(program_name, source)
+          ->preprocess({"-I" CUDA_INC_DIR, "-pch", "-no-pch-auto-resize"})
+          ->compile(Template("my_kernel").instantiate(0));
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
+               std::string::npos);
+  EXPECT_TRUE(compiled->log().find("insufficient preallocated memory for "
+                                   "generation of precompiled header file") !=
+              std::string::npos);
+  EXPECT_FALSE(compiled->log().find("Automatically resizing PCH heap") !=
+               std::string::npos);
+
+  // Try again with PCH auto-resizing enabled.
+  compiled = jitify2::Program(program_name, source)
+                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->compile(Template("my_kernel").instantiate(1));
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
+               std::string::npos);
+  EXPECT_TRUE(compiled->log().find("insufficient preallocated memory for "
+                                   "generation of precompiled header file") !=
+              std::string::npos);
+  EXPECT_TRUE(compiled->log().find("Automatically resizing PCH heap") !=
+              std::string::npos);
+
+  // This time PCH generation should succeed.
+  compiled = jitify2::Program(program_name, source)
+                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->compile(Template("my_kernel").instantiate(2));
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_TRUE(compiled->log().find("creating precompiled header file") !=
+              std::string::npos);
+  EXPECT_FALSE(compiled->log().find("insufficient preallocated memory for "
+                                    "generation of precompiled header file") !=
+               std::string::npos);
+  EXPECT_FALSE(compiled->log().find("Automatically resizing PCH heap") !=
+               std::string::npos);
 }
 #endif  // CUDA_VERSION >= 12080
 
