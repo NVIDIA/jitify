@@ -1945,11 +1945,20 @@ using CudaModule = CUmodule;
 
 struct CudaModuleDestructor {
   void operator()(CudaModule module) const {
+    if (module) {
+      // Note: If this call fails with "Failed to find dynamic symbol
+      // cuLibraryUnload", it probably means the cuda() singleton was already
+      // destructed, which means it was constructed _after_ a static loaded
+      // program. ProgramCache explicitly calls cuda() in its constructor to
+      // avoid this problem, but there is a small chance that users could run
+      // into it if, e.g., they use a non-trivial static wrapper around a cache.
+      // This only seems to occur in non-optimized builds (e.g., not using -O3).
 #if JITIFY_USE_CONTEXT_INDEPENDENT_LOADING
-    if (module) cuda().LibraryUnload()(module);
+      cuda().LibraryUnload()(module);
 #else
-    if (module) cuda().ModuleUnload()(module);
+      cuda().ModuleUnload()(module);
 #endif
+    }
   }
 };
 using UniqueCudaModule = std::unique_ptr<std::remove_pointer<CudaModule>::type,
@@ -9969,7 +9978,11 @@ class ProgramCache {
                     /*file_prefix=*/preprog_.name() + ".", file_suffix),
         hash_(hash),
         equal_(equal),
-        to_filename_(to_filename) {}
+        to_filename_(to_filename) {
+    // Ensure the libcuda singleton is constructed before the ProgramCache, so
+    // that it will be destructed _after_ any static ProgramCache instances are.
+    cuda();
+  }
 
   /*! Get or build a LoadedProgram object from the cache.
    *
