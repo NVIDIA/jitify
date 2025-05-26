@@ -3041,10 +3041,19 @@ int main(int argc, char** argv) {
   // destroyed").
   cudaFree(0);
   ::testing::InitGoogleTest(&argc, argv);
-  // Test order is actually undefined, so we use filters to force the
-  // AssertHeader test to run last.
-  ::testing::GTEST_FLAG(filter) += ":-Jitify2Test.AssertHeader";
-  int result = RUN_ALL_TESTS();
-  ::testing::GTEST_FLAG(filter) = "Jitify2Test.AssertHeader";
-  return result | RUN_ALL_TESTS();
+  int result;
+  // Note: Googletest doesn't expose any way to check if the filter matches a
+  // test, so this is just an approximation for whether the AssertHeader
+  // test is being run with other tests.
+  if (::testing::GTEST_FLAG(filter).find("*") != std::string::npos) {
+    // Test order is actually undefined, so we use filters to force the
+    // AssertHeader test to run last.
+    ::testing::GTEST_FLAG(filter) += ":-Jitify2Test.AssertHeader";
+    result = RUN_ALL_TESTS();
+    ::testing::GTEST_FLAG(filter) = "Jitify2Test.AssertHeader";
+    result |= RUN_ALL_TESTS();
+  } else {
+    result = RUN_ALL_TESTS();
+  }
+  return result;
 }
