@@ -157,6 +157,77 @@ __global__ void my_kernel(T* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+TEST(Jitify2Test, ReadmeExampleCode) {
+  std::string program_source = R"(
+#include <cmath>
+#include <cuda_fp16.h>
+
+template <int N, typename T>
+__global__ void my_kernel(T* data) { *data = std::pow(*data, T{N}); }
+)";
+  float h_data = 3.f;
+  float* d_data;
+  cudaMalloc((void**)&d_data, sizeof(float));
+  cudaMemcpy(d_data, &h_data, sizeof(float), cudaMemcpyHostToDevice);
+
+  using jitify2::get_cuda_include_dir;
+  using jitify2::Program;
+  using jitify2::ProgramCache;
+  using jitify2::reflection::Template;
+  using jitify2::reflection::Type;
+
+  static ProgramCache<> cache(
+      /*max_size=*/100,
+      *Program("my_program", program_source)
+           // Preprocess source code and load all included headers.
+           ->preprocess(
+               {"-I" + get_cuda_include_dir(), "-arch=sm_80", "-arch=sm_90"}));
+
+  dim3 grid(1), block(1);
+  ErrorMsg err =
+      cache
+          // Compile, link, and load the program, and obtain the loaded kernel.
+          .get_kernel(Template("my_kernel").instantiate(2, Type<float>()))
+          // Configure the kernel launch.
+          ->configure(grid, block)
+          // Launch the kernel.
+          ->launch(d_data);
+  ASSERT_EQ(err, "");
+  cudaMemcpy(&h_data, d_data, sizeof(float), cudaMemcpyDeviceToHost);
+  EXPECT_EQ(h_data, 9.f);
+}
+
+TEST(Jitify2Test, UserGuideExampleCode) {
+  std::string program_source = R"(
+#include <cmath>
+#include <cuda_fp16.h>
+
+template <int N, typename T>
+__global__ void my_kernel(T* data) { *data = std::pow(*data, T{N}); }
+)";
+  dim3 grid(1), block(1);
+  float h_data = 3.f;
+  float* d_data;
+  cudaMalloc((void**)&d_data, sizeof(float));
+  cudaMemcpy(d_data, &h_data, sizeof(float), cudaMemcpyHostToDevice);
+  using jitify2::get_cuda_include_dir, jitify2::Program, jitify2::ProgramCache;
+  using jitify2::reflection::Template, jitify2::reflection::Type;
+  ErrorMsg err =
+      Program("my_program", program_source)
+          // Preprocess source code and load all included headers.
+          ->preprocess(
+              {"-I" + get_cuda_include_dir(), "-arch=sm_80", "-arch=sm_90"})
+          // Compile, link, and load the program, and obtain the loaded kernel.
+          ->get_kernel(Template("my_kernel").instantiate(2, Type<float>()))
+          // Configure the kernel launch.
+          ->configure(grid, block)
+          // Launch the kernel.
+          ->launch(d_data);
+  ASSERT_EQ(err, "");
+  cudaMemcpy(&h_data, d_data, sizeof(float), cudaMemcpyDeviceToHost);
+  EXPECT_EQ(h_data, 9.f);
+}
+
 #if JITIFY_ENABLE_NVCC
 TEST(Jitify2Test, NvccSimple) {
   static const char* const source = R"(

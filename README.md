@@ -1,105 +1,121 @@
 
 # Jitify
 
-A single-header C++ library for simplifying the use of CUDA Runtime Compilation (NVRTC).
+A single-header C++ library for simplifying the use of CUDA Runtime
+Compilation (NVRTC).
 
-## Rationale
+Integrating runtime compilation into existing CUDA applications
+can be tricky and time-consuming. Jitify aims to simplify this
+process by hiding the complexities behind a simple, high-level
+interface.
 
-Integrating NVRTC into existing and/or templated CUDA code can be
-tricky. Jitify aims to simplify this process by hiding the
-complexities behind a simple, high-level interface.
+## Jitify2
 
-## Quick example
+The latest version of Jitify is now available in [jitify2.hpp](jitify2.hpp)
+under the `jitify2` namespace.
+The old version is still available in [jitify.hpp](jitify.hpp), but
+will not be receiving further updates.
+
+## Simple example
 
 ```c++
-const char* program_source = "my_program\n"
-    "template<int N, typename T>\n"
-    "__global__\n"
-    "void my_kernel(T* data) {\n"
-    "    T data0 = data[0];\n"
-    "    for( int i=0; i<N-1; ++i ) {\n"
-    "        data[0] *= data0;\n"
-    "    }\n"
-    "}\n";
-static jitify::JitCache kernel_cache;
-jitify::Program program = kernel_cache.program(program_source);
-// ...set up data etc.
-dim3 grid(1);
-dim3 block(1);
-using jitify::reflection::type_of;
-program.kernel("my_kernel")
-       .instantiate(3, type_of(*data))
-       .configure(grid, block)
-       .launch(data);
+#include <jitify2.hpp>
+#include <cuda_runtime_api.h>
+
+int main() {
+  cudaFree(0);  // Initialize CUDA context
+
+  std::string program_source = R"(
+#include <cmath>
+#include <cuda_fp16.h>
+
+template <int N, typename T>
+__global__ void my_kernel(T* data) { *data = std::pow(*data, T{N}); }
+)";
+  float h_data = 3.f;
+  float* d_data;
+  cudaMalloc((void**)&d_data, sizeof(float));
+  cudaMemcpy(d_data, &h_data, sizeof(float), cudaMemcpyHostToDevice);
+
+  using jitify2::get_cuda_include_dir, jitify2::Program, jitify2::ProgramCache;
+  using jitify2::reflection::Template, jitify2::reflection::Type;
+
+  static ProgramCache<> cache(
+      /*max_size=*/100,
+      *Program("my_program", program_source)
+           // Preprocess source code and load all included headers.
+           ->preprocess(
+               {"-I" + get_cuda_include_dir(), "-arch=sm_80", "-arch=sm_90"}));
+
+  dim3 grid(1), block(1);
+  cache
+      // Compile, link, and load the program, and obtain the loaded kernel.
+      .get_kernel(Template("my_kernel").instantiate(2, Type<float>()))
+      // Configure the kernel launch.
+      ->configure(grid, block)
+      // Launch the kernel.
+      ->launch(d_data);
+  return cudaDeviceSynchronize() != cudaSuccess;
+}
 ```
 
 ## Features
 
 Jitify provides/takes care of the following things:
 
- * All NVRTC and CUDA Driver API calls
- * Simple kernel instantiation and launch syntax
- * Caching compiled kernels
- * Loading source code from strings, files, or embedded in an executable
- * Ignoring host code in runtime-compiled sources
- * Skipping unneeded headers
- * Support for JIT-safe standard library headers (e.g., float.h, stdint.h etc.)
- * Dealing with kernel name mangling
- * Reflecting kernel template parameters into strings
- * Compiling specifically for the current device's compute capability
- * Linking to pre-compiled PTX/CUBIN/FATBIN/object/library files
- * Support for CUDA versions 7.0, 7.5, 8.0, 9.x, 10.x, on both Linux and Windows
- * Convenient parallel_for function and lambda support
- * \*New\* jitify::experimental API provides serialization capabilities to enable [user-managed hashing and caching](https://github.com/rapidsai/cudf/blob/v0.12.0/cpp/src/jit/cache.h)
+ * All NVRTC, nvJitLink, and CUDA Driver API calls.
+ * Simple kernel instantiation and launch syntax with unmangled names.
+ * Caching compiled kernels in memory and on disk.
+ * Convenient offline-preprocessing workflow that makes it easy to
+   load and embed all required runtime headers into your application.
+ * JIT-safe standard library headers (e.g., float.h, stdint.h, limits etc.).
+ * Linking to pre-compiled PTX/CUBIN/FATBIN/object/library files.
+ * Easy error handling with optional exceptions.
+ * Support for all recent CUDA versions on both Linux and Windows.
+ * Support for pre-compiled headers, nvcc runtime compilation, source
+   minification, and much more!
 
 Things you can do with Jitify and NVRTC:
 
- * *Rapidly port existing code* to use CUDA Runtime Compilation
- * *Dramatically reduce code volume* and offline-compilation times
- * *Increase kernel performance* by baking in runtime constants and autotuning
+ * *Rapidly port existing code* to use CUDA Runtime Compilation.
+ * *Dramatically reduce code volume* and offline-compilation times.
+ * *Increase kernel performance* by baking in runtime constants and autotuning.
 
 ## How to build
 
 Jitify is just a single header file:
 
 ```c++
-#include <jitify.hpp>
+#include <jitify2.hpp>
 ```
 
-Compile with: `-pthread` (not needed if JITIFY_THREAD_SAFE is defined to 0)
-
-Link with: `-lcuda -lcudart -lnvrtc`
-
-A small utility called stringify is included for converting text files into
-C string literals, which provides a convenient way to integrate JIT-compiled
-sources into a build.
+Link with: `-ldl` (all cuda libraries are dynamically loaded at runtime by default)
 
 ### Running tests
 
-Tests can be run with the following command:
+The unit tests can be built and run using CMake as follows:
 
-```shell
-$ make test
+```bash
+$ mkdir build && cd build && cmake ..
+$ make check -j6
 ```
 
-This will automatically download and build the
-[GoogleTest](https://github.com/google/googletest) library, which
-requires [CMake](https://cmake.org) to be available on the system.
+Note that the tests in [jitify2_test.cu](jitify2_test.cu) may also be
+useful as a form of documentation for many jitify features.
 
 ## Documentation
 
-### Examples
+### User guide
 
-See [jitify_example.cpp](jitify_example.cpp) for some examples of how to use the library.
-The [Makefile](Makefile) also demonstrates how to use the provided stringify utility.
-
-[GTC 2017 Talk by Ben Barsdell and Kate Clark](https://on-demand.gputechconf.com/gtc/2017/videos/s7716-barsdell-ben-jitify.mp4)
+See [jitify2_user_guide.md](jitify2_user_guide.md) for a detailed
+guide on using jitify and all available options.
 
 ### API documentation
 
 Doxygen documentation can be generated by running:
 
 ```shell
+$ mkdir build && cd build && cmake ..
 $ make doc
 ```
 
@@ -109,7 +125,7 @@ The HTML and LaTeX results are placed into the doc/ subdirectory.
 
 BSD-3-Clause
 
-## Authors
+## Principle authors
 
 Ben Barsdell (NVIDIA)
 

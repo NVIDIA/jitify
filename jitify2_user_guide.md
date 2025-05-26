@@ -12,6 +12,8 @@ Jitify User Guide
 
 [Advanced workflow](#advanced_workflow)
 
+[How to build](#how_to_build)
+
 [Unit tests](#unit_tests)
 
 [Build options](#build_options)
@@ -36,7 +38,7 @@ It does not have any link-time dependencies besides the dynamic loader (which is
 # with NVCC:
 $ nvcc ... -ldl
 # or with GCC:
-$ g++ ... -I$CUDA_INC_DIR -ldl
+$ g++ ... -I$CUDA_HOME/include -ldl
 ```
 
 It provides a simple API for compiling and executing CUDA source code at runtime:
@@ -44,17 +46,21 @@ It provides a simple API for compiling and executing CUDA source code at runtime
 ```c++
   std::string program_name = "my_program";
   std::string program_source = R"(
-  template <typename T>
-  __global__ void my_kernel(T* data) { *data = T{7}; }
-  )";
+#include <cmath>
+#include <cuda_fp16.h>
+
+template <int N, typename T>
+__global__ void my_kernel(T* data) { *data = std::pow(*data, T{N}); }
+)";
   dim3 grid(1), block(1);
   float* data;
   cudaMalloc((void**)&data, sizeof(float));
   jitify2::Program(program_name, program_source)
       // Preprocess source code and load all included headers.
-      ->preprocess({"-std=c++14"})
+      ->preprocess(
+          {"-I" + get_cuda_include_dir(), "-arch=sm_80", "-arch=sm_90"})
       // Compile, link, and load the program, and obtain the loaded kernel.
-      ->get_kernel("my_kernel<float>")
+      ->get_kernel(Template("my_kernel").instantiate(2, Type<float>()))
       // Configure the kernel launch.
       ->configure(grid, block)
       // Launch the kernel.
@@ -70,7 +76,7 @@ All Jitify APIs such as `preprocess()`, `compile()`, `link()`,
 valid data object (if the call succeeds) or an error state (if the
 call fails). The error state can be inspected using `operator bool()`
 and the `error()` method. If the macro `JITIFY_ENABLE_EXCEPTIONS` is not
-defined to 0 before jitify.hpp is included in your application, an
+defined to 0 before `jitify.hpp` is included in your application, an
 exception will be thrown when attempting to use the result of a failed
 call or when a method such as `launch()` fails:
 
@@ -123,19 +129,19 @@ including `jitify2.hpp`.
 ## Basic workflow example
 
 Here we describe a complete workflow for integrating Jitify into an
-application. There are many ways to use Jitify, but this is the
-recommended approach.
+application. There are many ways to use Jitify, but **this is the
+recommended approach**.
 
-The jitify_preprocess tool allows CUDA source to be transformed and
+The `jitify2_preprocess` tool allows CUDA source to be transformed and
 headers to be loaded and baked into the application during offline
 compilation, avoiding the need to perform these transformations or
 to load any headers at runtime.
 
-First run jitify_preprocess to generate JIT headers for your runtime
+First run `jitify2_preprocess` to generate JIT headers for your runtime
 sources:
 
 ```bash
-$ ./jitify_preprocess -i myprog1.cu myprog2.cu
+$ ./jitify2_preprocess -i myprog1.cu myprog2.cu -arch=sm_80 -arch=sm_90
 ```
 
 Then include the headers in your application:
@@ -149,7 +155,7 @@ And use the variables they define to construct a `ProgramCache` object:
 
 ```c++
   using jitify2::ProgramCache;
-  static ProgramCache<> myprog1_cache(/*max_size = */ 100, *myprog1_cu_jit);
+  static ProgramCache<> myprog1_cache(/*max_size=*/100, *myprog1_cu_jit);
 ```
 
 Kernels can then be obtained directly from the cache:
@@ -167,12 +173,12 @@ Kernels can then be obtained directly from the cache:
 
 ## Advanced workflow example
 
-The jitify_preprocess tool also supports automatic minification of source code as
+The `jitify2_preprocess` tool also supports automatic minification of source code as
 well as generation of a separate source file for sharing runtime headers between
 different runtime programs:
 
 ```bash
-$ ./jitify_preprocess -i --minify -s myheaders myprog1.cu myprog2.cu
+$ ./jitify2_preprocess -i --minify -s myheaders myprog1.cu myprog2.cu -arch=sm_80 -arch=sm_90
 ```
 
 The generated source file should be linked with your application:
@@ -191,7 +197,7 @@ disk:
 ...
   using jitify2::ProgramCache;
   static ProgramCache<> myprog1_cache(
-      /*max_size = */ 100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
+      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
 ```
 
 For advanced use-cases, multiple kernels can be instantiated in a single program:
@@ -216,10 +222,24 @@ For improved performance, the cache can be given user-defined keys:
   using jitify2::Kernel;
   using MyKeyType = uint32_t;
   static ProgramCache<MyKeyType> myprog1_cache(
-      /*max_size = */ 100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
+      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
   std::string kernel1 = Template("my_kernel1").instantiate(123, Type<float>());
   Kernel kernel = myprog1_cache.get_kernel(MyKeyType(7), kernel1);
 ```
+
+<a name="how_to_build"/>
+
+## How to build
+
+Jitify is just a single header file:
+
+```c++
+#include <jitify2.hpp>
+```
+
+Compile with: `-pthread` (not needed if JITIFY_THREAD_SAFE is defined to 0)
+
+Link with: `-ldl` (all cuda libraries are dynamically linked at runtime)
 
 <a name="unit_tests"/>
 
@@ -232,8 +252,8 @@ $ mkdir build && cd build && cmake ..
 $ make check -j6
 ```
 
-Note that the tests in `jitify2_test.cu` may also be useful as a form of
-documentation for many jitify features.
+Note that the tests in [jitify2_test.cu](jitify2_test.cu) may also be
+useful as a form of documentation for many jitify features.
 
 <a name="build_options"/>
 
