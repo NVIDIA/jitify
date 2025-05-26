@@ -18,6 +18,8 @@ Jitify User Guide
 
 [Compiler options](#compiler_options)
 
+[Environment variables](#environment_variables)
+
 <a name="basic_usage"/>
 
 ## Basic usage
@@ -594,3 +596,17 @@ implementation.
 
   Enables the use of fast math operations. Equivalent to `--ftz=true
   --prec-div=false --prec-sqrt=false --fmad=true`.
+
+<a name="environment_variables"/>
+
+## Environment variables
+
+- `JITIFY_CUDA_HOME`
+
+  Specifies the path to the CUDA Toolkit root directory. This takes
+  priority over the `CUDA_HOME` environment variable.
+
+- `JITIFY_NVCC`
+
+  Specifies the path to the `nvcc` executable. This is only used if the
+  `--nvcc-path=<path>` compiler option is not present.

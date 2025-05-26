@@ -4086,8 +4086,10 @@ inline int run_system_command(const char* command,
 }
 #endif  // JITIFY_ENABLE_NVCC
 
-inline const char* get_cuda_home() {
+inline const char* guess_cuda_home() {
   static const char* const cuda_home = [] {
+    const char* env_jitify_cuda_home = std::getenv("JITIFY_CUDA_HOME");
+    if (env_jitify_cuda_home) return env_jitify_cuda_home;
     const char* env_cuda_home = std::getenv("CUDA_HOME");
     if (env_cuda_home) return env_cuda_home;
     // Guess the default location.
@@ -4118,7 +4120,7 @@ class Nvcc {
     if (env_nvcc && is_valid_nvcc(env_nvcc)) return env_nvcc;
     std::string nvcc_path = "nvcc" + extension;
     if (is_valid_nvcc(nvcc_path)) return nvcc_path;
-    const char* cuda_home = get_cuda_home();
+    const char* cuda_home = guess_cuda_home();
     nvcc_path =
         detail::path_join(detail::path_join(cuda_home, "bin"), nvcc_path);
     if (is_valid_nvcc(nvcc_path)) return nvcc_path;
@@ -4303,8 +4305,8 @@ class NvccProgram {
     }
     // Note: This ensures the cuda toolkit headers are found before any that
     // were embedded during preprocessing (which probably won't work with nvcc).
-    options.emplace_back("-I",
-                         detail::path_join(detail::get_cuda_home(), "include"));
+    options.emplace_back(
+        "-I", detail::path_join(detail::guess_cuda_home(), "include"));
     options.emplace_back("-I", tmp_include_dir);
 
     static const char* const kJitifyExpressionPrefix = "__jitify_expression";
@@ -4861,6 +4863,21 @@ inline ErrorMsg make_compilation_error_msg(const std::string& compile_error,
 }
 
 }  // namespace detail
+
+/*! Returns the CUDA Toolkit include directory, or an empty string if not found.
+ * \note This reads the JITIFY_CUDA_HOME or CUDA_HOME environment variable, or
+ * falls back to a platform-specific heuristic if that is not set.
+ */
+inline const std::string& get_cuda_include_dir() {
+  static const std::string cuda_include_dir = []() -> std::string {
+    const std::string path =
+        detail::path_join(detail::guess_cuda_home(), "include");
+    bool is_dir;
+    if (!detail::path_exists(path.c_str(), &is_dir) || !is_dir) return "";
+    return path;
+  }();
+  return cuda_include_dir;
+}
 
 inline CompiledProgram CompiledProgram::compile(
     const std::string& name, const std::string& source,
