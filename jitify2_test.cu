@@ -2280,6 +2280,28 @@ __global__ void my_kernel(int* data) {
   EXPECT_EQ(compiled->log(), "");
 }
 
+TEST(Jitify2Test, PragmaOnceWAR) {
+  // By default, Jitify replaces `#pragma once` with an explicit
+  // source-hash-based include guard. We do this because the same header can
+  // be included via two different include names, and `#pragma once` treats
+  // them as different files, leading to "already been defined" errors.
+  static const std::string source = R"(
+// The same header found via two different include names will be treated as
+// two different headers by #pragma once.
+#include <my_header1.cuh>
+#include "example_headers/my_header1.cuh"
+)";
+  PreprocessedProgram preprog =
+      jitify2::Program("my_program", source)
+          ->preprocess({"-Iexample_headers", "-no-replace-pragma-once"});
+  ASSERT_NE(get_error(preprog), "");
+  EXPECT_TRUE(get_error(preprog).find("already been defined") !=
+              std::string::npos);
+  preprog =
+      jitify2::Program("my_program", source)->preprocess({"-Iexample_headers"});
+  ASSERT_EQ(get_error(preprog), "");
+}
+
 TEST(Jitify2Test, Minify) {
   static const char* const name = "my_program";
   // This source is intentionally tricky to parse so that it stresses the
