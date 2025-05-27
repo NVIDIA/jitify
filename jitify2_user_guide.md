@@ -196,8 +196,10 @@ disk:
 #include "myprog2.cu.jit.hpp"
 ...
   using jitify2::ProgramCache;
+  using jitify2::get_user_cache_dir;
   static ProgramCache<> myprog1_cache(
-      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
+      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit,
+      get_user_cache_dir("my_jit_cache"));
 ```
 
 For advanced use-cases, multiple kernels can be instantiated in a single program:
@@ -220,9 +222,11 @@ For improved performance, the cache can be given user-defined keys:
 ```c++
   using jitify2::ProgramCache;
   using jitify2::Kernel;
+  using jitify2::get_user_cache_dir;
   using MyKeyType = uint32_t;
   static ProgramCache<MyKeyType> myprog1_cache(
-      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
+      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit,
+      get_user_cache_dir("my_jit_cache"));
   std::string kernel1 = Template("my_kernel1").instantiate(123, Type<float>());
   Kernel kernel = myprog1_cache.get_kernel(MyKeyType(7), kernel1);
 ```

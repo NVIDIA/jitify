@@ -157,6 +157,13 @@ __global__ void my_kernel(T* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+TEST(Jitify2Test, GetDirectoryHelpers) {
+  EXPECT_NE(get_user_cache_dir(), "");
+  EXPECT_TRUE(
+      jitify2::detail::endswith(get_user_cache_dir("my_cache"), "my_cache"));
+  EXPECT_NE(get_cuda_include_dir(), "");
+}
+
 TEST(Jitify2Test, ReadmeExampleCode) {
   std::string program_source = R"(
 #include <cmath>

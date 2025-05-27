@@ -182,6 +182,7 @@
 #include <ftw.h>  // For ::nftw
 #endif
 #include <linux/limits.h>       // For PATH_MAX
+#include <pwd.h>                // For getpwuid
 #include <sys/stat.h>           // For stat
 #include <sys/types.h>          // For DIR etc.
 #include <unistd.h>             // For close
@@ -197,6 +198,7 @@
 #include <fileapi.h>      // For GetTempPath2A
 #include <io.h>           // For _sopen_s
 #include <process.h>      // For _getpid
+#include <shlobj_core.h>  // For SHGetFolderPathA
 #include <stdlib.h>       // For _fullpath
 #include <sys/locking.h>  // For _LK_LOCK etc.
 #define JITIFY_PATH_MAX MAX_PATH
@@ -4877,6 +4879,54 @@ inline const std::string& get_cuda_include_dir() {
     return path;
   }();
   return cuda_include_dir;
+}
+
+namespace detail {
+
+inline const std::string& guess_user_cache_dir() {
+  static const std::string user_cache_dir = []() -> std::string {
+#if defined(_WIN32) || defined(_WIN64)
+    char tmpdir[JITIFY_PATH_MAX + 1];
+    if (SHGetFolderPathA(0, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT, tmpdir) !=
+        S_OK) {
+      return "";
+    }
+    return tmpdir;
+#else
+    const char* env_cache = std::getenv("XDG_CACHE_HOME");
+    if (env_cache && env_cache[0] != '\0') return env_cache;
+    const char* env_home = std::getenv("HOME");
+    if (env_home && env_home[0] != '\0') return path_join(env_home, ".cache");
+    // Note: getpwuid is not thread-safe, but we don't need it to be because we
+    // only call it inside a static initializer.
+    struct passwd* pw = ::getpwuid(::getuid());
+    if (!pw) return "";
+    const char* home_dir = pw->pw_dir;
+    return path_join(home_dir, ".cache");
+#endif
+  }();
+  return user_cache_dir;
+}
+
+}  // namespace detail
+
+/*! Returns the current user's appdata or .cache directory, or an empty string
+ *  if the directory could not be found.
+ * \param subdir Optional sub-directory to add to the returned path. Note that
+ *   this directory is not automatically created. Note also that if the
+ *   unsuffixed cache directory could not be found, an empty string is returned
+ *   regardless of the value of subdir.
+ */
+inline std::string get_user_cache_dir(StringRef subdir = "") {
+  static const std::string user_cache_dir = []() -> std::string {
+    const std::string& path = detail::guess_user_cache_dir();
+    bool is_dir;
+    if (!detail::path_exists(path.c_str(), &is_dir) || !is_dir) return "";
+    return path;
+  }();
+  return (user_cache_dir.empty() || subdir.empty())
+             ? user_cache_dir
+             : detail::path_join(user_cache_dir, subdir);
 }
 
 inline CompiledProgram CompiledProgram::compile(
@@ -9969,7 +10019,8 @@ class ProgramCache {
    *    should be added to the preprocessed program. If provided, the pointed-to
    *    object must exist for the lifetime of this class.
    *  \param file_cache_path (optional) Path in which to store cached linked
-   *    programs. If not specified, file caching is not used.
+   *    programs. If not specified, file caching is not used. The directory is
+   *    automatically created if it does not exist.
    *  \param max_files (optional) The maximum number of linked programs to keep
    *    in the file cache. Defaults to the same value as \p max_in_mem.
    *  \param hash (optional) The object to use to compute hashes of cache keys.
