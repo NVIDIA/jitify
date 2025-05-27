@@ -26,6 +26,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define JITIFY_ENABLE_NVCC 1
 #define JITIFY_ENABLE_EXCEPTIONS 1
 #define JITIFY_ENABLE_NVTX 1
 #define JITIFY_VERBOSE_ERRORS 1
@@ -156,6 +157,120 @@ __global__ void my_kernel(T* data) {
   CHECK_CUDART(cudaFree(d_data));
 }
 
+TEST(Jitify2Test, GetDirectoryHelpers) {
+  EXPECT_NE(get_user_cache_dir(), "");
+  EXPECT_TRUE(
+      jitify2::detail::endswith(get_user_cache_dir("my_cache"), "my_cache"));
+  EXPECT_NE(get_cuda_include_dir(), "");
+}
+
+TEST(Jitify2Test, ReadmeExampleCode) {
+  std::string program_source = R"(
+#include <cmath>
+#include <cuda_fp16.h>
+
+template <int N, typename T>
+__global__ void my_kernel(T* data) { *data = std::pow(*data, T{N}); }
+)";
+  float h_data = 3.f;
+  float* d_data;
+  cudaMalloc((void**)&d_data, sizeof(float));
+  cudaMemcpy(d_data, &h_data, sizeof(float), cudaMemcpyHostToDevice);
+
+  using jitify2::get_cuda_include_dir;
+  using jitify2::Program;
+  using jitify2::ProgramCache;
+  using jitify2::reflection::Template;
+  using jitify2::reflection::Type;
+
+  static ProgramCache<> cache(
+      /*max_size=*/100,
+      *Program("my_program", program_source)
+           // Preprocess source code and load all included headers.
+           ->preprocess(
+               {"-I" + get_cuda_include_dir(), "-arch=sm_80", "-arch=sm_90"}));
+
+  dim3 grid(1), block(1);
+  ErrorMsg err =
+      cache
+          // Compile, link, and load the program, and obtain the loaded kernel.
+          .get_kernel(Template("my_kernel").instantiate(2, Type<float>()))
+          // Configure the kernel launch.
+          ->configure(grid, block)
+          // Launch the kernel.
+          ->launch(d_data);
+  ASSERT_EQ(err, "");
+  cudaMemcpy(&h_data, d_data, sizeof(float), cudaMemcpyDeviceToHost);
+  EXPECT_EQ(h_data, 9.f);
+}
+
+TEST(Jitify2Test, UserGuideExampleCode) {
+  std::string program_source = R"(
+#include <cmath>
+#include <cuda_fp16.h>
+
+template <int N, typename T>
+__global__ void my_kernel(T* data) { *data = std::pow(*data, T{N}); }
+)";
+  dim3 grid(1), block(1);
+  float h_data = 3.f;
+  float* d_data;
+  cudaMalloc((void**)&d_data, sizeof(float));
+  cudaMemcpy(d_data, &h_data, sizeof(float), cudaMemcpyHostToDevice);
+  using jitify2::get_cuda_include_dir, jitify2::Program, jitify2::ProgramCache;
+  using jitify2::reflection::Template, jitify2::reflection::Type;
+  ErrorMsg err =
+      Program("my_program", program_source)
+          // Preprocess source code and load all included headers.
+          ->preprocess(
+              {"-I" + get_cuda_include_dir(), "-arch=sm_80", "-arch=sm_90"})
+          // Compile, link, and load the program, and obtain the loaded kernel.
+          ->get_kernel(Template("my_kernel").instantiate(2, Type<float>()))
+          // Configure the kernel launch.
+          ->configure(grid, block)
+          // Launch the kernel.
+          ->launch(d_data);
+  ASSERT_EQ(err, "");
+  cudaMemcpy(&h_data, d_data, sizeof(float), cudaMemcpyDeviceToHost);
+  EXPECT_EQ(h_data, 9.f);
+}
+
+#if JITIFY_ENABLE_NVCC
+TEST(Jitify2Test, NvccSimple) {
+  static const char* const source = R"(
+#include "example_headers/my_header1.cuh"
+
+template <typename T>
+__global__ void my_kernel(T* data) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  *data = square(*data);
+})";
+  using dtype = float;
+  dtype* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(dtype)));
+
+  auto preprog = Program("my_program", source)->preprocess({"-nvcc"});
+  ASSERT_EQ(get_error(preprog), "");
+  std::string kernel_inst = Template("my_kernel").instantiate(type_of(*d_data));
+  auto compiled = preprog->compile(kernel_inst);
+  ASSERT_EQ(get_error(compiled), "");
+  auto linked = compiled->link();
+  ASSERT_EQ(get_error(linked), "");
+
+  // Test that kernel instantiation produces correct result.
+  Kernel kernel = linked->load()->get_kernel(kernel_inst);
+  dim3 grid(1), block(1);
+  dtype h_data = 5;
+  CHECK_CUDART(
+      cudaMemcpy(d_data, &h_data, sizeof(dtype), cudaMemcpyHostToDevice));
+  ASSERT_EQ(kernel->configure(grid, block)->launch(d_data), "");
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(dtype), cudaMemcpyDeviceToHost));
+  EXPECT_FLOAT_EQ(h_data, 25.f);
+  CHECK_CUDART(cudaFree(d_data));
+}
+#endif  // JITIFY_ENABLE_NVCC
+
 bool header_callback(const std::string& filename, std::string* source) {
   // On success, write to *source and return true, otherwise return false.
   if (filename == "example_headers/my_header4.cuh") {
@@ -263,6 +378,114 @@ __global__ void my_kernel2(const float* indata, float* outdata) {
   EXPECT_FLOAT_EQ(inval, outval);
 }
 
+#if CUDA_VERSION >= 11080
+TEST(Jitify2Test, LaunchAttributes) {
+  static const char* const source = R"(
+__global__ void my_kernel(float* data) {
+  *data = 3.14f;
+}
+)";
+
+  ConfiguredKernel configured = Program("my_program", source)
+                                    ->preprocess()
+                                    ->get_kernel("my_kernel")
+                                    ->configure(1, 1);
+
+  float* d_data;
+  CHECK_CUDART(cudaMalloc((void**)&d_data, sizeof(*d_data)));
+  float h_data = 0.f;
+
+  if (get_current_device_arch() >= 90) {
+    configured->with_cluster(Dim3(2, 3, 1))->launch(d_data);
+    CHECK_CUDART(
+        cudaMemcpy(&h_data, d_data, sizeof(*d_data), cudaMemcpyDeviceToHost));
+    EXPECT_EQ(h_data, 3.14f);
+
+    CHECK_CUDART(cudaMemset(d_data, 0, sizeof(*d_data)));
+    h_data = 0.f;
+  }
+
+  configured->with_cooperative(true)->launch(d_data);
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(*d_data), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 3.14f);
+
+  CHECK_CUDART(cudaMemset(d_data, 0, sizeof(*d_data)));
+  h_data = 0.f;
+
+  CUlaunchAttribute attr;
+  attr.id = CU_LAUNCH_ATTRIBUTE_PRIORITY;
+  attr.value.priority = 10;
+  configured->with_attribute(attr)->launch(d_data);
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, d_data, sizeof(*d_data), cudaMemcpyDeviceToHost));
+  EXPECT_EQ(h_data, 3.14f);
+
+  CHECK_CUDART(cudaFree(d_data));
+}
+#endif  // CUDA_VERSION >= 11080
+
+#if CUDA_VERSION >= 12080
+TEST(Jitify2Test, CancelCompile) {
+  static const char* const source = R"(
+#include <type_traits>
+
+// This instantiates 2^Depth templates, making it very slow to compile.
+template <int Depth, int Instance = 0>
+struct ExponentialTemplate
+    : std::integral_constant<
+          int, ExponentialTemplate<Depth - 1, Instance * 2>::value +
+                   ExponentialTemplate<Depth - 1, Instance * 2 + 1>::value> {};
+template <int Instance>
+struct ExponentialTemplate<0, Instance> : std::integral_constant<int, 1> {};
+
+template <int Depth>
+__global__ void my_kernel(int* value) {
+  *value = ExponentialTemplate<Depth>::value;
+}
+)";
+
+  int h_data = 0;
+  int* data;
+  CHECK_CUDART(cudaMalloc((void**)&data, sizeof(*data)));
+
+  PreprocessedProgram preprog =
+      Program("slow_compile_program", source)->preprocess();
+  const int depth = 16;  // Compilation takes ~5s at depth=16 on my machine
+  const std::string kernel_inst = Template("my_kernel").instantiate(depth);
+
+  std::unique_ptr<Canceller> canceller(new Canceller());
+  const Canceller* canceller_ptr = canceller.get();
+
+  std::thread compile_thread([&] {
+    cudaSetDevice(0);
+    cudaFree(0);  // Must initialize the driver context in the new thread
+    ASSERT_EQ(preprog->get_kernel(kernel_inst, {}, {}, {}, {}, canceller_ptr)
+                  ->configure(1, 1)
+                  ->launch(data),
+              "");
+  });
+  compile_thread.join();
+  CHECK_CUDART(
+      cudaMemcpy(&h_data, data, sizeof(*data), cudaMemcpyDeviceToHost));
+  CHECK_CUDART(cudaFree(data));
+  EXPECT_EQ(h_data, 1 << depth);
+
+  compile_thread = std::thread([&] {
+    cudaSetDevice(0);
+    cudaFree(0);  // Must initialize the driver context in the new thread
+    // Sleep to ensure the cancel is triggered before compilation starts.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const std::string error =
+        get_error(preprog->compile(kernel_inst, {}, {}, {}, canceller_ptr));
+    EXPECT_TRUE(error.find("NVRTC_ERROR_CANCELLED") != std::string::npos)
+        << "Returned error: \"" << error << "\"";
+  });
+  canceller->cancel();
+  compile_thread.join();
+}
+#endif  // CUDA_VERSION >= 12080
+
 TEST(Jitify2Test, StdFlag) {
   static const char* const source = R"(
 __global__ void my_kernel(long* cplusplus) {
@@ -338,8 +561,9 @@ __global__ void my_kernel(const T*, U*) {}
   for (int i = 0; i < nrep; ++i) {
     // Benchmark direct kernel launch.
     auto t0 = std::chrono::steady_clock::now();
-    cuda().LaunchKernel()(kernel->function(), grid.x, grid.y, grid.z, block.x,
-                          block.y, block.z, 0, 0, arg_ptrs, nullptr);
+    cuda().LaunchKernel()((CUfunction)kernel->function(), grid.x, grid.y,
+                          grid.z, block.x, block.y, block.z, 0, 0, arg_ptrs,
+                          nullptr);
     auto dt = std::chrono::steady_clock::now() - t0;
     // Using the minimum is more robust than the average (though this test still
     // remains sensitive to the system environment and has been observed to fail
@@ -434,13 +658,13 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_int = kernel->function();
+  CudaFunction function_int = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
   JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(/* key = */ 0, my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_float = kernel->function();
+  CudaFunction function_float = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(/* key = */ 2, my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
@@ -513,13 +737,13 @@ __global__ void my_kernel(const T* __restrict__ idata, T* __restrict__ odata) {}
   JITIFY_TEST_CHECK_HITS(0, 2, 0, 2);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_int = kernel->function();
+  CudaFunction function_int = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 3, 0, 3);
   cache.reset_stats();
   JITIFY_TEST_CHECK_HITS(0, 0, 0, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<float>());
   ASSERT_EQ(get_error(kernel), "");
-  CUfunction function_float = kernel->function();
+  CudaFunction function_float = kernel->function();
   JITIFY_TEST_CHECK_HITS(0, 1, 1, 0);
   kernel = cache.get_kernel(my_kernel.instantiate<int>());
   ASSERT_EQ(get_error(kernel), "");
@@ -1714,6 +1938,8 @@ struct Base {
 template <typename T>
 struct Derived : public Base {};
 
+enum class MyEnum : short { A, B, C };
+
 TEST(Jitify2Test, Reflection) {
   static const char* const source = R"(
 struct Base { virtual ~Base() {} };
@@ -1723,6 +1949,10 @@ template <typename T>
 __global__ void type_kernel() {}
 template <unsigned short N>
 __global__ void nontype_kernel() {}
+
+enum class MyEnum : short { A, B, C };
+template <MyEnum E>
+__global__ void enum_kernel() {}
 )";
 
   PreprocessedProgram preprog =
@@ -1759,6 +1989,16 @@ __global__ void nontype_kernel() {}
 
   JITIFY_NONTYPE_REFLECTION_TEST(7);
   JITIFY_NONTYPE_REFLECTION_TEST('J');
+
+  Template enum_kernel("enum_kernel");
+
+#define JITIFY_ENUM_REFLECTION_TEST(N)                                 \
+  EXPECT_EQ(                                                           \
+      preprog->get_kernel(enum_kernel.instantiate(N))->lowered_name(), \
+      preprog->get_kernel(enum_kernel.instantiate({#N}))->lowered_name())
+
+  JITIFY_ENUM_REFLECTION_TEST(MyEnum::B);
+  JITIFY_ENUM_REFLECTION_TEST(MyEnum::C);
 
 #undef JITIFY_NONTYPE_REFLECTION_TEST
 }
@@ -2118,6 +2358,28 @@ __global__ void my_kernel(int* data) {
   EXPECT_EQ(compiled->log(), "");
 }
 
+TEST(Jitify2Test, PragmaOnceWAR) {
+  // By default, Jitify replaces `#pragma once` with an explicit
+  // source-hash-based include guard. We do this because the same header can
+  // be included via two different include names, and `#pragma once` treats
+  // them as different files, leading to "already been defined" errors.
+  static const std::string source = R"(
+// The same header found via two different include names will be treated as
+// two different headers by #pragma once.
+#include <my_header1.cuh>
+#include "example_headers/my_header1.cuh"
+)";
+  PreprocessedProgram preprog =
+      jitify2::Program("my_program", source)
+          ->preprocess({"-Iexample_headers", "-no-replace-pragma-once"});
+  ASSERT_NE(get_error(preprog), "");
+  EXPECT_TRUE(get_error(preprog).find("already been defined") !=
+              std::string::npos);
+  preprog =
+      jitify2::Program("my_program", source)->preprocess({"-Iexample_headers"});
+  ASSERT_EQ(get_error(preprog), "");
+}
+
 TEST(Jitify2Test, Minify) {
   static const char* const name = "my_program";
   // This source is intentionally tricky to parse so that it stresses the
@@ -2300,6 +2562,105 @@ TEST(Jitify2Test, SerializationGoldensLinkedProgram) {
         "some cubin", {{"name", "lowered_name"}}, "log", {"-lfoo"}));
   });
 }
+
+#if CUDA_VERSION >= 12080
+TEST(Jitify2Test, PrecompiledHeaders) {
+  static const char* const source = R"(
+#include "example_headers/my_header1.cuh"
+#include <cuda_fp16.h>
+
+template <int I>
+__global__ void my_kernel() {}
+)";
+  const char* const program_name = "my_pch_program";
+
+  // In case the PCH heap size was reduced by another test.
+  ASSERT_EQ(jitify2::nvrtc().SetPCHHeapSize()(256 * 1024 * 1024),
+            NVRTC_SUCCESS);
+
+  for (int i = 0; i < 3; ++i) {
+    CompiledProgram compiled =
+        jitify2::Program(program_name, source)
+            ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+            ->compile(Template("my_kernel").instantiate(i));
+    ASSERT_EQ(get_error(compiled), "");
+    // Check that PCH succeeded.
+    if (i == 0) {
+      EXPECT_TRUE(compiled->log().find("creating precompiled header file") !=
+                  std::string::npos);
+      EXPECT_FALSE(compiled->log().find("using precompiled header file") !=
+                   std::string::npos);
+    } else {
+      EXPECT_TRUE(compiled->log().find("using precompiled header file") !=
+                  std::string::npos);
+      EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
+                   std::string::npos);
+    }
+    EXPECT_FALSE(compiled->log().find("PCH creation disabled") !=
+                 std::string::npos);
+    // Check that the pch file didn't get saved to the current directory.
+    EXPECT_FALSE(jitify2::detail::path_exists(
+        (program_name + std::string(".pch")).c_str()));
+  }
+}
+
+TEST(Jitify2Test, PrecompiledHeadersAutoHeapResize) {
+  // Note: Using different headers to ensure it doesn't re-use PCH files from
+  // the above test.
+  static const char* const source = R"(
+#include "example_headers/my_header2.cuh"
+#include <cuda_fp16.h>
+
+template <int I>
+__global__ void my_kernel() {}
+)";
+  const char* const program_name = "my_pch_program2";
+
+  // Start with a tiny PCH heap to ensure it gets exhausted (note: 0 disables
+  // PCH altogether).
+  ASSERT_EQ(jitify2::nvrtc().SetPCHHeapSize()(1), NVRTC_SUCCESS);
+
+  // Start with PCH auto-resizing disabled.
+  CompiledProgram compiled =
+      jitify2::Program(program_name, source)
+          ->preprocess({"-I" CUDA_INC_DIR, "-pch", "-no-pch-auto-resize"})
+          ->compile(Template("my_kernel").instantiate(0));
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
+               std::string::npos);
+  EXPECT_TRUE(compiled->log().find("insufficient preallocated memory for "
+                                   "generation of precompiled header file") !=
+              std::string::npos);
+  EXPECT_FALSE(compiled->log().find("Automatically resizing PCH heap") !=
+               std::string::npos);
+
+  // Try again with PCH auto-resizing enabled.
+  compiled = jitify2::Program(program_name, source)
+                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->compile(Template("my_kernel").instantiate(1));
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
+               std::string::npos);
+  EXPECT_TRUE(compiled->log().find("insufficient preallocated memory for "
+                                   "generation of precompiled header file") !=
+              std::string::npos);
+  EXPECT_TRUE(compiled->log().find("Automatically resizing PCH heap") !=
+              std::string::npos);
+
+  // This time PCH generation should succeed.
+  compiled = jitify2::Program(program_name, source)
+                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->compile(Template("my_kernel").instantiate(2));
+  ASSERT_EQ(get_error(compiled), "");
+  EXPECT_TRUE(compiled->log().find("creating precompiled header file") !=
+              std::string::npos);
+  EXPECT_FALSE(compiled->log().find("insufficient preallocated memory for "
+                                    "generation of precompiled header file") !=
+               std::string::npos);
+  EXPECT_FALSE(compiled->log().find("Automatically resizing PCH heap") !=
+               std::string::npos);
+}
+#endif  // CUDA_VERSION >= 12080
 
 void expect_tokenization(const char* source,
                          std::vector<parser::Token::Type> expected_types,
@@ -2624,7 +2985,6 @@ int i = cat[0 + 1];
 #ifdef JITIFY_USED_HEADER_WARNINGS
 #warning JITIFY_USED_HEADER "./my_header.cuh"
 #endif
-#line 1
 #
 #
 const char*include="#include <x.h>";
@@ -2759,10 +3119,19 @@ int main(int argc, char** argv) {
   // destroyed").
   cudaFree(0);
   ::testing::InitGoogleTest(&argc, argv);
-  // Test order is actually undefined, so we use filters to force the
-  // AssertHeader test to run last.
-  ::testing::GTEST_FLAG(filter) += ":-Jitify2Test.AssertHeader";
-  int result = RUN_ALL_TESTS();
-  ::testing::GTEST_FLAG(filter) = "Jitify2Test.AssertHeader";
-  return result | RUN_ALL_TESTS();
+  int result;
+  // Note: Googletest doesn't expose any way to check if the filter matches a
+  // test, so this is just an approximation for whether the AssertHeader
+  // test is being run with other tests.
+  if (::testing::GTEST_FLAG(filter).find("*") != std::string::npos) {
+    // Test order is actually undefined, so we use filters to force the
+    // AssertHeader test to run last.
+    ::testing::GTEST_FLAG(filter) += ":-Jitify2Test.AssertHeader";
+    result = RUN_ALL_TESTS();
+    ::testing::GTEST_FLAG(filter) = "Jitify2Test.AssertHeader";
+    result |= RUN_ALL_TESTS();
+  } else {
+    result = RUN_ALL_TESTS();
+  }
+  return result;
 }

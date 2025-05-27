@@ -12,11 +12,15 @@ Jitify User Guide
 
 [Advanced workflow](#advanced_workflow)
 
+[How to build](#how_to_build)
+
 [Unit tests](#unit_tests)
 
 [Build options](#build_options)
 
 [Compiler options](#compiler_options)
+
+[Environment variables](#environment_variables)
 
 <a name="basic_usage"/>
 
@@ -34,7 +38,7 @@ It does not have any link-time dependencies besides the dynamic loader (which is
 # with NVCC:
 $ nvcc ... -ldl
 # or with GCC:
-$ g++ ... -I$CUDA_INC_DIR -ldl
+$ g++ ... -I$CUDA_HOME/include -ldl
 ```
 
 It provides a simple API for compiling and executing CUDA source code at runtime:
@@ -42,17 +46,21 @@ It provides a simple API for compiling and executing CUDA source code at runtime
 ```c++
   std::string program_name = "my_program";
   std::string program_source = R"(
-  template <typename T>
-  __global__ void my_kernel(T* data) { *data = T{7}; }
-  )";
+#include <cmath>
+#include <cuda_fp16.h>
+
+template <int N, typename T>
+__global__ void my_kernel(T* data) { *data = std::pow(*data, T{N}); }
+)";
   dim3 grid(1), block(1);
   float* data;
   cudaMalloc((void**)&data, sizeof(float));
   jitify2::Program(program_name, program_source)
       // Preprocess source code and load all included headers.
-      ->preprocess({"-std=c++14"})
+      ->preprocess(
+          {"-I" + get_cuda_include_dir(), "-arch=sm_80", "-arch=sm_90"})
       // Compile, link, and load the program, and obtain the loaded kernel.
-      ->get_kernel("my_kernel<float>")
+      ->get_kernel(Template("my_kernel").instantiate(2, Type<float>()))
       // Configure the kernel launch.
       ->configure(grid, block)
       // Launch the kernel.
@@ -68,7 +76,7 @@ All Jitify APIs such as `preprocess()`, `compile()`, `link()`,
 valid data object (if the call succeeds) or an error state (if the
 call fails). The error state can be inspected using `operator bool()`
 and the `error()` method. If the macro `JITIFY_ENABLE_EXCEPTIONS` is not
-defined to 0 before jitify.hpp is included in your application, an
+defined to 0 before `jitify.hpp` is included in your application, an
 exception will be thrown when attempting to use the result of a failed
 call or when a method such as `launch()` fails:
 
@@ -121,19 +129,19 @@ including `jitify2.hpp`.
 ## Basic workflow example
 
 Here we describe a complete workflow for integrating Jitify into an
-application. There are many ways to use Jitify, but this is the
-recommended approach.
+application. There are many ways to use Jitify, but **this is the
+recommended approach**.
 
-The jitify_preprocess tool allows CUDA source to be transformed and
+The `jitify2_preprocess` tool allows CUDA source to be transformed and
 headers to be loaded and baked into the application during offline
 compilation, avoiding the need to perform these transformations or
 to load any headers at runtime.
 
-First run jitify_preprocess to generate JIT headers for your runtime
+First run `jitify2_preprocess` to generate JIT headers for your runtime
 sources:
 
 ```bash
-$ ./jitify_preprocess -i myprog1.cu myprog2.cu
+$ ./jitify2_preprocess -i myprog1.cu myprog2.cu -arch=sm_80 -arch=sm_90
 ```
 
 Then include the headers in your application:
@@ -147,7 +155,7 @@ And use the variables they define to construct a `ProgramCache` object:
 
 ```c++
   using jitify2::ProgramCache;
-  static ProgramCache<> myprog1_cache(/*max_size = */ 100, *myprog1_cu_jit);
+  static ProgramCache<> myprog1_cache(/*max_size=*/100, *myprog1_cu_jit);
 ```
 
 Kernels can then be obtained directly from the cache:
@@ -165,12 +173,12 @@ Kernels can then be obtained directly from the cache:
 
 ## Advanced workflow example
 
-The jitify_preprocess tool also supports automatic minification of source code as
+The `jitify2_preprocess` tool also supports automatic minification of source code as
 well as generation of a separate source file for sharing runtime headers between
 different runtime programs:
 
 ```bash
-$ ./jitify_preprocess -i --minify -s myheaders myprog1.cu myprog2.cu
+$ ./jitify2_preprocess -i --minify -s myheaders myprog1.cu myprog2.cu -arch=sm_80 -arch=sm_90
 ```
 
 The generated source file should be linked with your application:
@@ -188,8 +196,10 @@ disk:
 #include "myprog2.cu.jit.hpp"
 ...
   using jitify2::ProgramCache;
+  using jitify2::get_user_cache_dir;
   static ProgramCache<> myprog1_cache(
-      /*max_size = */ 100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
+      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit,
+      get_user_cache_dir("my_jit_cache"));
 ```
 
 For advanced use-cases, multiple kernels can be instantiated in a single program:
@@ -212,12 +222,28 @@ For improved performance, the cache can be given user-defined keys:
 ```c++
   using jitify2::ProgramCache;
   using jitify2::Kernel;
+  using jitify2::get_user_cache_dir;
   using MyKeyType = uint32_t;
   static ProgramCache<MyKeyType> myprog1_cache(
-      /*max_size = */ 100, *myprog1_cu_jit, myheaders_jit, "/tmp/my_jit_cache");
+      /*max_size=*/100, *myprog1_cu_jit, myheaders_jit,
+      get_user_cache_dir("my_jit_cache"));
   std::string kernel1 = Template("my_kernel1").instantiate(123, Type<float>());
   Kernel kernel = myprog1_cache.get_kernel(MyKeyType(7), kernel1);
 ```
+
+<a name="how_to_build"/>
+
+## How to build
+
+Jitify is just a single header file:
+
+```c++
+#include <jitify2.hpp>
+```
+
+Compile with: `-pthread` (not needed if JITIFY_THREAD_SAFE is defined to 0)
+
+Link with: `-ldl` (all cuda libraries are dynamically linked at runtime)
 
 <a name="unit_tests"/>
 
@@ -230,8 +256,8 @@ $ mkdir build && cd build && cmake ..
 $ make check -j6
 ```
 
-Note that the tests in `jitify2_test.cu` may also be useful as a form of
-documentation for many jitify features.
+Note that the tests in [jitify2_test.cu](jitify2_test.cu) may also be
+useful as a form of documentation for many jitify features.
 
 <a name="build_options"/>
 
@@ -301,6 +327,21 @@ documentation for many jitify features.
   Defining this macro to 1 before including the jitify header
   disables the static assertion that kernel launch arguments are
   trivially copyable.
+
+- `JITIFY_ENABLE_NVCC=0`
+
+  Defining this macro to 1 before including the jitify header
+  enables support for runtime compilation using nvcc instead of NVRTC
+  via the "--nvcc" compiler option. See the documentation for "--nvcc"
+  in this guide for more information.
+
+- `JITIFY_USE_CONTEXT_INDEPENDENT_LOADING=1`
+
+  Defining this macro to 0 before including the jitify header
+  disables use of the cuLibrary* and cuKernel* APIs (alternatives to
+  the cuModule* and cuFunction* APIs since CUDA 12.0). If disabled
+  (or unavailable due to old CUDA version), modules must be loaded
+  and managed separately on each device/context.
 
 <a name="compiler_options"/>
 
@@ -406,6 +447,52 @@ options), some trigger special behavior in Jitify as detailed below:
   disables the use of builtin workarounds for certain libraries
   (e.g., Thrust and CUB).
 
+- `--pch (-pch)`
+
+  This option is passed through to NVRTC to enable pre-compiled
+  headers (PCH), which can significantly speed up compilation of some
+  programs (see NVRTC documentation for full details). Other NVRTC
+  PCH options can also be used.
+
+  If this option is present without a corresponding `--pch-dir`
+  option, a `--pch-dir` will automatically be specified using
+  a unique temporary directory.
+
+  One caveat with enabling PCH in Jitify is that PCH does not
+  support `#line` directives, which Jitify normally adds during
+  preprocessing. To avoid this issue, when PCH is enabled Jitify
+  will automatically remove these `#line` directives prior to
+  compilation, which may cause slightly incorrect line numbers in
+  error messages.
+
+  Note that PCH is not used during preprocessing, but the flags can
+  be specified during preprocessing and they will be kept for
+  compilation.
+
+- `--no-pch-auto-resize (-no-pch-auto-resize)`
+
+  This option disables auto-resizing of the process-wide NVRTC PCH
+  heap. By default, when PCH generation fails due to heap exhaustion,
+  Jitify automatically resizes it based on the size required for the
+  compilation.
+
+  When PCH generation fails, the compilation log will contain a
+  warning similar to the following:
+  "warning #639-D: insufficient preallocated memory for generation
+  of precompiled header file".
+  When applicable, Jitify will add a message to the log similar to:
+  "Automatically resizing PCH heap".
+  When this happens, the compilation is not automatically re-tried,
+  so PCH generation will occur during the _next_ compilation of the
+  program.
+
+  To avoid the PCH heap being resized on the fly, users can
+  pre-resize it using:
+  `jitify2::nvrtc().SetPCHHeapSize()(desired_size_in_bytes);`
+  The default heap size can also be set via the `NVRTC_PCH_HEAP_SIZE=`
+  environment variable.
+  See the NVRTC documentation for more details about the PCH heap.
+
 - `--cuda-std (-cuda-std)`
 
   [EXPERIMENTAL]
@@ -416,6 +503,36 @@ options), some trigger special behavior in Jitify as detailed below:
   implementations. This is experimental because it does not currently
   support the transformation of `namespace std {` (as is used for
   specializations of standard library templates).
+
+- `--nvcc (-nvcc)`
+
+  [SOMEWHAT EXPERIMENTAL]
+
+  Requires JITIFY_ENABLE_NVCC=1 to be defined before including the
+  jitify header.
+
+  This option causes runtime compilation to use nvcc instead of NVRTC.
+  Nvcc is not used for prepocessing, but the "--nvcc" option can be
+  specified during preprocessing and it will be kept for compilation.
+
+  Use of nvcc is somewhat experimental and intended only for cases
+  where NVRTC-specific issues need to be worked around. Some NVRTC
+  features are not supported by nvcc (e.g., "-default-device"). Using
+  nvcc also means that, during compilation, source files must be
+  temporarily written to the filesystem, the nvcc executable must be
+  located, and nvcc must be invoked as a subprocess (this is all
+  fully automated). It also requires that standard library and
+  CUDA Toolkit headers are available to nvcc at runtime in the
+  filesystem. (Unlike with NVRTC, nvcc and certain required CUDA
+  Toolkit headers cannot be redistributed).
+
+  By default, the nvcc executable is found using a heuristic, but
+  this can be overridden by setting the JITIFY_NVCC environment
+  variable or specifying the option "--nvcc-path=/path/to/nvcc".
+
+- `--nvcc-path=/path/to/nvcc (-nvcc-path)`
+
+  Specifies the path at which to find the nvcc executable.
 
 Linker options:
 
@@ -503,3 +620,17 @@ implementation.
 
   Enables the use of fast math operations. Equivalent to `--ftz=true
   --prec-div=false --prec-sqrt=false --fmad=true`.
+
+<a name="environment_variables"/>
+
+## Environment variables
+
+- `JITIFY_CUDA_HOME`
+
+  Specifies the path to the CUDA Toolkit root directory. This takes
+  priority over the `CUDA_HOME` environment variable.
+
+- `JITIFY_NVCC`
+
+  Specifies the path to the `nvcc` executable. This is only used if the
+  `--nvcc-path=<path>` compiler option is not present.
