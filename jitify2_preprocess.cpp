@@ -41,20 +41,44 @@
 #include <regex>
 #include <string>
 
-void write_binary_as_c_array(const std::string& varname, std::istream& istream,
-                             std::ostream& ostream) {
-  static const char* const hex_digits = "0123456789abcdef";
+// Returns the size of the binary data.
+size_t write_binary_as_c_array(const std::string& varname,
+                               std::istream& istream, std::ostream& ostream) {
+  const auto hex_string = [](uint64_t val) -> std::string {
+    std::stringstream ss;
+    ss << std::hex << std::setw(16) << std::setfill('0');
+    ss << val;
+    return "0x" + ss.str() + "u";
+  };
+
   std::string varname_data = varname;
-  ostream << "const unsigned char " << varname_data << "[] = {\n";
-  unsigned int n = 0;
+  // Note: We write them as uint64 values instead of individual bytes because
+  // some compilers are extremely slow at compiling arrays of many values. It
+  // also reduces the size of the header.
+  ostream << "const unsigned long long " << varname_data << "[] = {\n";
+  ostream << "#ifndef __CUDA_ARCH__\n";  // Only compile for host (faster)
+  size_t n = 0;
+  uint64_t value = 0;
   while (true) {
     unsigned char c;
     istream.read((char*)&c, 1);
     if (!istream.good()) break;
-    ostream << '0' << 'x' << hex_digits[c >> 4] << hex_digits[c & 0xF] << ",";
-    if (++n % 16 == 0) ostream << "\n";
+    value |= (uint64_t)c << ((n % 8) * 8);  // Little endian
+    ++n;
+    if (n % 8 == 0) {
+      ostream << hex_string(value) << ",";
+      value = 0;
+    }
+    if (n % 32 == 0) ostream << "\n";
   }
+  if (n % 8 != 0) {
+    ostream << hex_string(value) << ",";
+  }
+  ostream << "\n#else  // __CUDA_ARCH__";
+  ostream << "\n0";  // Avoid empty array
+  ostream << "\n#endif  // __CUDA_ARCH__";
   ostream << "\n};\n";
+  return n;
 }
 
 void write_serialized_program_as_cpp_header(
@@ -71,13 +95,13 @@ void write_serialized_program_as_cpp_header(
             << ";\n";
   }
   std::string vs = source_varname + "_serialized";
-  write_binary_as_c_array(vs, istream, ostream);
+  const size_t size = write_binary_as_c_array(vs, istream, ostream);
   auto ind = [](int n) { return std::string(2 * n, ' '); };
   ostream << "const jitify2::PreprocessedProgram " << source_varname << " =\n"
           << ind(2) << "jitify2::PreprocessedProgram::deserialize(\n"
           << ind(4) << "{reinterpret_cast<const char*>(\n"
           << ind(6) << vs << "),\n"
-          << ind(4) << " sizeof(" << vs << ")});\n";
+          << ind(4) << " " << size << "u});\n";
   ostream << "#endif  // " << include_guard_name << "\n";
 }
 
