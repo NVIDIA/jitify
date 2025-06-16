@@ -869,6 +869,20 @@ TEST(Jitify2Test, Sha256) {
       "F5EA20F5EDD6871D72D699C143C524BF9CEC13D06E9FA5763614EE3BA708C63E");
 }
 
+TEST(Jitify2Test, ReplaceAll) {
+  std::string str = "abcdefdefabc";
+  EXPECT_EQ(jitify2::detail::replace_all(str, "", "foo"), str);
+  EXPECT_EQ(jitify2::detail::replace_all(str, "abc", ""), "defdef");
+  EXPECT_EQ(jitify2::detail::replace_all(str, "abc", "foo"), "foodefdeffoo");
+  EXPECT_EQ(jitify2::detail::replace_all(str, "abc", "def"), "defdefdefdef");
+  EXPECT_EQ(jitify2::detail::replace_all(str, "abc", "abc"), str);
+  EXPECT_EQ(jitify2::detail::replace_all(str, "def", ""), "abcabc");
+  EXPECT_EQ(jitify2::detail::replace_all(str, "def", "foo"), "abcfoofooabc");
+  EXPECT_EQ(jitify2::detail::replace_all(str, "def", "abc"), "abcabcabcabc");
+  EXPECT_EQ(jitify2::detail::replace_all(str, "def", "def"), str);
+  EXPECT_EQ(jitify2::detail::replace_all(str, "ghi", "foo"), str);
+}
+
 TEST(Jitify2Test, PathBase) {
   EXPECT_EQ(jitify2::detail::path_base("foo/bar/2"), "foo/bar");
   EXPECT_EQ(jitify2::detail::path_base("foo/bar/2/"), "foo/bar/2");
