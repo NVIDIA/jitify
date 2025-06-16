@@ -249,6 +249,9 @@ int main(int argc, char* argv[]) {
     PreprocessedProgram preprocessed =
         Program(source_filename, source)->preprocess(options);
     if (!preprocessed) {
+      if (verbose && !preprocessed.error().info("headers").empty()) {
+        std::cout << preprocessed.error().info("headers") << std::endl;
+      }
       std::cerr << "Error processing source file " << source_filename << "\n"
                 << preprocessed.error() << std::endl;
       return EXIT_FAILURE;
