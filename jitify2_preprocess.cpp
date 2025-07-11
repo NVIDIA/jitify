@@ -200,6 +200,7 @@ int main(int argc, char* argv[]) {
   (void)argc;
   using namespace jitify2;
   using jitify2::detail::path_join;
+  using jitify2::detail::path_filename;
   std::string shared_headers_filename;
   std::string output_dir;
   std::string varname_prefix;
@@ -262,6 +263,10 @@ int main(int argc, char* argv[]) {
     shared_headers_varname =
         sanitize_varname(varname_prefix + shared_headers_filename + ".jit");
   }
+  const auto make_output_filename = [&](const std::string& filename) {
+    return output_dir.empty() ? filename
+                              : path_join(output_dir, path_filename(filename));
+  };
   StringMap all_header_sources;
   for (const std::string& source_filename : source_filenames) {
     std::string source;
@@ -303,7 +308,7 @@ int main(int argc, char* argv[]) {
       std::string source_varname =
           sanitize_varname(varname_prefix + source_filename + ".jit");
       std::string output_filename =
-          path_join(output_dir, source_filename + ".jit.hpp");
+          make_output_filename(source_filename + ".jit.hpp");
       if (!make_directories_for(output_filename)) return EXIT_FAILURE;
       std::ofstream file(output_filename);
       file.imbue(std::locale::classic());
@@ -315,7 +320,7 @@ int main(int argc, char* argv[]) {
       }
     } else {
       std::string output_filename =
-          path_join(output_dir, source_filename + ".jit");
+          make_output_filename(source_filename + ".jit");
       if (!make_directories_for(output_filename)) return EXIT_FAILURE;
       std::ofstream file(output_filename, std::ios::binary);
       preprocessed->serialize(file, /*include_headers = */ !share_headers);
@@ -332,7 +337,7 @@ int main(int argc, char* argv[]) {
                            std::stringstream::binary);
       serialization::serialize(ss, all_header_sources);
       std::string output_filename =
-          path_join(output_dir, shared_headers_filename + ".jit.cpp");
+          make_output_filename(shared_headers_filename + ".jit.cpp");
       if (!make_directories_for(output_filename)) return EXIT_FAILURE;
       std::ofstream file(output_filename);
       file.imbue(std::locale::classic());
