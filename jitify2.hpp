@@ -2709,13 +2709,31 @@ inline std::string path_base(const std::string& p) {
   // Note that Windows supports both forward and backslash path separators.
   const char* sep = "\\/";
 #else
+  const char* sep = "/";
+#endif
+  size_t i = p.find_last_of(sep);
+  if (i != std::string::npos) {
+    const size_t i0 = i;
+    while (i > 0 && std::strchr(sep, p[i - 1])) --i;  // Skip repeated seps
+    if (i == 0) return p.substr(0, i0 + 1);  // Special case to preserve rootdir
+    return p.substr(0, i);
+  } else {
+    return "";
+  }
+}
+
+inline std::string path_filename(const std::string& p) {
+#if defined _WIN32 || defined _WIN64
+  // Note that Windows supports both forward and backslash path separators.
+  const char* sep = "\\/";
+#else
   char sep = '/';
 #endif
   size_t i = p.find_last_of(sep);
   if (i != std::string::npos) {
-    return p.substr(0, i);
+    return p.substr(i + 1);
   } else {
-    return "";
+    return p;
   }
 }
 

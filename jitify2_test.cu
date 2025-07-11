@@ -887,12 +887,38 @@ TEST(Jitify2Test, PathBase) {
   EXPECT_EQ(jitify2::detail::path_base("foo/bar/2"), "foo/bar");
   EXPECT_EQ(jitify2::detail::path_base("foo/bar/2/"), "foo/bar/2");
   EXPECT_EQ(jitify2::detail::path_base("foo"), "");
-  EXPECT_EQ(jitify2::detail::path_base("/"), "");
+  EXPECT_EQ(jitify2::detail::path_base("/"), "/");
+  EXPECT_EQ(jitify2::detail::path_base("/foo"), "/");
+  EXPECT_EQ(jitify2::detail::path_base(""), "");
+  EXPECT_EQ(jitify2::detail::path_base("foo//bar"), "foo");
+  EXPECT_EQ(jitify2::detail::path_base("foo//bar/"), "foo//bar");
+  EXPECT_EQ(jitify2::detail::path_base("//foo"), "//");
+  EXPECT_EQ(jitify2::detail::path_base("//foo/"), "//foo");
+  EXPECT_EQ(jitify2::detail::path_base("//"), "//");
 #if defined _WIN32 || defined _WIN64
   EXPECT_EQ(jitify2::detail::path_base("foo\\bar\\2"), "foo\\bar");
   EXPECT_EQ(jitify2::detail::path_base("foo\\bar\\2\\"), "foo\\bar\\2");
-  EXPECT_EQ(jitify2::detail::path_base("foo"), "");
-  EXPECT_EQ(jitify2::detail::path_base("\\"), "");
+  EXPECT_EQ(jitify2::detail::path_base("\\"), "\\");
+  EXPECT_EQ(jitify2::detail::path_base("\\foo"), "\\");
+#endif
+}
+
+TEST(Jitify2Test, PathFilename) {
+  EXPECT_EQ(jitify2::detail::path_filename("foo/bar/2"), "2");
+  EXPECT_EQ(jitify2::detail::path_filename("foo/bar/2/"), "");
+  EXPECT_EQ(jitify2::detail::path_filename("foo"), "foo");
+  EXPECT_EQ(jitify2::detail::path_filename("/"), "");
+  EXPECT_EQ(jitify2::detail::path_filename("/foo"), "foo");
+  EXPECT_EQ(jitify2::detail::path_filename(""), "");
+  EXPECT_EQ(jitify2::detail::path_filename("foo//bar"), "bar");
+  EXPECT_EQ(jitify2::detail::path_filename("foo//bar/"), "");
+  EXPECT_EQ(jitify2::detail::path_filename("//foo"), "foo");
+  EXPECT_EQ(jitify2::detail::path_filename("//foo/"), "");
+#if defined _WIN32 || defined _WIN64
+  EXPECT_EQ(jitify2::detail::path_filename("foo\\bar\\2"), "2");
+  EXPECT_EQ(jitify2::detail::path_filename("foo\\bar\\2\\"), "");
+  EXPECT_EQ(jitify2::detail::path_filename("\\"), "");
+  EXPECT_EQ(jitify2::detail::path_filename("\\foo"), "foo");
 #endif
 }
 
