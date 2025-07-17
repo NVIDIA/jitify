@@ -6932,6 +6932,80 @@ class type_info {
 };
 )";
 
+// TODO: This is very incomplete.
+static const char* const jitsafe_header_memory = R"(
+#pragma once
+
+#include <type_traits>
+
+namespace std {
+
+using ::size_t;
+using ::ptrdiff_t;
+
+template <class T>
+struct allocator {
+  using value_type = T;
+  using pointer = T*;
+  using const_pointer = const T*;
+  using reference = T&;
+  using const_reference = const T&;
+  using size_type = std::size_t;
+  using difference_type = std::ptrdiff_t;
+  using propagate_on_container_move_assignment = std::true_type;
+  template <class U>
+  struct rebind {
+    typedef allocator<U> other;
+  };
+  using is_always_equal = std::true_type;
+};
+
+template <>
+struct allocator<void> {
+  using value_type = void;
+  using pointer = void*;
+  using const_pointer = const void*;
+  using propagate_on_container_move_assignment = std::true_type;
+  template <class U>
+  struct rebind {
+    typedef allocator<U> other;
+  };
+  using is_always_equal = std::true_type;
+};
+
+template <class Alloc>
+struct allocator_traits {
+  using allocator_type = Alloc;
+  using value_type = typename Alloc::value_type;
+  using pointer = typename Alloc::pointer;
+  using const_pointer = typename Alloc::const_pointer;
+  using void_pointer = typename Alloc::void_pointer;
+  using const_void_pointer = typename Alloc::const_void_pointer;
+  using difference_type = typename Alloc::difference_type;
+  using size_type = typename Alloc::size_type;
+  using propagate_on_container_copy_assignment = typename Alloc::propagate_on_container_copy_assignment;
+  using propagate_on_container_move_assignment = typename Alloc::propagate_on_container_move_assignment;
+  using propagate_on_container_swap = typename Alloc::propagate_on_container_swap;
+  using is_always_equal = typename Alloc::is_always_equal;
+  // TODO: Possible NVRTC compiler issue with these.
+  //template <typename T>
+  //using rebind_alloc = typename Alloc::rebind<T>::other;
+  //template <typename T>
+  //using rebind_traits = std::allocator_traits<rebind_alloc<T>>;
+};
+
+}  // namespace std
+)";
+
+// TODO: This is very incomplete.
+static const char* const jitsafe_header_new = R"(
+#pragma once
+
+namespace std {
+
+}  // namespace std
+)";
+
 static const char* const jitsafe_header_sys_time = R"(
 #pragma once
 struct timeval {
@@ -7074,6 +7148,8 @@ static bool is_jitsafe_header(const std::string& name) {
       "stack",
       "iomanip",
       "typeinfo",
+      "memory",
+      "new",
       "sys/time.h",
   };
   return jitsafe_headers_set.count(name);
@@ -7129,6 +7205,8 @@ static const StringMap& get_jitsafe_headers_map() {
       {"stack", jitsafe_header_stack},
       {"iomanip", jitsafe_header_iomanip},
       {"typeinfo", jitsafe_header_typeinfo},
+      {"memory", jitsafe_header_memory},
+      {"new", jitsafe_header_new},
       {"sys/time.h", jitsafe_header_sys_time},
       {"numeric", jitsafe_header_numeric},
       {"cxxabi.h", jitsafe_header_cxxabi_h},
