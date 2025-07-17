@@ -4584,6 +4584,7 @@ inline nvrtcResult compile_program_nvrtc(
   }
   JITIFY_CHECK_NVRTC(ret);
 
+#if CUDA_VERSION >= 12080
   // Automatically resize the global NVRTC PCH heap if it is exhausted.
   if (pch_auto_resize && nvrtc().GetPCHCreateStatus()) {
     const nvrtcResult pch_status = nvrtc().GetPCHCreateStatus()(nvrtc_program);
@@ -4608,6 +4609,10 @@ inline nvrtcResult compile_program_nvrtc(
       // succeed on the next compilation of the program.
     }
   }
+#else   // CUDA_VERSION < 12080
+  (void)pch_auto_resize;
+  (void)pch_verbose;
+#endif  // CUDA_VERSION < 12080
 
   if (ptx) {
     size_t ptx_size;
