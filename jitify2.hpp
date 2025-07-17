@@ -8329,10 +8329,6 @@ inline ErrorMsg visit_all_include_directives(TokenIterator begin,
                                              TokenIterator end,
                                              const std::string& full_path,
                                              Visitor visitor) {
-  auto error_msg = [&](int line_number, const std::string& msg) {
-    return ErrorMsg(full_path + ":" + std::to_string(line_number) +
-                    ": error: " + msg);
-  };
   using Tt = Token::Type;
   for (auto iter = make_cpp_parser_iterator(begin, end); iter; ++iter) {
     if (iter.match(Tt::kHash)) {
@@ -8354,12 +8350,21 @@ inline ErrorMsg visit_all_include_directives(TokenIterator begin,
             *iter = Token(Tt::kString, iter->begin(), iter->end(),
                           "<thrust/system/cuda/detail/execution_policy.h>");
             ++iter;
-
+          } else if (iter->matches_identifier(
+                         "__THRUST_HOST_SYSTEM_EXECUTION_POLICY_HEADER")) {
+            *iter = Token(Tt::kString, iter->begin(), iter->end(),
+                          "<thrust/system/cpp/execution_policy.h>");
+            ++iter;
+          } else if (iter->matches_identifier(
+                         "__THRUST_DEVICE_SYSTEM_EXECUTION_POLICY_HEADER")) {
+            *iter = Token(Tt::kString, iter->begin(), iter->end(),
+                          "<thrust/system/cuda/execution_policy.h>");
+            ++iter;
           } else {
-            return error_msg(
-                iter.line_number(),
-                "#include expects \"FILENAME\" or <FILENAME>, got " +
-                    iter->source_string());
+            // Ignore the macro-based include (Thrust has its own WAR for this).
+            iter.advance_to(Tt::kEndOfDirective);
+            if (!iter) break;
+            continue;
           }
         }
 
