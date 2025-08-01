@@ -2709,13 +2709,31 @@ inline std::string path_base(const std::string& p) {
   // Note that Windows supports both forward and backslash path separators.
   const char* sep = "\\/";
 #else
+  const char* sep = "/";
+#endif
+  size_t i = p.find_last_of(sep);
+  if (i != std::string::npos) {
+    const size_t i0 = i;
+    while (i > 0 && std::strchr(sep, p[i - 1])) --i;  // Skip repeated seps
+    if (i == 0) return p.substr(0, i0 + 1);  // Special case to preserve rootdir
+    return p.substr(0, i);
+  } else {
+    return "";
+  }
+}
+
+inline std::string path_filename(const std::string& p) {
+#if defined _WIN32 || defined _WIN64
+  // Note that Windows supports both forward and backslash path separators.
+  const char* sep = "\\/";
+#else
   char sep = '/';
 #endif
   size_t i = p.find_last_of(sep);
   if (i != std::string::npos) {
-    return p.substr(0, i);
+    return p.substr(i + 1);
   } else {
-    return "";
+    return p;
   }
 }
 
@@ -4566,6 +4584,7 @@ inline nvrtcResult compile_program_nvrtc(
   }
   JITIFY_CHECK_NVRTC(ret);
 
+#if CUDA_VERSION >= 12080
   // Automatically resize the global NVRTC PCH heap if it is exhausted.
   if (pch_auto_resize && nvrtc().GetPCHCreateStatus()) {
     const nvrtcResult pch_status = nvrtc().GetPCHCreateStatus()(nvrtc_program);
@@ -4590,6 +4609,10 @@ inline nvrtcResult compile_program_nvrtc(
       // succeed on the next compilation of the program.
     }
   }
+#else   // CUDA_VERSION < 12080
+  (void)pch_auto_resize;
+  (void)pch_verbose;
+#endif  // CUDA_VERSION < 12080
 
   if (ptx) {
     size_t ptx_size;
@@ -6909,6 +6932,80 @@ class type_info {
 };
 )";
 
+// TODO: This is very incomplete.
+static const char* const jitsafe_header_memory = R"(
+#pragma once
+
+#include <type_traits>
+
+namespace std {
+
+using ::size_t;
+using ::ptrdiff_t;
+
+template <class T>
+struct allocator {
+  using value_type = T;
+  using pointer = T*;
+  using const_pointer = const T*;
+  using reference = T&;
+  using const_reference = const T&;
+  using size_type = std::size_t;
+  using difference_type = std::ptrdiff_t;
+  using propagate_on_container_move_assignment = std::true_type;
+  template <class U>
+  struct rebind {
+    typedef allocator<U> other;
+  };
+  using is_always_equal = std::true_type;
+};
+
+template <>
+struct allocator<void> {
+  using value_type = void;
+  using pointer = void*;
+  using const_pointer = const void*;
+  using propagate_on_container_move_assignment = std::true_type;
+  template <class U>
+  struct rebind {
+    typedef allocator<U> other;
+  };
+  using is_always_equal = std::true_type;
+};
+
+template <class Alloc>
+struct allocator_traits {
+  using allocator_type = Alloc;
+  using value_type = typename Alloc::value_type;
+  using pointer = typename Alloc::pointer;
+  using const_pointer = typename Alloc::const_pointer;
+  using void_pointer = typename Alloc::void_pointer;
+  using const_void_pointer = typename Alloc::const_void_pointer;
+  using difference_type = typename Alloc::difference_type;
+  using size_type = typename Alloc::size_type;
+  using propagate_on_container_copy_assignment = typename Alloc::propagate_on_container_copy_assignment;
+  using propagate_on_container_move_assignment = typename Alloc::propagate_on_container_move_assignment;
+  using propagate_on_container_swap = typename Alloc::propagate_on_container_swap;
+  using is_always_equal = typename Alloc::is_always_equal;
+  // TODO: Possible NVRTC compiler issue with these.
+  //template <typename T>
+  //using rebind_alloc = typename Alloc::rebind<T>::other;
+  //template <typename T>
+  //using rebind_traits = std::allocator_traits<rebind_alloc<T>>;
+};
+
+}  // namespace std
+)";
+
+// TODO: This is very incomplete.
+static const char* const jitsafe_header_new = R"(
+#pragma once
+
+namespace std {
+
+}  // namespace std
+)";
+
 static const char* const jitsafe_header_sys_time = R"(
 #pragma once
 struct timeval {
@@ -7051,6 +7148,8 @@ static bool is_jitsafe_header(const std::string& name) {
       "stack",
       "iomanip",
       "typeinfo",
+      "memory",
+      "new",
       "sys/time.h",
   };
   return jitsafe_headers_set.count(name);
@@ -7106,6 +7205,8 @@ static const StringMap& get_jitsafe_headers_map() {
       {"stack", jitsafe_header_stack},
       {"iomanip", jitsafe_header_iomanip},
       {"typeinfo", jitsafe_header_typeinfo},
+      {"memory", jitsafe_header_memory},
+      {"new", jitsafe_header_new},
       {"sys/time.h", jitsafe_header_sys_time},
       {"numeric", jitsafe_header_numeric},
       {"cxxabi.h", jitsafe_header_cxxabi_h},
@@ -8306,10 +8407,6 @@ inline ErrorMsg visit_all_include_directives(TokenIterator begin,
                                              TokenIterator end,
                                              const std::string& full_path,
                                              Visitor visitor) {
-  auto error_msg = [&](int line_number, const std::string& msg) {
-    return ErrorMsg(full_path + ":" + std::to_string(line_number) +
-                    ": error: " + msg);
-  };
   using Tt = Token::Type;
   for (auto iter = make_cpp_parser_iterator(begin, end); iter; ++iter) {
     if (iter.match(Tt::kHash)) {
@@ -8331,12 +8428,21 @@ inline ErrorMsg visit_all_include_directives(TokenIterator begin,
             *iter = Token(Tt::kString, iter->begin(), iter->end(),
                           "<thrust/system/cuda/detail/execution_policy.h>");
             ++iter;
-
+          } else if (iter->matches_identifier(
+                         "__THRUST_HOST_SYSTEM_EXECUTION_POLICY_HEADER")) {
+            *iter = Token(Tt::kString, iter->begin(), iter->end(),
+                          "<thrust/system/cpp/execution_policy.h>");
+            ++iter;
+          } else if (iter->matches_identifier(
+                         "__THRUST_DEVICE_SYSTEM_EXECUTION_POLICY_HEADER")) {
+            *iter = Token(Tt::kString, iter->begin(), iter->end(),
+                          "<thrust/system/cuda/execution_policy.h>");
+            ++iter;
           } else {
-            return error_msg(
-                iter.line_number(),
-                "#include expects \"FILENAME\" or <FILENAME>, got " +
-                    iter->source_string());
+            // Ignore the macro-based include (Thrust has its own WAR for this).
+            iter.advance_to(Tt::kEndOfDirective);
+            if (!iter) break;
+            continue;
           }
         }
 
