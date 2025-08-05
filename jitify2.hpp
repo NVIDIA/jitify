@@ -4531,7 +4531,24 @@ inline nvrtcResult compile_program_nvrtc(
     header_sources_c.push_back(name_source.second.c_str());
   }
 
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_suppress 550
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_suppress 550
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // defined(__CUDACC__)
+
   bool pch_verbose = true;
+
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_default 550
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_default 550
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // #if defined(__CUDACC__)
+
   std::vector<const char*> options_c;
   options_c.reserve(options.size());
   for (const Option& option : options) {
