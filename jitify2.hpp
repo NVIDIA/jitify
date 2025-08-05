@@ -4117,7 +4117,7 @@ inline int run_system_command(const char* command,
   if (output) {
     output->clear();
     std::array<char, 128> buffer;
-    while (fgets(buffer.data(), buffer.size(), pipe)) {
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
       *output += buffer.data();
     }
   }
