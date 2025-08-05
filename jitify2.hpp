@@ -8952,7 +8952,9 @@ inline PreprocessedProgram PreprocessedProgram::preprocess(
     include_path = detail::get_real_path(include_path.c_str());
   }
   // Remove empty (non-existent) include paths.
-  std::remove(include_paths.begin(), include_paths.end(), std::string{});
+  include_paths.erase(
+      std::remove(include_paths.begin(), include_paths.end(), std::string{}),
+      include_paths.end());
   // Returns index of longest matching include dir, or -1 if no match.
   auto match_include_path = [&](std::string path, size_t* length) -> int {
     *length = 0;
