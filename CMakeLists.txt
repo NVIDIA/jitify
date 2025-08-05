@@ -172,8 +172,12 @@ foreach(test ${TESTS})
 endforeach(test)
 # Add "check" command that *builds and* runs tests, with verbose output.
 # (The default "test" command neither builds nor gives verbose output).
-add_custom_target(check ALL COMMAND ${CMAKE_CTEST_COMMAND} --verbose
-                  DEPENDS ${TESTS})
+# --build-config is required for multi-config generators, and uses COMMAND_EXPAND_LISTS to ensure that the flag and value are not provided as a single string to ctest
+add_custom_target(check ALL
+    COMMAND ${CMAKE_CTEST_COMMAND} --verbose "$<IF:$<STREQUAL:$<CONFIG>,>,,--build-config;$<CONFIG>>"
+    DEPENDS ${TESTS}
+    COMMAND_EXPAND_LISTS
+)
 
 # ----
 # Docs
