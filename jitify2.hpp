@@ -4137,7 +4137,7 @@ inline const char* guess_cuda_home() {
     if (env_cuda_home) return env_cuda_home;
     // Guess the default location.
 #if defined _WIN32 || defined _WIN64
-    return "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA";
+    return "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA";
 #else
     return "/usr/local/cuda";
 #endif
