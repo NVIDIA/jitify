@@ -4206,7 +4206,7 @@ inline std::string make_temp_dir() {
   char tmpdir[JITIFY_PATH_MAX + 1];
   // Note: tmpdir is guaranteed to end with a '\'.
   if (!GetTempPath2A(sizeof(tmpdir), tmpdir)) return "";
-  std::string path = tmpdir + "__jitify_" + std::to_string(uid);
+  std::string path = std::string(tmpdir) + "__jitify_" + std::to_string(uid);
   if (::_mkdir(path.c_str()) != 0) return "";
   return path;
 #else
