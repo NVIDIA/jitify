@@ -100,7 +100,7 @@ function(add_stringify_command arg)
   add_custom_command(
       OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${arg}.jit
       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMAND ./stringify ${CMAKE_CURRENT_SOURCE_DIR}/${arg} > ${arg}.jit
+      COMMAND $<TARGET_FILE:stringify> ${CMAKE_CURRENT_SOURCE_DIR}/${arg} > ${arg}.jit
       DEPENDS stringify)
 endfunction()
 add_executable(jitify2_preprocess jitify2_preprocess.cpp)
@@ -118,7 +118,7 @@ add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/jitify2_test_kernels.cu.jit.hpp
            ${CMAKE_CURRENT_BINARY_DIR}/jitify2_test_kernels.cu.headers.jit.cpp
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMAND ${CMAKE_CURRENT_BINARY_DIR}/jitify2_preprocess -i --minify
+    COMMAND $<TARGET_FILE:jitify2_preprocess> -i --minify
                 -o ${CMAKE_CURRENT_BINARY_DIR}
                 -s jitify2_test_kernels.cu.headers
                 jitify2_test_kernels.cu
