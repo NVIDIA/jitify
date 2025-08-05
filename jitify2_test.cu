@@ -2528,7 +2528,11 @@ bool read_binary_file(const char* filename, std::string* contents) {
 template <class JitifyObjectMaker>
 void check_or_update_serialization_goldens(
     JitifyObjectMaker make_jitify_object) {
+#if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
+  using JitifyObject = std::invoke_result_t<JitifyObjectMaker>;
+#else  // __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
   using JitifyObject = typename std::result_of<JitifyObjectMaker()>::type;
+#endif  // __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
   constexpr size_t version = jitify2::serialization::kSerializationVersion;
   std::string object_type_name = jitify2::reflection::reflect<JitifyObject>();
   // Remove namespace prefix from type name.
