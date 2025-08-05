@@ -1360,6 +1360,11 @@ TEST(Jitify2Test, InvalidPrograms) {
   EXPECT_EQ(error.info("headers"), "");
 }
 
+#if defined(_MSC_VER)
+  // Disable deprecation warnings under windows for use of deprecated nvvm() method
+  #pragma warning(push)
+  #pragma warning(disable : 4996)
+#endif  // _MSC_VER
 TEST(Jitify2Test, CompileLTO_IR) {
   static const char* const source = R"(
 const int arch = __CUDA_ARCH__ / 10;
@@ -1387,6 +1392,10 @@ const int arch = __CUDA_ARCH__ / 10;
     EXPECT_EQ(arch, current_arch);
   }
 }
+#if defined(_MSC_VER)
+  // Restore warnings, re-enabling deprecated method warnings
+  #pragma warning(pop)
+#endif  // _MSC_VER
 
 TEST(Jitify2Test, LinkMultiplePrograms) {
   static const char* const source1 = R"(
