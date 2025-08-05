@@ -6626,7 +6626,8 @@ struct __add_reference_helper<_Tp, true> {
 };
 template <typename _Tp>
 struct add_reference : public __add_reference_helper<_Tp> {};
-
+)"
+R"(
 namespace __jitify_detail {
 template <typename T>
 struct is_int_or_cref {
