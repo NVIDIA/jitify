@@ -4135,6 +4135,9 @@ inline const char* guess_cuda_home() {
     if (env_jitify_cuda_home) return env_jitify_cuda_home;
     const char* env_cuda_home = std::getenv("CUDA_HOME");
     if (env_cuda_home) return env_cuda_home;
+    // CUDA_PATH is set by the CUDA installer on windows
+    const char* env_cuda_path = std::getenv("CUDA_PATH");
+    if (env_cuda_path) return env_cuda_path;
     // Guess the default location.
 #if defined _WIN32 || defined _WIN64
     return "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA";
