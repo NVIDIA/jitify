@@ -4140,7 +4140,10 @@ inline const char* guess_cuda_home() {
     if (env_cuda_path) return env_cuda_path;
     // Guess the default location.
 #if defined _WIN32 || defined _WIN64
-    return "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA";
+    constexpr int cuda_version_major = CUDA_VERSION / 1000;
+    constexpr int cuda_version_minor = (CUDA_VERSION % 1000) / 10;
+    std::string default_path = std::string("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v") + std::to_string(cuda_version_major) + "." + std::to_string(cuda_version_minor) + "\\";
+    return default_path.c_str();
 #else
     return "/usr/local/cuda";
 #endif
