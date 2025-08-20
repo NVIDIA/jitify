@@ -2786,6 +2786,15 @@ inline bool path_exists(const char* filename, bool* is_dir = nullptr) {
   return ret;
 }
 
+inline std::string quoted_path_if_needed(const std::string& p) {
+  // If a path includes spaces or single backslashes, the full path may need warpping with quotes when passed to run_system_command, either as the executable or an include path.
+  if (p.find(' ') == std::string::npos && p.find('\\') == std::string::npos) {
+    return p;
+  } else {
+    return "\"" + p + "\"";
+  }
+}
+
 inline const char* get_current_executable_path() {
   static const char* path = []() -> const char* {
     static char buffer[JITIFY_PATH_MAX + 1] = {};
@@ -4156,7 +4165,7 @@ class Nvcc {
   std::string nvcc_path_;
 
   static bool is_valid_nvcc(std::string nvcc_path) {
-    return run_system_command((nvcc_path + " --version").c_str());
+    return run_system_command((quoted_path_if_needed(nvcc_path) + " --version").c_str());
   }
 
   static std::string find_nvcc_path() {
@@ -4186,7 +4195,7 @@ class Nvcc {
                  std::string* failure = nullptr) const {
     // Note: We redirect stderr to stdout so that we capture it too.
     const std::string command =
-        detail::string_concat(nvcc_path_, " ", options, " ", "2>&1");
+        detail::string_concat(quoted_path_if_needed(nvcc_path_), " ", options, " ", "2>&1");
     return run_system_command(command.c_str(), output, failure);
   }
 };
@@ -4355,8 +4364,8 @@ class NvccProgram {
     // Note: This ensures the cuda toolkit headers are found before any that
     // were embedded during preprocessing (which probably won't work with nvcc).
     options.emplace_back(
-        "-I", detail::path_join(detail::guess_cuda_home(), "include"));
-    options.emplace_back("-I", tmp_include_dir);
+        "-I", detail::quoted_path_if_needed(detail::path_join(detail::guess_cuda_home(), "include")));
+    options.emplace_back("-I", detail::quoted_path_if_needed(tmp_include_dir));
 
     static const char* const kJitifyExpressionPrefix = "__jitify_expression";
 
