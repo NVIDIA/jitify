@@ -155,7 +155,7 @@
 #include <type_traits>
 #include <unordered_set>
 
-#if __cplusplus >= 201703L
+#if JITIFY_CPLUSPLUS >= 201703L
 #include <filesystem>
 #endif
 
@@ -4233,7 +4233,7 @@ inline std::string make_temp_dir() {
 #endif
 }
 
-#if __cplusplus < 201703L && (!defined(_WIN32) && !defined(_WIN64))
+#if JITIFY_CPLUSPLUS < 201703L && (!defined(_WIN32) && !defined(_WIN64))
 inline int delete_file_visitor(const char* path, const struct stat* sbuf,
                                int type, struct FTW* ftwb) {
   (void)sbuf;
@@ -4244,11 +4244,11 @@ inline int delete_file_visitor(const char* path, const struct stat* sbuf,
 #endif
 
 inline bool remove_all(const std::string& path) {
-#if __cplusplus >= 201703L
+#if JITIFY_CPLUSPLUS >= 201703L
   std::error_code ec;
   return std::filesystem::remove_all(path, ec) !=
          static_cast<std::uintmax_t>(-1);
-#else  // __cplusplus < 201703L
+#else  // JITIFY_CPLUSPLUS < 201703L
 #if defined(_WIN32) || defined(_WIN64)
   // TODO: Implement this if anyone cares about it.
   return false;
@@ -4261,7 +4261,7 @@ inline bool remove_all(const std::string& path) {
   const int max_depth = 20;
   return ::nftw(path.c_str(), delete_file_visitor, max_depth, flags) == 0;
 #endif  // not Windows
-#endif  // __cplusplus < 201703L
+#endif  // JITIFY_CPLUSPLUS < 201703L
 }
 
 class TempDirectory {
