@@ -194,7 +194,7 @@
 #include <dbghelp.h>      // For UndecorateSymbolName
 #include <direct.h>       // For mkdir
 #include <fcntl.h>        // For open, O_RDWR etc.
-#include <fileapi.h>      // For GetTempPath2A
+#include <fileapi.h>      // For GetTempPath2A, GetLongPathNameA
 #include <io.h>           // For _sopen_s
 #include <process.h>      // For _getpid
 #include <shlobj_core.h>  // For SHGetFolderPathA
@@ -4221,6 +4221,8 @@ inline std::string make_temp_dir() {
   char tmpdir[JITIFY_PATH_MAX + 1];
   // Note: tmpdir is guaranteed to end with a '\'.
   if (!GetTempPath2A(sizeof(tmpdir), tmpdir)) return "";
+  // Get the long-form of the tmpdir
+  GetLongPathNameA(tmpdir, tmpdir, sizeof(tmpdir));
   std::string path = std::string(tmpdir) + "__jitify_" + std::to_string(uid);
   if (::_mkdir(path.c_str()) != 0) return "";
   return path;
