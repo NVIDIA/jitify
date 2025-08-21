@@ -1023,9 +1023,16 @@ __global__ void my_kernel() {}
   ASSERT_EQ(get_error(compiled), "");
   // Note: The '2' in "I2@" here is the index of the cuda include dir amongst
   // the "-I" options (excluding invalid paths like "foo/bar").
+  // This is 3 on windows.
+#if defined _WIN32 || defined _WIN64
+  EXPECT_TRUE(
+      preprog->header_sources().at("cuda_fp16.h").find("__jitify_I3@") !=
+      std::string::npos);
+#else  // defined _WIN32 || defined _WIN64
   EXPECT_TRUE(
       preprog->header_sources().at("cuda_fp16.h").find("__jitify_I2@") !=
       std::string::npos);
+#endif  // defined _WIN32 || defined _WIN64
   std::string cwd = jitify2::detail::get_real_path(".");
   for (const auto& name_header : preprog->header_sources()) {
     const std::string& header_name = name_header.first;
