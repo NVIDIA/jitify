@@ -1892,6 +1892,17 @@ class LibNvJitLink
 #if CUDA_VERSION >= 12060
     case NVJITLINK_ERROR_FINALIZE: return "NVJITLINK_ERROR_FINALIZE";
 #endif
+#if CUDA_VERSION >= 13000
+    case NVJITLINK_ERROR_NULL_INPUT: return "NVJITLINK_ERROR_NULL_INPUT";
+    case NVJITLINK_ERROR_INCOMPATIBLE_OPTIONS: return "NVJITLINK_ERROR_INCOMPATIBLE_OPTIONS";
+    case NVJITLINK_ERROR_INCORRECT_INPUT_TYPE: return "NVJITLINK_ERROR_INCORRECT_INPUT_TYPE";
+    case NVJITLINK_ERROR_ARCH_MISMATCH: return "NVJITLINK_ERROR_ARCH_MISMATCH";
+    case NVJITLINK_ERROR_OUTDATED_LIBRARY: return "NVJITLINK_ERROR_OUTDATED_LIBRARY";
+    case NVJITLINK_ERROR_MISSING_FATBIN: return "NVJITLINK_ERROR_MISSING_FATBIN";
+    case NVJITLINK_ERROR_UNRECOGNIZED_ARCH: return "NVJITLINK_ERROR_UNRECOGNIZED_ARCH";
+    case NVJITLINK_ERROR_UNSUPPORTED_ARCH: return "NVJITLINK_ERROR_UNSUPPORTED_ARCH";
+    case NVJITLINK_ERROR_LTO_NOT_ENABLED: return "NVJITLINK_ERROR_LTO_NOT_ENABLED";
+#endif
     }
     // clang-format on
     return "(unknown nvJitLink error)";
@@ -7234,7 +7245,7 @@ inline bool read_file(const std::string& fullpath, std::string* content,
                       bool binary) {
   FILE* file = ::fopen(fullpath.c_str(), binary ? "rb" : "r");
   if (!file) return false;
-  std::unique_ptr<FILE, std::integral_constant<decltype(::fclose)*, ::fclose>>
+  std::unique_ptr<FILE, std::integral_constant<int (*)(FILE*), ::fclose>>
       unique_file(file);
 #ifdef POSIX_FADV_WILLNEED
   // Hints to potentially improve read performance.
