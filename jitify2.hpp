@@ -4129,12 +4129,28 @@ inline int run_system_command(const char* command,
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
       *output += buffer.data();
     }
+  } else {
+    // Must always read from the pipe for the exit code from the command to be available
+    std::array<char, 128> buffer;
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) { }
   }
   const int result = JITIFY_PCLOSE(pipe);
   if (result == -1 && failure) {
     *failure = get_errno_string();
   }
-  return result;
+
+  // Extract the exit code from the called program if possible, otherwise return -1;
+  int exitCode = -1;
+  #ifdef _MSC_VER
+    // _pclose is documented as having the same return code format as for _cwait, but with the high and low order bytes swapped. However the _cwait docs do not describe a corresponding value. Just extracting the lsb seems to behave
+    exitCode = result & 0xFF;
+  #else
+    // Extract the exit code from the pclose result if it was a 'normal' exit
+    if (WIFEXITED(result)){
+      exitCode = WEXITSTATUS(result);
+    }
+  #endif
+  return exitCode;
 }
 #endif  // JITIFY_ENABLE_NVCC
 
@@ -4165,7 +4181,7 @@ class Nvcc {
   std::string nvcc_path_;
 
   static bool is_valid_nvcc(std::string nvcc_path) {
-    return run_system_command((quoted_path_if_needed(nvcc_path) + " --version").c_str());
+    return run_system_command((quoted_path_if_needed(nvcc_path) + " --version").c_str()) == 0;
   }
 
   static std::string find_nvcc_path() {
@@ -4405,7 +4421,7 @@ class NvccProgram {
     if (!options.find({"--dlink-time-opt, -dlto"}).empty()) {
       options.emplace_back("-ltoir", "");
       options.emplace_back(tmp_source_file, "");
-      if (nvcc(options, &log_, error)) return infer_nvcc_error_type();
+      if (nvcc(options, &log_, error) != 0) return infer_nvcc_error_type();
       if (!read_binary_file(tmp_ltoir_file, &nvvm_)) {
         if (error) *error = "Failed to read binary file: " + tmp_ltoir_file;
         return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
@@ -4416,7 +4432,7 @@ class NvccProgram {
     options.emplace_back("-ptx", "");
     options.emplace_back(tmp_source_file, "");
     options.emplace_back("-o", tmp_ptx_file);
-    if (nvcc(options, &log_, error)) return infer_nvcc_error_type();
+    if (nvcc(options, &log_, error) != 0) return infer_nvcc_error_type();
     options.pop_back();  // Remove -o option
     options.pop_back();  // Remove source file
     options.pop_back();  // Remove -ptx
@@ -4456,7 +4472,7 @@ class NvccProgram {
       options.emplace_back("-cubin", "");
       options.emplace_back(tmp_ptx_file, "");
       options.emplace_back("-o", tmp_cubin_file);
-      if (nvcc(options, &log_, error)) {
+      if (nvcc(options, &log_, error) != 0) {
         return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
       }
       if (!read_binary_file(tmp_cubin_file, &cubin_)) {
