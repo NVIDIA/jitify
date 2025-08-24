@@ -276,7 +276,9 @@ int main(int argc, char* argv[]) {
     }
 
     PreprocessedProgram preprocessed =
-        Program(source_filename, source)->preprocess(options);
+        Program(source_filename, source,
+                share_headers ? all_header_sources : StringMap{})
+                ->preprocess(options);
     if (!preprocessed) {
       if (verbose && !preprocessed.error().info("headers").empty()) {
         std::cout << preprocessed.error().info("headers") << std::endl;
