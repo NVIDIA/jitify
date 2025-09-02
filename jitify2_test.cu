@@ -2016,6 +2016,14 @@ __global__ void enum_kernel() {}
 
   Template type_kernel("type_kernel");
 
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_suppress 3013
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_suppress 3013
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // defined(__CUDACC__)
+
 #define JITIFY_TYPE_REFLECTION_TEST(T)                                   \
   EXPECT_EQ(                                                             \
       preprog->get_kernel(type_kernel.instantiate<T>())->lowered_name(), \
@@ -2028,6 +2036,14 @@ __global__ void enum_kernel() {}
   JITIFY_TYPE_REFLECTION_TEST(const volatile float[4]);
 
 #undef JITIFY_TYPE_REFLECTION_TEST
+
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_default 3013
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_default 3013
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // #if defined(__CUDACC__)
 
   typedef Derived<float> derived_type;
   const Base& base = derived_type();
