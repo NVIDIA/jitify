@@ -9738,9 +9738,19 @@ class LRUFileCache {
         file_suffix_(sanitize_filename(file_suffix)),
         lock_file_name_(path_join(path_, file_prefix_ + "lock")) {}
 
+
+// std::result_of was deprecated in c++17 and removed in c++20.
+#if JITIFY_CPLUSPLUS >= 201703L
+  template <typename T>
+  using invoke_result_type = typename std::invoke_result<T>::type;
+#else  // JITIFY_CPLUSPLUS >= 201703L
+  template <typename T>
+  using invoke_result_type = typename std::result_of<T()>::type;
+#endif // JITIFY_CPLUSPLUS >= 201703L
+
   template <class Construct, class Serialize, class Deserialize>
   std::string get(const std::string& name,
-                  typename std::result_of<Construct()>::type* result,
+                  invoke_result_type<Construct>* result,
                   Construct construct, Serialize serialize,
                   Deserialize deserialize, bool* hit = nullptr) const {
     if (path_.empty() || max_size_ == 0) {
