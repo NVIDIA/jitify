@@ -1788,15 +1788,15 @@ TEST(Jitify2Test, Option) {
 TEST(Jitify2Test, OptionsVec) {
   OptionsVec options0;
   EXPECT_TRUE(options0.ok());
-  OptionsVec options1({Option("-arch", "sm_50"), Option("-G")});
+  OptionsVec options1({Option("-arch", "sm_75"), Option("-G")});
   EXPECT_TRUE(options1.ok());
-  StringVec options_sv({"-arch", "sm_50", "-G"});
+  StringVec options_sv({"-arch", "sm_75", "-G"});
   OptionsVec options2(options_sv);
   EXPECT_TRUE(options2.ok());
-  OptionsVec options3({"-arch", "sm_50", "-G"});
+  OptionsVec options3({"-arch", "sm_75", "-G"});
   EXPECT_TRUE(options3.ok());
 
-  OptionsVec options({"--gpu-architecture", "compute_50", "-arch", "sm_50",
+  OptionsVec options({"--gpu-architecture", "compute_75", "-arch", "sm_75",
                       "-maxrregcount=100", "-Ifoo", "-I=foo2", "--device-debug",
                       "-G", "--restrict", "-restrict", "-lbar", "-l=bar2",
                       "-lineinfo"});
@@ -1804,12 +1804,12 @@ TEST(Jitify2Test, OptionsVec) {
 
   EXPECT_EQ(options.size(), 12);
   EXPECT_EQ(options.serialize(),
-            StringVec({"--gpu-architecture", "compute_50", "-arch", "sm_50",
+            StringVec({"--gpu-architecture", "compute_75", "-arch", "sm_75",
                        "-maxrregcount=100", "-Ifoo", "-I=foo2",
                        "--device-debug", "-G", "--restrict", "-restrict",
                        "-lbar", "-l=bar2", "-lineinfo"}));
   EXPECT_EQ(options.serialize_canonical(),
-            StringVec({"--gpu-architecture=compute_50", "-arch=sm_50",
+            StringVec({"--gpu-architecture=compute_75", "-arch=sm_75",
                        "-maxrregcount=100", "-I=foo", "-I=foo2",
                        "--device-debug", "-G", "--restrict", "-restrict",
                        "-l=bar", "-l=bar2", "-lineinfo"}));
@@ -1869,11 +1869,11 @@ const int arch = __CUDA_ARCH__ / 10;
 
   // Test explicit virtual architecture (compile to PTX).
   // Note: PTX is forwards compatible.
-  program = preprocessed->compile("", {}, {"-arch=compute_50"});
+  program = preprocessed->compile("", {}, {"-arch=compute_75"});
   ASSERT_GT(program->ptx().size(), 0);
   ASSERT_EQ(program->cubin().size(), 0);
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
-  EXPECT_EQ(arch, 50);
+  EXPECT_EQ(arch, 75);
 
 #define JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(cubin_size) \
   do {                                                    \
@@ -1908,7 +1908,7 @@ const int arch = __CUDA_ARCH__ / 10;
 
   // Test that preprocessing and compilation use separate arch flags.
   program = Program("arch_flags_program", source)
-                ->preprocess({"-arch=sm_50"})
+                ->preprocess({"-arch=sm_75"})
                 ->compile("", {}, {"-arch=sm_."});
   EXPECT_GT(program->ptx().size(), 0);
   JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
@@ -1944,10 +1944,14 @@ const int arch = __CUDA_ARCH__ / 10;
 
 #undef JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE
 
+#if CUDA_VERSION >= 13000
+  OptionsVec arch_flags = {"-arch=compute_75", "-arch=compute_80", "-arch=compute_86"};
+#else
+  OptionsVec arch_flags = {"-arch=compute_50", "-arch=compute_52", "-arch=compute_61"};
+#endif
   // Test that multiple architectures can be specified for preprocessing.
   program = Program("arch_flags_program", source)
-                ->preprocess({"-arch=compute_50", "-arch=compute_52",
-                              "-arch=compute_61"})
+                ->preprocess(arch_flags)
                 ->compile("", {}, {"-arch=compute_."});
   EXPECT_GT(program->ptx().size(), 0);
   EXPECT_EQ(program->cubin().size(), 0);
@@ -2302,7 +2306,7 @@ TEST(Jitify2Test, LibCudaCxx) {
     // only supported for sm_60 and up on *nix and sm_70 and up on
     // Windows."
     Program("libcudacxx_program", source)
-        ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_70",
+        ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_75",
                       "-no-builtin-headers", "-no-preinclude-workarounds",
                       "-no-system-headers-workaround",
                       "-no-replace-pragma-once"})
@@ -2315,7 +2319,7 @@ TEST(Jitify2Test, LibCudaCxx) {
 __global__ void my_kernel() {}
 )";
   Program("libcudacxx_program", source)
-      ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_70",
+      ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_75",
                     "-no-builtin-headers", "-no-preinclude-workarounds",
                     "-no-system-headers-workaround", "-no-replace-pragma-once"})
       ->get_kernel("my_kernel");
