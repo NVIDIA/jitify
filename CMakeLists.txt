@@ -46,9 +46,17 @@ endif()
 find_package(CUDA REQUIRED) # Required for CUDA_INCLUDE_DIRS
 
 # Add macro definitions used in tests.
+if (CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0.0)
+list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 0 cuda_inc_dir)
+list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 1 cccl_inc_dir)
+add_compile_definitions(
+    CUDA_INC_DIR="${cuda_inc_dir}"
+    CUB_DIR="${cccl_inc_dir}")
+else()
 add_compile_definitions(
     CUDA_INC_DIR="${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}"
     CUB_DIR=${CUDA_INC_DIR})
+endif()
 # Copy the example_headers directory for use at runtime by tests.
 file(COPY example_headers DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 

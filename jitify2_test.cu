@@ -1017,7 +1017,7 @@ __global__ void my_kernel() {}
 )";
   auto preprog = Program("my_program", source)
                      ->preprocess({"-I.", "-Iexample_headers", "-Ifoo/bar",
-                                   "-I" CUDA_INC_DIR});
+                                   "-I" CUDA_INC_DIR, "-I" CUB_DIR});
   ASSERT_EQ(get_error(preprog), "");
   auto compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
@@ -1043,7 +1043,7 @@ __global__ void my_kernel() {}
   }
   // Repeat without "-I.", which will rely on the implicit current working
   // directory include path for quote includes.
-  preprog = Program("my_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  preprog = Program("my_program", source)->preprocess({"-I" CUDA_INC_DIR, "-I" CUB_DIR});
   compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
   ASSERT_EQ(get_error(preprog), "");
@@ -1171,7 +1171,7 @@ __device__ T cube(T x) { return x * x * x; }
   // Note also that this isn't really recommended. It's likely better to use
   // angle-includes, or to use "-include" to add a completely new header.
   preprog = Program("my_program", source)
-                ->preprocess({"-DUSE_QUOTE_INCLUDE", "-I" CUDA_INC_DIR});
+                ->preprocess({"-DUSE_QUOTE_INCLUDE", "-I" CUB_DIR, "-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   kernel = preprog->get_kernel(
       "my_kernel<int>", {},
@@ -2155,7 +2155,7 @@ __global__ void my_kernel() {}
       Program("curand_program", source)
           // Note: --remove-unused-globals is added to remove huge precomputed
           // arrays that come from CURAND.
-          ->preprocess({"-I" CUDA_INC_DIR, "--remove-unused-globals"})
+          ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "--remove-unused-globals"})
           ->get_kernel("my_kernel");
   // TODO: Expand this test to actually call curand kernels and check outputs.
   (void)kernel;
@@ -2186,7 +2186,7 @@ __global__ void my_kernel(thrust::counting_iterator<int> begin,
   const char* cppstd = "-std=c++17";
 #endif
   PreprocessedProgram preprog = Program("thrust_program", source)
-                                    ->preprocess({"-I" CUDA_INC_DIR, cppstd});
+                                    ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, cppstd});
   ASSERT_EQ(get_error(preprog), "");
   ASSERT_EQ(get_error(preprog->compile()), "");
 }
@@ -2308,7 +2308,7 @@ TEST(Jitify2Test, LibCudaCxx) {
     // only supported for sm_60 and up on *nix and sm_70 and up on
     // Windows."
     Program("libcudacxx_program", source)
-        ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_75",
+        ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-arch=compute_75",
                       "-no-builtin-headers", "-no-preinclude-workarounds",
                       "-no-system-headers-workaround",
                       "-no-replace-pragma-once"})
@@ -2321,7 +2321,7 @@ TEST(Jitify2Test, LibCudaCxx) {
 __global__ void my_kernel() {}
 )";
   Program("libcudacxx_program", source)
-      ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_75",
+      ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-arch=compute_75",
                     "-no-builtin-headers", "-no-preinclude-workarounds",
                     "-no-system-headers-workaround", "-no-replace-pragma-once"})
       ->get_kernel("my_kernel");
@@ -2335,7 +2335,7 @@ TEST(Jitify2Test, LibCudaCxxAndBuiltinLimits) {
 )";
 
   PreprocessedProgram preprog =
-      Program("limits_program", source)->preprocess({"-I" CUDA_INC_DIR});
+      Program("limits_program", source)->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   CompiledProgram compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
@@ -2349,7 +2349,7 @@ TEST(Jitify2Test, LibCudaCxxAndBuiltinTuple) {
 )";
 
   PreprocessedProgram preprog =
-      Program("tuple_program", source)->preprocess({"-I" CUDA_INC_DIR});
+      Program("tuple_program", source)->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   CompiledProgram compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
@@ -2663,7 +2663,7 @@ __global__ void my_kernel() {}
   for (int i = 0; i < 3; ++i) {
     CompiledProgram compiled =
         jitify2::Program(program_name, source)
-            ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+            ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch"})
             ->compile(Template("my_kernel").instantiate(i));
     ASSERT_EQ(get_error(compiled), "");
     // Check that PCH succeeded.
@@ -2705,7 +2705,7 @@ __global__ void my_kernel() {}
   // Start with PCH auto-resizing disabled.
   CompiledProgram compiled =
       jitify2::Program(program_name, source)
-          ->preprocess({"-I" CUDA_INC_DIR, "-pch", "-no-pch-auto-resize"})
+          ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch", "-no-pch-auto-resize"})
           ->compile(Template("my_kernel").instantiate(0));
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
@@ -2718,7 +2718,7 @@ __global__ void my_kernel() {}
 
   // Try again with PCH auto-resizing enabled.
   compiled = jitify2::Program(program_name, source)
-                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch"})
                  ->compile(Template("my_kernel").instantiate(1));
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
@@ -2731,7 +2731,7 @@ __global__ void my_kernel() {}
 
   // This time PCH generation should succeed.
   compiled = jitify2::Program(program_name, source)
-                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch"})
                  ->compile(Template("my_kernel").instantiate(2));
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_TRUE(compiled->log().find("creating precompiled header file") !=
