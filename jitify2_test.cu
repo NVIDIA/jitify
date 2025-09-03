@@ -2180,8 +2180,10 @@ __global__ void my_kernel(thrust::counting_iterator<int> begin,
   // Checks that basic Thrust headers can be compiled.
 #if CUDA_VERSION < 11000
   const char* cppstd = "-std=c++03";
-#else
+#elif CUDA_VERSION < 13000
   const char* cppstd = "-std=c++14";
+#else
+  const char* cppstd = "-std=c++17";
 #endif
   PreprocessedProgram preprog = Program("thrust_program", source)
                                     ->preprocess({"-I" CUDA_INC_DIR, cppstd});
