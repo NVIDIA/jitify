@@ -155,7 +155,7 @@
 #include <type_traits>
 #include <unordered_set>
 
-#if __cplusplus >= 201703L
+#if JITIFY_CPLUSPLUS >= 201703L
 #include <filesystem>
 #endif
 
@@ -194,7 +194,7 @@
 #include <dbghelp.h>      // For UndecorateSymbolName
 #include <direct.h>       // For mkdir
 #include <fcntl.h>        // For open, O_RDWR etc.
-#include <fileapi.h>      // For GetTempPath2A
+#include <fileapi.h>      // For GetTempPath2A, GetLongPathNameA
 #include <io.h>           // For _sopen_s
 #include <process.h>      // For _getpid
 #include <shlobj_core.h>  // For SHGetFolderPathA
@@ -2786,6 +2786,15 @@ inline bool path_exists(const char* filename, bool* is_dir = nullptr) {
   return ret;
 }
 
+inline std::string quoted_path_if_needed(const std::string& p) {
+  // If a path includes spaces or single backslashes, the full path may need warpping with quotes when passed to run_system_command, either as the executable or an include path.
+  if (p.find(' ') == std::string::npos && p.find('\\') == std::string::npos) {
+    return p;
+  } else {
+    return "\"" + p + "\"";
+  }
+}
+
 inline const char* get_current_executable_path() {
   static const char* path = []() -> const char* {
     static char buffer[JITIFY_PATH_MAX + 1] = {};
@@ -4117,15 +4126,31 @@ inline int run_system_command(const char* command,
   if (output) {
     output->clear();
     std::array<char, 128> buffer;
-    while (fgets(buffer.data(), buffer.size(), pipe)) {
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
       *output += buffer.data();
     }
+  } else {
+    // Must always read from the pipe for the exit code from the command to be available
+    std::array<char, 128> buffer;
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) { }
   }
   const int result = JITIFY_PCLOSE(pipe);
   if (result == -1 && failure) {
     *failure = get_errno_string();
   }
-  return result;
+
+  // Extract the exit code from the called program if possible, otherwise return -1;
+  int exitCode = -1;
+  #ifdef _MSC_VER
+    // _pclose is documented as having the same return code format as for _cwait, but with the high and low order bytes swapped. However the _cwait docs do not describe a corresponding value. Just extracting the lsb seems to behave
+    exitCode = result & 0xFF;
+  #else
+    // Extract the exit code from the pclose result if it was a 'normal' exit
+    if (WIFEXITED(result)){
+      exitCode = WEXITSTATUS(result);
+    }
+  #endif
+  return exitCode;
 }
 #endif  // JITIFY_ENABLE_NVCC
 
@@ -4135,9 +4160,15 @@ inline const char* guess_cuda_home() {
     if (env_jitify_cuda_home) return env_jitify_cuda_home;
     const char* env_cuda_home = std::getenv("CUDA_HOME");
     if (env_cuda_home) return env_cuda_home;
+    // CUDA_PATH is set by the CUDA installer on windows
+    const char* env_cuda_path = std::getenv("CUDA_PATH");
+    if (env_cuda_path) return env_cuda_path;
     // Guess the default location.
 #if defined _WIN32 || defined _WIN64
-    return "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA";
+    constexpr int cuda_version_major = CUDA_VERSION / 1000;
+    constexpr int cuda_version_minor = (CUDA_VERSION % 1000) / 10;
+    std::string default_path = std::string("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v") + std::to_string(cuda_version_major) + "." + std::to_string(cuda_version_minor) + "\\";
+    return default_path.c_str();
 #else
     return "/usr/local/cuda";
 #endif
@@ -4150,7 +4181,7 @@ class Nvcc {
   std::string nvcc_path_;
 
   static bool is_valid_nvcc(std::string nvcc_path) {
-    return run_system_command((nvcc_path + " --version").c_str());
+    return run_system_command((quoted_path_if_needed(nvcc_path) + " --version").c_str()) == 0;
   }
 
   static std::string find_nvcc_path() {
@@ -4180,7 +4211,7 @@ class Nvcc {
                  std::string* failure = nullptr) const {
     // Note: We redirect stderr to stdout so that we capture it too.
     const std::string command =
-        detail::string_concat(nvcc_path_, " ", options, " ", "2>&1");
+        detail::string_concat(quoted_path_if_needed(nvcc_path_), " ", options, " ", "2>&1");
     return run_system_command(command.c_str(), output, failure);
   }
 };
@@ -4206,7 +4237,9 @@ inline std::string make_temp_dir() {
   char tmpdir[JITIFY_PATH_MAX + 1];
   // Note: tmpdir is guaranteed to end with a '\'.
   if (!GetTempPath2A(sizeof(tmpdir), tmpdir)) return "";
-  std::string path = tmpdir + "__jitify_" + std::to_string(uid);
+  // Get the long-form of the tmpdir
+  GetLongPathNameA(tmpdir, tmpdir, sizeof(tmpdir));
+  std::string path = std::string(tmpdir) + "__jitify_" + std::to_string(uid);
   if (::_mkdir(path.c_str()) != 0) return "";
   return path;
 #else
@@ -4216,7 +4249,7 @@ inline std::string make_temp_dir() {
 #endif
 }
 
-#if __cplusplus < 201703L && (!defined(_WIN32) && !defined(_WIN64))
+#if JITIFY_CPLUSPLUS < 201703L && (!defined(_WIN32) && !defined(_WIN64))
 inline int delete_file_visitor(const char* path, const struct stat* sbuf,
                                int type, struct FTW* ftwb) {
   (void)sbuf;
@@ -4227,11 +4260,11 @@ inline int delete_file_visitor(const char* path, const struct stat* sbuf,
 #endif
 
 inline bool remove_all(const std::string& path) {
-#if __cplusplus >= 201703L
+#if JITIFY_CPLUSPLUS >= 201703L
   std::error_code ec;
   return std::filesystem::remove_all(path, ec) !=
          static_cast<std::uintmax_t>(-1);
-#else  // __cplusplus < 201703L
+#else  // JITIFY_CPLUSPLUS < 201703L
 #if defined(_WIN32) || defined(_WIN64)
   // TODO: Implement this if anyone cares about it.
   return false;
@@ -4244,7 +4277,7 @@ inline bool remove_all(const std::string& path) {
   const int max_depth = 20;
   return ::nftw(path.c_str(), delete_file_visitor, max_depth, flags) == 0;
 #endif  // not Windows
-#endif  // __cplusplus < 201703L
+#endif  // JITIFY_CPLUSPLUS < 201703L
 }
 
 class TempDirectory {
@@ -4349,8 +4382,8 @@ class NvccProgram {
     // Note: This ensures the cuda toolkit headers are found before any that
     // were embedded during preprocessing (which probably won't work with nvcc).
     options.emplace_back(
-        "-I", detail::path_join(detail::guess_cuda_home(), "include"));
-    options.emplace_back("-I", tmp_include_dir);
+        "-I", detail::quoted_path_if_needed(detail::path_join(detail::guess_cuda_home(), "include")));
+    options.emplace_back("-I", detail::quoted_path_if_needed(tmp_include_dir));
 
     static const char* const kJitifyExpressionPrefix = "__jitify_expression";
 
@@ -4388,7 +4421,7 @@ class NvccProgram {
     if (!options.find({"--dlink-time-opt, -dlto"}).empty()) {
       options.emplace_back("-ltoir", "");
       options.emplace_back(tmp_source_file, "");
-      if (nvcc(options, &log_, error)) return infer_nvcc_error_type();
+      if (nvcc(options, &log_, error) != 0) return infer_nvcc_error_type();
       if (!read_binary_file(tmp_ltoir_file, &nvvm_)) {
         if (error) *error = "Failed to read binary file: " + tmp_ltoir_file;
         return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
@@ -4399,7 +4432,7 @@ class NvccProgram {
     options.emplace_back("-ptx", "");
     options.emplace_back(tmp_source_file, "");
     options.emplace_back("-o", tmp_ptx_file);
-    if (nvcc(options, &log_, error)) return infer_nvcc_error_type();
+    if (nvcc(options, &log_, error) != 0) return infer_nvcc_error_type();
     options.pop_back();  // Remove -o option
     options.pop_back();  // Remove source file
     options.pop_back();  // Remove -ptx
@@ -4439,7 +4472,7 @@ class NvccProgram {
       options.emplace_back("-cubin", "");
       options.emplace_back(tmp_ptx_file, "");
       options.emplace_back("-o", tmp_cubin_file);
-      if (nvcc(options, &log_, error)) {
+      if (nvcc(options, &log_, error) != 0) {
         return NVRTC_ERROR_PROGRAM_CREATION_FAILURE;
       }
       if (!read_binary_file(tmp_cubin_file, &cubin_)) {
@@ -4531,7 +4564,24 @@ inline nvrtcResult compile_program_nvrtc(
     header_sources_c.push_back(name_source.second.c_str());
   }
 
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_suppress 550
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_suppress 550
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // defined(__CUDACC__)
+
   bool pch_verbose = true;
+
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_default 550
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_default 550
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // #if defined(__CUDACC__)
+
   std::vector<const char*> options_c;
   options_c.reserve(options.size());
   for (const Option& option : options) {
@@ -6626,7 +6676,8 @@ struct __add_reference_helper<_Tp, true> {
 };
 template <typename _Tp>
 struct add_reference : public __add_reference_helper<_Tp> {};
-
+)"
+R"(
 namespace __jitify_detail {
 template <typename T>
 struct is_int_or_cref {
@@ -9687,9 +9738,19 @@ class LRUFileCache {
         file_suffix_(sanitize_filename(file_suffix)),
         lock_file_name_(path_join(path_, file_prefix_ + "lock")) {}
 
+
+// std::result_of was deprecated in c++17 and removed in c++20.
+#if JITIFY_CPLUSPLUS >= 201703L
+  template <typename T>
+  using invoke_result_type = typename std::invoke_result<T>::type;
+#else  // JITIFY_CPLUSPLUS >= 201703L
+  template <typename T>
+  using invoke_result_type = typename std::result_of<T()>::type;
+#endif // JITIFY_CPLUSPLUS >= 201703L
+
   template <class Construct, class Serialize, class Deserialize>
   std::string get(const std::string& name,
-                  typename std::result_of<Construct()>::type* result,
+                  invoke_result_type<Construct>* result,
                   Construct construct, Serialize serialize,
                   Deserialize deserialize, bool* hit = nullptr) const {
     if (path_.empty() || max_size_ == 0) {

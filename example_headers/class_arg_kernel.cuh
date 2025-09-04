@@ -50,9 +50,6 @@ class Managed {
 struct Arg : public Managed {
   const int x;
   Arg(int x_) : x(x_) {}
-
-  // there can be no call to the copy constructor
-  Arg(const Arg& arg) = delete;
 };
 
 template <typename T>

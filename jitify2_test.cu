@@ -1017,15 +1017,22 @@ __global__ void my_kernel() {}
 )";
   auto preprog = Program("my_program", source)
                      ->preprocess({"-I.", "-Iexample_headers", "-Ifoo/bar",
-                                   "-I" CUDA_INC_DIR});
+                                   "-I" CUDA_INC_DIR, "-I" CUB_DIR});
   ASSERT_EQ(get_error(preprog), "");
   auto compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
   // Note: The '2' in "I2@" here is the index of the cuda include dir amongst
   // the "-I" options (excluding invalid paths like "foo/bar").
+  // This is 3 on windows.
+#if defined _WIN32 || defined _WIN64
+  EXPECT_TRUE(
+      preprog->header_sources().at("cuda_fp16.h").find("__jitify_I3@") !=
+      std::string::npos);
+#else  // defined _WIN32 || defined _WIN64
   EXPECT_TRUE(
       preprog->header_sources().at("cuda_fp16.h").find("__jitify_I2@") !=
       std::string::npos);
+#endif  // defined _WIN32 || defined _WIN64
   std::string cwd = jitify2::detail::get_real_path(".");
   for (const auto& name_header : preprog->header_sources()) {
     const std::string& header_name = name_header.first;
@@ -1036,7 +1043,7 @@ __global__ void my_kernel() {}
   }
   // Repeat without "-I.", which will rely on the implicit current working
   // directory include path for quote includes.
-  preprog = Program("my_program", source)->preprocess({"-I" CUDA_INC_DIR});
+  preprog = Program("my_program", source)->preprocess({"-I" CUDA_INC_DIR, "-I" CUB_DIR});
   compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
   ASSERT_EQ(get_error(preprog), "");
@@ -1164,7 +1171,7 @@ __device__ T cube(T x) { return x * x * x; }
   // Note also that this isn't really recommended. It's likely better to use
   // angle-includes, or to use "-include" to add a completely new header.
   preprog = Program("my_program", source)
-                ->preprocess({"-DUSE_QUOTE_INCLUDE", "-I" CUDA_INC_DIR});
+                ->preprocess({"-DUSE_QUOTE_INCLUDE", "-I" CUB_DIR, "-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   kernel = preprog->get_kernel(
       "my_kernel<int>", {},
@@ -1360,6 +1367,11 @@ TEST(Jitify2Test, InvalidPrograms) {
   EXPECT_EQ(error.info("headers"), "");
 }
 
+#if defined(_MSC_VER)
+  // Disable deprecation warnings under windows for use of deprecated nvvm() method
+  #pragma warning(push)
+  #pragma warning(disable : 4996)
+#endif  // _MSC_VER
 TEST(Jitify2Test, CompileLTO_IR) {
   static const char* const source = R"(
 const int arch = __CUDA_ARCH__ / 10;
@@ -1387,6 +1399,10 @@ const int arch = __CUDA_ARCH__ / 10;
     EXPECT_EQ(arch, current_arch);
   }
 }
+#if defined(_MSC_VER)
+  // Restore warnings, re-enabling deprecated method warnings
+  #pragma warning(pop)
+#endif  // _MSC_VER
 
 TEST(Jitify2Test, LinkMultiplePrograms) {
   static const char* const source1 = R"(
@@ -1772,15 +1788,15 @@ TEST(Jitify2Test, Option) {
 TEST(Jitify2Test, OptionsVec) {
   OptionsVec options0;
   EXPECT_TRUE(options0.ok());
-  OptionsVec options1({Option("-arch", "sm_50"), Option("-G")});
+  OptionsVec options1({Option("-arch", "sm_75"), Option("-G")});
   EXPECT_TRUE(options1.ok());
-  StringVec options_sv({"-arch", "sm_50", "-G"});
+  StringVec options_sv({"-arch", "sm_75", "-G"});
   OptionsVec options2(options_sv);
   EXPECT_TRUE(options2.ok());
-  OptionsVec options3({"-arch", "sm_50", "-G"});
+  OptionsVec options3({"-arch", "sm_75", "-G"});
   EXPECT_TRUE(options3.ok());
 
-  OptionsVec options({"--gpu-architecture", "compute_50", "-arch", "sm_50",
+  OptionsVec options({"--gpu-architecture", "compute_75", "-arch", "sm_75",
                       "-maxrregcount=100", "-Ifoo", "-I=foo2", "--device-debug",
                       "-G", "--restrict", "-restrict", "-lbar", "-l=bar2",
                       "-lineinfo"});
@@ -1788,12 +1804,12 @@ TEST(Jitify2Test, OptionsVec) {
 
   EXPECT_EQ(options.size(), 12);
   EXPECT_EQ(options.serialize(),
-            StringVec({"--gpu-architecture", "compute_50", "-arch", "sm_50",
+            StringVec({"--gpu-architecture", "compute_75", "-arch", "sm_75",
                        "-maxrregcount=100", "-Ifoo", "-I=foo2",
                        "--device-debug", "-G", "--restrict", "-restrict",
                        "-lbar", "-l=bar2", "-lineinfo"}));
   EXPECT_EQ(options.serialize_canonical(),
-            StringVec({"--gpu-architecture=compute_50", "-arch=sm_50",
+            StringVec({"--gpu-architecture=compute_75", "-arch=sm_75",
                        "-maxrregcount=100", "-I=foo", "-I=foo2",
                        "--device-debug", "-G", "--restrict", "-restrict",
                        "-l=bar", "-l=bar2", "-lineinfo"}));
@@ -1853,11 +1869,11 @@ const int arch = __CUDA_ARCH__ / 10;
 
   // Test explicit virtual architecture (compile to PTX).
   // Note: PTX is forwards compatible.
-  program = preprocessed->compile("", {}, {"-arch=compute_50"});
+  program = preprocessed->compile("", {}, {"-arch=compute_75"});
   ASSERT_GT(program->ptx().size(), 0);
   ASSERT_EQ(program->cubin().size(), 0);
   ASSERT_EQ(program->link()->load()->get_global_value("arch", &arch), "");
-  EXPECT_EQ(arch, 50);
+  EXPECT_EQ(arch, 75);
 
 #define JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(cubin_size) \
   do {                                                    \
@@ -1892,7 +1908,7 @@ const int arch = __CUDA_ARCH__ / 10;
 
   // Test that preprocessing and compilation use separate arch flags.
   program = Program("arch_flags_program", source)
-                ->preprocess({"-arch=sm_50"})
+                ->preprocess({"-arch=sm_75"})
                 ->compile("", {}, {"-arch=sm_."});
   EXPECT_GT(program->ptx().size(), 0);
   JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE(program->cubin().size());
@@ -1928,10 +1944,14 @@ const int arch = __CUDA_ARCH__ / 10;
 
 #undef JITIFY_EXPECT_CUBIN_SIZE_IF_AVAILABLE
 
+#if CUDA_VERSION >= 13000
+  OptionsVec arch_flags = {"-arch=compute_75", "-arch=compute_80", "-arch=compute_86"};
+#else
+  OptionsVec arch_flags = {"-arch=compute_50", "-arch=compute_52", "-arch=compute_61"};
+#endif
   // Test that multiple architectures can be specified for preprocessing.
   program = Program("arch_flags_program", source)
-                ->preprocess({"-arch=compute_50", "-arch=compute_52",
-                              "-arch=compute_61"})
+                ->preprocess(arch_flags)
                 ->compile("", {}, {"-arch=compute_."});
   EXPECT_GT(program->ptx().size(), 0);
   EXPECT_EQ(program->cubin().size(), 0);
@@ -2000,6 +2020,14 @@ __global__ void enum_kernel() {}
 
   Template type_kernel("type_kernel");
 
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_suppress 3013
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_suppress 3013
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // defined(__CUDACC__)
+
 #define JITIFY_TYPE_REFLECTION_TEST(T)                                   \
   EXPECT_EQ(                                                             \
       preprog->get_kernel(type_kernel.instantiate<T>())->lowered_name(), \
@@ -2012,6 +2040,14 @@ __global__ void enum_kernel() {}
   JITIFY_TYPE_REFLECTION_TEST(const volatile float[4]);
 
 #undef JITIFY_TYPE_REFLECTION_TEST
+
+#if defined(__CUDACC__)
+  #ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma nv_diag_default 3013
+  #else  // __NVCC_DIAG_PRAGMA_SUPPORT__
+    #pragma diag_default 3013
+  #endif  // __NVCC_DIAG_PRAGMA_SUPPORT__
+#endif  // #if defined(__CUDACC__)
 
   typedef Derived<float> derived_type;
   const Base& base = derived_type();
@@ -2119,7 +2155,7 @@ __global__ void my_kernel() {}
       Program("curand_program", source)
           // Note: --remove-unused-globals is added to remove huge precomputed
           // arrays that come from CURAND.
-          ->preprocess({"-I" CUDA_INC_DIR, "--remove-unused-globals"})
+          ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "--remove-unused-globals"})
           ->get_kernel("my_kernel");
   // TODO: Expand this test to actually call curand kernels and check outputs.
   (void)kernel;
@@ -2144,11 +2180,13 @@ __global__ void my_kernel(thrust::counting_iterator<int> begin,
   // Checks that basic Thrust headers can be compiled.
 #if CUDA_VERSION < 11000
   const char* cppstd = "-std=c++03";
-#else
+#elif CUDA_VERSION < 13000
   const char* cppstd = "-std=c++14";
+#else
+  const char* cppstd = "-std=c++17";
 #endif
   PreprocessedProgram preprog = Program("thrust_program", source)
-                                    ->preprocess({"-I" CUDA_INC_DIR, cppstd});
+                                    ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, cppstd});
   ASSERT_EQ(get_error(preprog), "");
   ASSERT_EQ(get_error(preprog->compile()), "");
 }
@@ -2270,7 +2308,7 @@ TEST(Jitify2Test, LibCudaCxx) {
     // only supported for sm_60 and up on *nix and sm_70 and up on
     // Windows."
     Program("libcudacxx_program", source)
-        ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_70",
+        ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-arch=compute_75",
                       "-no-builtin-headers", "-no-preinclude-workarounds",
                       "-no-system-headers-workaround",
                       "-no-replace-pragma-once"})
@@ -2283,7 +2321,7 @@ TEST(Jitify2Test, LibCudaCxx) {
 __global__ void my_kernel() {}
 )";
   Program("libcudacxx_program", source)
-      ->preprocess({"-I" CUDA_INC_DIR, "-arch=compute_70",
+      ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-arch=compute_75",
                     "-no-builtin-headers", "-no-preinclude-workarounds",
                     "-no-system-headers-workaround", "-no-replace-pragma-once"})
       ->get_kernel("my_kernel");
@@ -2297,7 +2335,7 @@ TEST(Jitify2Test, LibCudaCxxAndBuiltinLimits) {
 )";
 
   PreprocessedProgram preprog =
-      Program("limits_program", source)->preprocess({"-I" CUDA_INC_DIR});
+      Program("limits_program", source)->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   CompiledProgram compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
@@ -2311,7 +2349,7 @@ TEST(Jitify2Test, LibCudaCxxAndBuiltinTuple) {
 )";
 
   PreprocessedProgram preprog =
-      Program("tuple_program", source)->preprocess({"-I" CUDA_INC_DIR});
+      Program("tuple_program", source)->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR});
   ASSERT_EQ(get_error(preprog), "");
   CompiledProgram compiled = preprog->compile();
   ASSERT_EQ(get_error(compiled), "");
@@ -2528,7 +2566,11 @@ bool read_binary_file(const char* filename, std::string* contents) {
 template <class JitifyObjectMaker>
 void check_or_update_serialization_goldens(
     JitifyObjectMaker make_jitify_object) {
+#if __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
+  using JitifyObject = std::invoke_result_t<JitifyObjectMaker>;
+#else  // __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
   using JitifyObject = typename std::result_of<JitifyObjectMaker()>::type;
+#endif  // __cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L)
   constexpr size_t version = jitify2::serialization::kSerializationVersion;
   std::string object_type_name = jitify2::reflection::reflect<JitifyObject>();
   // Remove namespace prefix from type name.
@@ -2621,7 +2663,7 @@ __global__ void my_kernel() {}
   for (int i = 0; i < 3; ++i) {
     CompiledProgram compiled =
         jitify2::Program(program_name, source)
-            ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+            ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch"})
             ->compile(Template("my_kernel").instantiate(i));
     ASSERT_EQ(get_error(compiled), "");
     // Check that PCH succeeded.
@@ -2663,7 +2705,7 @@ __global__ void my_kernel() {}
   // Start with PCH auto-resizing disabled.
   CompiledProgram compiled =
       jitify2::Program(program_name, source)
-          ->preprocess({"-I" CUDA_INC_DIR, "-pch", "-no-pch-auto-resize"})
+          ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch", "-no-pch-auto-resize"})
           ->compile(Template("my_kernel").instantiate(0));
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
@@ -2676,7 +2718,7 @@ __global__ void my_kernel() {}
 
   // Try again with PCH auto-resizing enabled.
   compiled = jitify2::Program(program_name, source)
-                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch"})
                  ->compile(Template("my_kernel").instantiate(1));
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_FALSE(compiled->log().find("creating precompiled header file") !=
@@ -2689,7 +2731,7 @@ __global__ void my_kernel() {}
 
   // This time PCH generation should succeed.
   compiled = jitify2::Program(program_name, source)
-                 ->preprocess({"-I" CUDA_INC_DIR, "-pch"})
+                 ->preprocess({"-I" CUB_DIR, "-I" CUDA_INC_DIR, "-pch"})
                  ->compile(Template("my_kernel").instantiate(2));
   ASSERT_EQ(get_error(compiled), "");
   EXPECT_TRUE(compiled->log().find("creating precompiled header file") !=

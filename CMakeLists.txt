@@ -8,7 +8,7 @@ set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CUDA_STANDARD 17)  # Doesn't work?
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ")
 if (MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX -D_CRT_SECURE_NO_WARNINGS")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")
 else()
   set(CMAKE_CXX_FLAGS
@@ -30,7 +30,7 @@ endif()
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 if (MSVC)
   set(CMAKE_CUDA_FLAGS
-    "${CMAKE_CUDA_FLAGS} -Xcompiler=\"/WX\" -rdc=true")
+    "${CMAKE_CUDA_FLAGS} -Xcompiler=\"/WX\" -D_CRT_SECURE_NO_WARNINGS -rdc=true")
   set(CMAKE_CUDA_FLAGS_RELEASE
     "${CMAKE_CUDA_FLAGS_RELEASE} -O3 -Xcompiler=\"/O2\"")
 else()
@@ -46,9 +46,35 @@ endif()
 find_package(CUDA REQUIRED) # Required for CUDA_INCLUDE_DIRS
 
 # Add macro definitions used in tests.
-add_compile_definitions(
-    CUDA_INC_DIR="${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}"
-    CUB_DIR=${CUDA_INC_DIR})
+if (CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0.0)
+  # CCCL's include directories have moved in CUDA 13 compared to CUDA 12.
+  # On Windows, CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES includes both include paths, which must be separated before including in compile definitions.
+  # On *nix, only the main ctk include dir is included
+  # It may be cleaner to switch to the more modern find_package(CUDAToolkit) and find_package(CCCL)
+  list(LENGTH CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES ctk_inc_dirs_length)
+  if (ctk_inc_dirs_length GREATER 1)
+    list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 0 cuda_inc_dir)
+    list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 1 cccl_inc_dir)
+  else()
+    list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 0 cuda_inc_dir)
+    # Check the default location within the CTK if not in the variable.
+    if (EXISTS "${cuda_inc_dir}/cccl")
+      set(cccl_inc_dir "${cuda_inc_dir}/cccl")
+    else()
+      set(cccl_inc_dir "${cuda_inc_dir}")
+    endif()
+  endif()
+  add_compile_definitions(
+      CUDA_INC_DIR="${cuda_inc_dir}"
+      CUB_DIR="${cccl_inc_dir}")
+  unset(cccl_inc_dir)
+  unset(cuda_inc_dir)
+  unset(inc_dirs_length)
+else()
+  add_compile_definitions(
+      CUDA_INC_DIR="${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}"
+      CUB_DIR=${CUDA_INC_DIR})
+endif()
 # Copy the example_headers directory for use at runtime by tests.
 file(COPY example_headers DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -100,7 +126,7 @@ function(add_stringify_command arg)
   add_custom_command(
       OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${arg}.jit
       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMAND ./stringify ${CMAKE_CURRENT_SOURCE_DIR}/${arg} > ${arg}.jit
+      COMMAND $<TARGET_FILE:stringify> ${CMAKE_CURRENT_SOURCE_DIR}/${arg} > ${arg}.jit
       DEPENDS stringify)
 endfunction()
 add_executable(jitify2_preprocess jitify2_preprocess.cpp)
@@ -118,7 +144,7 @@ add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/jitify2_test_kernels.cu.jit.hpp
            ${CMAKE_CURRENT_BINARY_DIR}/jitify2_test_kernels.cu.headers.jit.cpp
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMAND ${CMAKE_CURRENT_BINARY_DIR}/jitify2_preprocess -i --minify
+    COMMAND $<TARGET_FILE:jitify2_preprocess> -i --minify
                 -o ${CMAKE_CURRENT_BINARY_DIR}
                 -s jitify2_test_kernels.cu.headers
                 jitify2_test_kernels.cu
@@ -172,8 +198,12 @@ foreach(test ${TESTS})
 endforeach(test)
 # Add "check" command that *builds and* runs tests, with verbose output.
 # (The default "test" command neither builds nor gives verbose output).
-add_custom_target(check ALL COMMAND ${CMAKE_CTEST_COMMAND} --verbose
-                  DEPENDS ${TESTS})
+# --build-config is required for multi-config generators, and uses COMMAND_EXPAND_LISTS to ensure that the flag and value are not provided as a single string to ctest
+add_custom_target(check ALL
+    COMMAND ${CMAKE_CTEST_COMMAND} --verbose "$<IF:$<STREQUAL:$<CONFIG>,>,,--build-config;$<CONFIG>>"
+    DEPENDS ${TESTS}
+    COMMAND_EXPAND_LISTS
+)
 
 # ----
 # Docs
