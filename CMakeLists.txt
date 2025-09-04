@@ -47,15 +47,33 @@ find_package(CUDA REQUIRED) # Required for CUDA_INCLUDE_DIRS
 
 # Add macro definitions used in tests.
 if (CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0.0)
-list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 0 cuda_inc_dir)
-list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 1 cccl_inc_dir)
-add_compile_definitions(
-    CUDA_INC_DIR="${cuda_inc_dir}"
-    CUB_DIR="${cccl_inc_dir}")
+  # CCCL's include directories have moved in CUDA 13 compared to CUDA 12.
+  # On Windows, CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES includes both include paths, which must be separated before including in compile definitions.
+  # On *nix, only the main ctk include dir is included
+  # It may be cleaner to switch to the more modern find_package(CUDAToolkit) and find_package(CCCL)
+  list(LENGTH CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES ctk_inc_dirs_length)
+  if (ctk_inc_dirs_length GREATER 1)
+    list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 0 cuda_inc_dir)
+    list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 1 cccl_inc_dir)
+  else()
+    list(GET CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES 0 cuda_inc_dir)
+    # Check the default location within the CTK if not in the variable.
+    if (EXISTS "${cuda_inc_dir}/cccl")
+      set(cccl_inc_dir "${cuda_inc_dir}/cccl")
+    else()
+      set(cccl_inc_dir "${cuda_inc_dir}")
+    endif()
+  endif()
+  add_compile_definitions(
+      CUDA_INC_DIR="${cuda_inc_dir}"
+      CUB_DIR="${cccl_inc_dir}")
+  unset(cccl_inc_dir)
+  unset(cuda_inc_dir)
+  unset(inc_dirs_length)
 else()
-add_compile_definitions(
-    CUDA_INC_DIR="${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}"
-    CUB_DIR=${CUDA_INC_DIR})
+  add_compile_definitions(
+      CUDA_INC_DIR="${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}"
+      CUB_DIR=${CUDA_INC_DIR})
 endif()
 # Copy the example_headers directory for use at runtime by tests.
 file(COPY example_headers DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
