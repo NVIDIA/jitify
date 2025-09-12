@@ -171,7 +171,14 @@ nvrtcResult compile_program(
   }
 #endif
 
-#if CUDART_VERSION >= 11040
+#if CUDART_VERSION >= 13000
+  size_t nvvm_size;
+  CHECK_NVRTC(nvrtcGetLTOIRSize(nvrtc_program, &nvvm_size));
+  if (nvvm_size) {
+    compiled->nvvm.resize(nvvm_size);
+    CHECK_NVRTC(nvrtcGetLTOIR(nvrtc_program, compiled->nvvm.data()));
+  }  
+#elif CUDART_VERSION >= 11040
   size_t nvvm_size;
   CHECK_NVRTC(nvrtcGetNVVMSize(nvrtc_program, &nvvm_size));
   if (nvvm_size) {
