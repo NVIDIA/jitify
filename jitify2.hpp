@@ -6080,23 +6080,23 @@ struct numeric_limits<bool>
     : public __jitify_detail::IntegerLimits<bool, false, true, 1> {};
 template <>
 struct numeric_limits<char>
-    : public __jitify_detail::IntegerLimits<char, CHAR_MIN, CHAR_MAX> {};
+    : public __jitify_detail::IntegerLimits<char, static_cast<char>(CHAR_MIN), static_cast<char>(CHAR_MAX)> {};
 template <>
 struct numeric_limits<signed char>
-    : public __jitify_detail::IntegerLimits<signed char, SCHAR_MIN, SCHAR_MAX> {
+    : public __jitify_detail::IntegerLimits<signed char, static_cast<signed char>(SCHAR_MIN), static_cast<signed char>(SCHAR_MAX)> {
 };
 template <>
 struct numeric_limits<unsigned char>
-    : public __jitify_detail::IntegerLimits<unsigned char, 0, UCHAR_MAX> {};
+    : public __jitify_detail::IntegerLimits<unsigned char, 0, static_cast<unsigned char>(UCHAR_MAX)> {};
 template <>
 struct numeric_limits<wchar_t>
-    : public __jitify_detail::IntegerLimits<wchar_t, WCHAR_MIN, WCHAR_MAX> {};
+    : public __jitify_detail::IntegerLimits<wchar_t, static_cast<wchar_t>(WCHAR_MIN), static_cast<wchar_t>(WCHAR_MAX)> {};
 template <>
 struct numeric_limits<short>
-    : public __jitify_detail::IntegerLimits<short, SHRT_MIN, SHRT_MAX> {};
+    : public __jitify_detail::IntegerLimits<short, static_cast<short>(SHRT_MIN), static_cast<short>(SHRT_MAX)> {};
 template <>
 struct numeric_limits<unsigned short>
-    : public __jitify_detail::IntegerLimits<unsigned short, 0, USHRT_MAX> {};
+    : public __jitify_detail::IntegerLimits<unsigned short, 0, static_cast<unsigned short>(USHRT_MAX)> {};
 template <>
 struct numeric_limits<int>
     : public __jitify_detail::IntegerLimits<int, INT_MIN, INT_MAX> {};
