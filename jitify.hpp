@@ -852,8 +852,12 @@ struct type_reflection {
     // WAR for typeid discarding cv qualifiers on value-types
     // Wrap type in dummy template class to preserve cv-qualifiers, then strip
     // off the wrapper from the resulting string.
-    std::string wrapped_name =
+  #ifdef _MSC_VER
+      std::string wrapped_name = typeid(JitifyTypeNameWrapper_<T>).name();
+  #else
+      std::string wrapped_name =
         demangle_native_type(typeid(JitifyTypeNameWrapper_<T>));
+  #endif
     // Note: The reflected name of this class also has namespace prefixes.
     const std::string wrapper_class_name = "JitifyTypeNameWrapper_<";
     size_t start = wrapped_name.find(wrapper_class_name);
