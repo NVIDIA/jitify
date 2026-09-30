@@ -1138,6 +1138,21 @@ TEST(JitifyTest, EnvVarOptions) {
   setenv("JITIFY_OPTIONS", "", true);
 }
 
+TEST(JitifyTest, PtxDeclNameKeepsASpacedName) {
+  EXPECT_EQ(jitify::detail::ptx_parse_decl_name(".global .u32 myname ;"),
+            "myname");
+  EXPECT_EQ(jitify::detail::ptx_parse_decl_name(".global .u32 myname [4];"),
+            "myname");
+  EXPECT_EQ(
+      jitify::detail::ptx_parse_decl_name(".const .align 8 .u64 data [2];"),
+      "data");
+  EXPECT_EQ(jitify::detail::ptx_parse_decl_name(".global .u32 myname;"),
+            "myname");
+  EXPECT_EQ(
+      jitify::detail::ptx_parse_decl_name(".global .align 4 .u32 myname[4];"),
+      "myname");
+}
+
 // NOTE: This MUST be the last test in the file, due to sticky CUDA error.
 TEST(JitifyTest, AssertHeader) {
   // Checks that cassert works as expected

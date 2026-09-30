@@ -2649,7 +2649,16 @@ inline std::string ptx_parse_decl_name(const std::string& line) {
         "Failed to parse .global/.const declaration in PTX: expected a "
         "semicolon");
   }
-  size_t name_start_minus1 = line.find_last_of(" \t", name_end);
+  while (name_end > 0 &&
+         (line[name_end - 1] == ' ' || line[name_end - 1] == '\t')) {
+    --name_end;
+  }
+  if (name_end == 0) {
+    throw std::runtime_error(
+        "Failed to parse .global/.const declaration in PTX: expected "
+        "whitespace");
+  }
+  size_t name_start_minus1 = line.find_last_of(" \t", name_end - 1);
   if (name_start_minus1 == std::string::npos) {
     throw std::runtime_error(
         "Failed to parse .global/.const declaration in PTX: expected "
